@@ -1,74 +1,76 @@
 # live-fluids
 
-Simulador de dinâmica de fluidos computacional (CFD) no browser. Desenha-se o domínio **pixel a pixel**, definem-se paredes, entradas e saídas de fluido, temperaturas e propriedades das fronteiras, e a simulação corre num servidor local em Rust com GPU (CUDA ou wgpu), com CPU como fallback. Os resultados são enviados em streaming e visualizados no browser.
+A computational fluid dynamics (CFD) simulator in the browser. You draw the domain **pixel by pixel**, place walls, fluid inlets and outlets, temperatures and boundary properties, and the simulation runs on a local Rust server on the GPU (CUDA or wgpu), with the CPU as a fallback. Results are streamed back and visualised in the browser.
 
-> Estado: **Fase 0 (fundações)** — formato de cena, validação, formato de frames, CLI e esqueleto web. Ainda sem solver.
+> Status: **Phase 0 complete** — scene format, validation, frame format, CLI, web skeleton and CI. Next: Phase 1 (LBM solver on the CPU).
 
-## Ideia em 30 segundos
+## The idea in 30 seconds
 
 ```
- Browser (editor pixel a pixel)  ──HTTP/JSON+binário──▶  cfd-server (Rust/axum)
-        ▲                                                   │
-        │ WebSocket (frames de resultados)                  ▼
-        └──────────────────────────────────────────  Jobs ──▶ Solver
-                                                              ├─ CUDA (NVIDIA)
-                                                              ├─ wgpu / WGSL (qualquer GPU)
-                                                              └─ CPU (rayon) — referência numérica
+ Browser (pixel editor)  ──HTTP/JSON+binary──▶  cfd-server (Rust/axum)
+        ▲                                            │
+        │ WebSocket (result frames)                  ▼
+        └───────────────────────────────────  Jobs ──▶ Solver
+                                                       ├─ CUDA (NVIDIA)
+                                                       ├─ wgpu / WGSL (any GPU)
+                                                       └─ CPU (rayon) — numerical reference
 ```
 
-- **Gases e líquidos** no MVP (2D); depois granular, plasma e mudanças de estado; **3D** numa segunda etapa.
-- **Primeiro método:** Lattice Boltzmann (D2Q9 + D2Q5 térmico, superfície livre) — encaixa numa grelha de pixels e é muito eficiente em GPU.
-- **Validação quantitativa** contra casos publicados (Ghia, Schäfer-Turek, de Vahl Davis, Martin-Moyce).
+- **Gases and liquids** in the MVP (2D); later granular media, plasma and phase changes; **3D** as a second stage.
+- **First method:** Lattice Boltzmann (D2Q9 + D2Q5 thermal, free surface) — maps naturally onto a pixel grid and runs very efficiently on GPUs.
+- **Quantitative validation** against published benchmarks (Ghia, Schäfer-Turek, de Vahl Davis, Martin-Moyce).
 
-## Começar
+## Getting started
 
 ```bash
-cargo test --workspace                          # testes Rust
-cargo run -p cfd-cli -- example --list          # cenas de exemplo
-cargo run -p cfd-cli -- validate scenes/*.json  # validar cenas
+cargo test --workspace                          # Rust tests
+cargo run -p cfd-cli -- example --list          # example scenes
+cargo run -p cfd-cli -- validate scenes/*.json  # validate scenes
 cd apps/web && npm install && npm run dev       # frontend
 ```
 
-Requisitos e problemas conhecidos (Windows): [docs/desenvolvimento.md](docs/desenvolvimento.md).
+Requirements and known issues (Windows, CUDA): [docs/development.md](docs/development.md).
 
-## Estrutura
+## Layout
 
 ```
 crates/
-  cfd-core/    formato Scene, codificação das camadas, validação, exemplos
-  cfd-io/      formato binário dos frames de resultados
-  cfd-cli/     CLI: schema, example, validate (mais tarde run, bench, compare)
-  cfd-lbm/     solver LBM em CPU            (Fase 1)
-  cfd-gpu/     backend wgpu/WGSL            (Fase 2a)
-  cfd-cuda/    backend CUDA, feature `cuda` (Fase 2b)
-  cfd-server/  API HTTP/WebSocket e jobs    (Fase 3)
-apps/web/      frontend React + TypeScript + Vite
-schema/        JSON Schema da cena (gerado a partir do Rust)
-scenes/        cenas de exemplo (geradas)
-sandbox/       protótipos de aprendizagem (fora do workspace)
-docs/          documentação de planeamento (PT)
+  cfd-core/    Scene format, layer encoding, validation, examples
+  cfd-io/      binary format of result frames
+  cfd-cli/     CLI: schema, example, validate (later run, bench, compare)
+  cfd-lbm/     LBM solver on the CPU          (Phase 1)
+  cfd-gpu/     wgpu/WGSL backend              (Phase 2a)
+  cfd-cuda/    CUDA backend, `cuda` feature   (Phase 2b)
+  cfd-server/  HTTP/WebSocket API and jobs    (Phase 3)
+apps/web/      React + TypeScript + Vite frontend
+schema/        JSON Schema of the scene (generated from Rust)
+scenes/        example scenes (generated)
+sandbox/       learning prototypes (outside the workspace)
+docs/          design and planning documentation
 ```
 
-## Documentação
+## Documentation
 
-| Documento | Conteúdo |
-|-----------|----------|
-| [01 — Visão e requisitos](docs/01-visao-e-requisitos.md) | Objetivos, âmbito, utilizadores, requisitos funcionais e não funcionais |
-| [02 — Arquitetura](docs/02-arquitetura.md) | Componentes, fluxo de um pedido, stack tecnológica, estrutura do repositório |
-| [03 — Modelo de dados](docs/03-modelo-de-dados.md) | Formato da cena, camadas de pixels, tipos de fronteira, materiais, formato dos resultados, API |
-| [04 — Métodos numéricos](docs/04-metodos-numericos.md) | LBM, térmico, projeção, líquidos, compressível, estabilidade, casos de validação |
-| [05 — Plano de implementação](docs/05-plano-implementacao.md) | Fases, tarefas, critérios de aceitação, MVP |
-| [06 — Otimizações e IA](docs/06-otimizacoes-e-ia.md) | AMR, multigrid, multi-GPU, malhas modernas, modelos substitutos com IA |
-| [07 — Decisões e perguntas](docs/07-decisoes-e-perguntas.md) | ADRs e questões por decidir |
-| [08 — Guia de validação](docs/08-guia-validacao.md) | Como medir a precisão: referências, erros, ordem de convergência |
-| [Desenvolvimento](docs/desenvolvimento.md) | Ambiente, comandos, convenções |
-| [Sessões](docs/sessoes/) | Checklists das sessões de trabalho |
+| Document | Contents |
+|----------|----------|
+| [01 — Vision and requirements](docs/01-vision-and-requirements.md) | Goals, scope, users, functional and non-functional requirements |
+| [02 — Architecture](docs/02-architecture.md) | Components, request flow, technology stack, repository layout |
+| [03 — Data model](docs/03-data-model.md) | Scene format, pixel layers, boundary types, materials, result format, API |
+| [04 — Numerical methods](docs/04-numerical-methods.md) | LBM, thermal, projection, liquids, compressible, stability, validation cases |
+| [05 — Implementation plan](docs/05-implementation-plan.md) | Phases, tasks, acceptance criteria, MVP |
+| [06 — Optimizations and AI](docs/06-optimizations-and-ai.md) | AMR, multigrid, multi-GPU, modern meshes, AI surrogate models |
+| [07 — Decisions and questions](docs/07-decisions-and-questions.md) | ADRs and open questions |
+| [08 — Validation guide](docs/08-validation-guide.md) | How accuracy is measured: references, error norms, convergence order |
+| [Development](docs/development.md) | Environment, commands, conventions |
+| [Sessions](docs/sessions/) | Work-session checklists |
 
-## Licença
+## License
 
-Licenciado à escolha de quem usa, sob:
+Licensed under either of
 
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
 - MIT license ([LICENSE-MIT](LICENSE-MIT))
 
-Salvo indicação explícita em contrário, qualquer contribuição submetida para inclusão neste projeto, tal como definido na licença Apache-2.0, é licenciada como acima, sem termos ou condições adicionais.
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
