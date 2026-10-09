@@ -5,6 +5,7 @@
 
 use crate::domain::{flags, Domain};
 use crate::scene::OutputField;
+use crate::units::UnitSystem;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendKind {
@@ -90,6 +91,50 @@ pub struct ElementForce {
     pub element: u16,
     /// Lattice units (per unit depth).
     pub lattice: [f64; 2],
+}
+
+impl ElementForce {
+    /// Force per metre of depth (N/m).
+    pub fn physical(&self, units: &UnitSystem) -> [f64; 2] {
+        self.lattice.map(|f| units.force_to_physical(f))
+    }
+}
+
+/// Values at one probe, in physical units.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProbeSample {
+    pub name: String,
+    /// m/s
+    pub velocity: [f64; 2],
+    /// Gauge pressure including the hydrostatic part (Pa).
+    pub pressure: f64,
+    /// K, with the thermal lattice.
+    pub temperature: Option<f64>,
+}
+
+impl ProbeSample {
+    /// Samples every probe of the domain from lattice fields.
+    pub fn from_lattice(domain: &Domain, lf: &LatticeFields) -> Vec<ProbeSample> {
+        let u = &domain.units;
+        domain
+            .probes
+            .iter()
+            .map(|p| {
+                let (x, y) = (p.x as usize, p.y as usize);
+                let i = y * domain.width as usize + x;
+                ProbeSample {
+                    name: p.name.clone(),
+                    velocity: [lf.ux[i], lf.uy[i]].map(|v| u.velocity_to_physical(v as f64)),
+                    pressure: u.density_to_gauge_pressure(lf.density[i] as f64)
+                        + domain.hydrostatic.pressure(u.rho0, u.dx, x, y),
+                    temperature: lf
+                        .theta
+                        .as_ref()
+                        .map(|t| u.temperature_to_physical(t[i] as f64)),
+                }
+            })
+            .collect()
+    }
 }
 
 /// Which output fields to sample.
@@ -284,5 +329,82 @@ pub trait Solver: Send {
     fn sample(&mut self, req: &SampleRequest) -> FieldSet {
         let lf = self.lattice_fields();
         FieldSet::from_lattice(self.domain(), &lf, self.steps_done(), req)
+    }
+
+    /// Values at the domain's probes, in physical units.
+    fn probes(&mut self) -> Vec<ProbeSample> {
+        let lf = self.lattice_fields();
+        ProbeSample::from_lattice(self.domain(), &lf)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::DomainOptions;
+    use crate::examples::{self, Canvas};
+    use crate::scene::CellType;
+    use crate::units::STANDARD_GRAVITY;
+
+    /// 9 × 9 all-fluid box with the channel's fluid and units (dt/dx = 1 s/m).
+    fn box_domain() -> Domain {
+        let mut scene = examples::channel();
+        let c = Canvas::new(9, 9, CellType::Fluid);
+        scene.grid.width = 9;
+        scene.grid.height = 9;
+        scene.layers = c.layers();
+        scene.probes = vec![crate::scene::Probe {
+            name: "p".into(),
+            position: [2, 3],
+        }];
+        scene.physics.gravity = [0.0, -STANDARD_GRAVITY];
+        Domain::from_scene(&scene, &DomainOptions::default()).unwrap()
+    }
+
+    #[test]
+    fn vorticity_of_solid_body_rotation_is_twice_the_angular_velocity() {
+        let d = box_domain();
+        let omega = 1e-3; // lattice: rad per step
+        let mut lf = LatticeFields::initial(&d);
+        for y in 0..9 {
+            for x in 0..9 {
+                lf.ux[y * 9 + x] = (-omega * (y as f64 - 4.0)) as f32;
+                lf.uy[y * 9 + x] = (omega * (x as f64 - 4.0)) as f32;
+            }
+        }
+        let req = SampleRequest {
+            fields: vec![OutputField::Vorticity, OutputField::Velocity],
+        };
+        let fs = FieldSet::from_lattice(&d, &lf, 10, &req);
+        let expected = 2.0 * omega / d.units.dt;
+        for v in &fs.fields[0].values {
+            assert!(
+                (*v as f64 / expected - 1.0).abs() < 1e-5,
+                "{v} vs {expected}"
+            );
+        }
+        assert_eq!(fs.fields[1].components, 2);
+        assert_eq!(fs.fields[1].values.len(), 2 * 81);
+        assert!((fs.time - 10.0 * d.units.dt).abs() < 1e-15);
+    }
+
+    #[test]
+    fn pressure_and_probes_include_the_hydrostatic_part() {
+        let d = box_domain();
+        let mut lf = LatticeFields::initial(&d);
+        lf.density.iter_mut().for_each(|r| *r = 1.001);
+        let p_dyn = d.units.density_to_gauge_pressure(1.001f32 as f64);
+        let req = SampleRequest {
+            fields: vec![OutputField::Pressure],
+        };
+        let p = &FieldSet::from_lattice(&d, &lf, 0, &req).fields[0].values;
+        // Reference at the fluid centroid (cell 4): pressure grows downwards by ρ₀ g dx per row.
+        let step = d.units.rho0 * STANDARD_GRAVITY * d.units.dx;
+        assert!((p[4 * 9 + 4] as f64 - p_dyn).abs() < 1e-4 * p_dyn.abs().max(1.0));
+        assert!(((p[3 * 9 + 4] - p[4 * 9 + 4]) as f64 - step).abs() < 1e-4 * step);
+        let probe = &ProbeSample::from_lattice(&d, &lf)[0];
+        assert_eq!(probe.name, "p");
+        assert!((probe.pressure - p[3 * 9 + 2] as f64).abs() < 1e-3);
+        assert!(probe.temperature.is_none());
     }
 }
