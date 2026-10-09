@@ -74,6 +74,21 @@ fn link_target<'a>(
     }
 }
 
+/// Interior cell next to the outlet cell `(sx, sy)` (see `flags::INWARD_SHIFT`), or `own` when
+/// the outlet has no inward direction.
+#[inline]
+fn inward_cell(p: &StepParams, sx: usize, sy: usize, nf: u16, own: usize) -> usize {
+    match flags::inward(nf) {
+        0 => own,
+        d => {
+            let [cx, cy] = LINKS[d];
+            let x = (sx as isize + cx as isize).rem_euclid(p.w as isize) as usize;
+            let y = (sy as isize + cy as isize).rem_euclid(p.h as isize) as usize;
+            y * p.w + x
+        }
+    }
+}
+
 #[inline]
 fn dot(c: [i32; 2], v: [f32; 2]) -> f32 {
     c[0] as f32 * v[0] + c[1] as f32 * v[1]
@@ -128,7 +143,7 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
                             flags::ADIABATIC => out,
                             flags::FIXED_TEMPERATURE => -out + 2.0 * W5[i] * bc.theta,
                             flags::HEAT_FLUX => out + bc.heat_flux,
-                            _ => s.g[i * n + k], // zero gradient
+                            _ => s.g[i * n + inward_cell(p, xs[i], ys[i], nf, k)], // zero gradient
                         }
                     };
                     theta += g[i];
@@ -151,7 +166,9 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
                     let (nf, bc) = link_target(p, s, x, y, i, src);
                     let out = s.f[OPPOSITE[i] * n + k]; // f̃*_ī(x)
                     f[i] = match flags::flow(nf) {
-                        // Bounce-back with wall velocity (ρ_w = 1): f_i = f*_ī + 6 w_i c_i·u_w.
+                        // Bounce-back with wall velocity: f_i = f*_ī + 6 w_i ρ₀ c_i·u_w (ρ₀ = 1). It imposes
+                        // the momentum ρ₀u_w; a local ρ_w would make velocity inlets unstable with
+                        // open (zero-gradient) outlets: the inflow would grow with the density.
                         flags::BOUNCE_BACK => out + 6.0 * W9[i] * dot(LINKS[i], bc.velocity),
                         // Anti-bounce-back with the outlet density and this cell's velocity.
                         flags::PRESSURE => {
@@ -162,8 +179,9 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
                                 * W9[i]
                                 * (bc.density * (1.0 + 4.5 * cu * cu - 1.5 * usq) - 1.0)
                         }
-                        // Zero gradient: the outlet cell has this cell's post-collision state.
-                        _ => s.f[i * n + k],
+                        // Zero gradient along the outlet normal: the outlet cell has the state of
+                        // its interior neighbour.
+                        _ => s.f[i * n + inward_cell(p, xs[i], ys[i], nf, k)],
                     };
                 }
             }

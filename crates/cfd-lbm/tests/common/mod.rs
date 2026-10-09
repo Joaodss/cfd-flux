@@ -129,23 +129,32 @@ pub fn order(e_coarse: f64, e_fine: f64) -> f64 {
     (e_coarse / e_fine).log2()
 }
 
-/// Runs until the max change of `u` between checks (every `every` steps) is below `tol`.
+/// Runs until the max change of `u` between checks (every `every` steps), relative to `max |u|`,
+/// is below `tol`. f32 round-off limits `tol` to ~1e-6.
 pub fn run_to_steady(s: &mut CpuLbm, every: u32, tol: f64, max_steps: u64) -> LatticeFields {
     let mut prev = s.lattice_fields();
+    let mut change = f64::INFINITY;
     while s.steps_done() < max_steps {
         s.step(every).expect("finite");
         let now = s.lattice_fields();
-        let change = now
+        let umax = now
+            .ux
+            .iter()
+            .chain(&now.uy)
+            .map(|v| v.abs() as f64)
+            .fold(1e-30, f64::max);
+        change = now
             .ux
             .iter()
             .zip(&prev.ux)
             .chain(now.uy.iter().zip(&prev.uy))
             .map(|(a, b)| (a - b).abs() as f64)
-            .fold(0.0, f64::max);
+            .fold(0.0, f64::max)
+            / umax;
         prev = now;
         if change < tol {
             return prev;
         }
     }
-    panic!("not steady after {max_steps} steps");
+    panic!("not steady after {max_steps} steps (relative change {change:e})");
 }

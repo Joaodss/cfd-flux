@@ -64,6 +64,12 @@ pub mod flags {
     /// Zero temperature gradient (outlets, inlets without a fixed temperature).
     pub const THERMAL_ZERO_GRADIENT: u16 = 3;
 
+    /// Bits 5–7 (outlet cells only): axis direction `d` (1…4) such that the cell at
+    /// `x + c_d` is fluid; zero-gradient conditions copy the state of that interior cell.
+    /// 0 when there is none.
+    pub const INWARD_SHIFT: u16 = 5;
+    pub const INWARD_MASK: u16 = 0b111 << INWARD_SHIFT;
+
     /// Bits 8–15 (fluid cells only): bit `LINK_SHIFT + i - 1` is set when population `i`
     /// (i = 1…8) is pulled from a non-fluid neighbour or from outside a non-periodic edge.
     pub const LINK_SHIFT: u16 = 8;
@@ -75,6 +81,10 @@ pub mod flags {
 
     pub const fn thermal(flags: u16) -> u16 {
         (flags & THERMAL_MASK) >> THERMAL_SHIFT
+    }
+
+    pub const fn inward(flags: u16) -> usize {
+        ((flags & INWARD_MASK) >> INWARD_SHIFT) as usize
     }
 
     /// Whether population `i` (1…8) of a fluid cell comes through a boundary link.
@@ -450,6 +460,29 @@ impl Domain {
             }
         }
 
+        // Inward axis direction of outlet cells: prefer a fluid neighbour whose opposite
+        // neighbour is not fluid (the outlet is a one-cell layer), else any fluid neighbour.
+        let is_fluid = |c: Option<usize>| c.is_some_and(|j| cell_type[j] == CellType::Fluid);
+        for y in 0..h {
+            for x in 0..w {
+                let i = y * w + x;
+                if cell_type[i] != CellType::Outlet {
+                    continue;
+                }
+                let candidates = (1..5).filter(|&d| {
+                    let [cx, cy] = LINKS[d];
+                    is_fluid(neighbour(x, y, cx, cy, w, h, periodic))
+                });
+                let preferred = candidates.clone().find(|&d| {
+                    let [cx, cy] = LINKS[d];
+                    !is_fluid(neighbour(x, y, -cx, -cy, w, h, periodic))
+                });
+                if let Some(d) = preferred.or_else(|| candidates.clone().next()) {
+                    flags[i] |= (d as u16) << flags::INWARD_SHIFT;
+                }
+            }
+        }
+
         // Hydrostatic reference: centroid of the pressure outlets, else of the fluid.
         let centroid = |pick: &dyn Fn(usize) -> bool| -> Option<[f64; 2]> {
             let (mut sx, mut sy, mut n) = (0.0, 0.0, 0usize);
@@ -649,6 +682,24 @@ fn parabolic_profile(cells: &[usize], w: usize, peak: [f64; 2]) -> Vec<(usize, f
 
 /// Features that are valid in the format but not implemented by the Phase 1 solver.
 fn check_support(scene: &Scene, cell_type: &[CellType], r: &mut Report) {
+    let has_pressure_outlet = scene.elements.iter().any(|e| {
+        matches!(
+            e.kind,
+            ElementKind::Outlet {
+                pressure: OutletBc::Pressure { .. }
+            }
+        )
+    });
+    if cell_type.contains(&CellType::Inlet)
+        && cell_type.contains(&CellType::Outlet)
+        && !has_pressure_outlet
+    {
+        r.warning(
+            "domain.noPressureReference",
+            "velocity inlets with only zero-gradient outlets leave the pressure level undetermined: \
+             mass may drift; use a pressure outlet",
+        );
+    }
     if scene.physics.free_surface || cell_type.contains(&CellType::Empty) {
         r.error(
             "support.freeSurface",
@@ -774,6 +825,7 @@ mod tests {
         assert_eq!(flags::flow(at(0, 0)), flags::BOUNCE_BACK);
         assert_eq!(flags::flow(at(0, 1)), flags::BOUNCE_BACK); // inlet
         assert_eq!(flags::flow(at(4, 2)), flags::PRESSURE);
+        assert_eq!(flags::inward(at(4, 2)), 3); // interior is to the west
         assert_eq!(d.bc_slot[0], 1);
         assert_eq!(d.slot_element, vec![0, 1, 2, 3]);
         // Inlet slot carries the lattice inlet velocity (= the target lattice velocity).
@@ -884,6 +936,16 @@ mod tests {
             },
         };
         assert_eq!(error_codes(&scene), vec!["support.slip"]);
+    }
+
+    #[test]
+    fn zero_gradient_outlet_without_pressure_reference_warns() {
+        let mut scene = examples::channel();
+        scene.elements[2].kind = ElementKind::Outlet {
+            pressure: OutletBc::ZeroGradient,
+        };
+        let codes: Vec<_> = domain(&scene).issues.iter().map(|i| i.code).collect();
+        assert_eq!(codes, vec!["domain.noPressureReference"]);
     }
 
     #[test]
