@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-live-fluids — web CFD simulator: pixel editor in the browser → local Rust server → GPU solver (CUDA and wgpu) with CPU fallback. Status: **Phase 0 complete, Phase 1 next** (scene format, validation, frames, CLI, web skeleton); no solver yet.
+live-fluids — web CFD simulator: pixel editor in the browser → local Rust server → GPU solver (CUDA and wgpu) with CPU fallback. Status: **Phase 1 in progress**: Phase 0 foundations (scene format, validation, frames, CLI, web skeleton) plus `Scene → Domain`/units (`cfd-core`) and the CPU LBM solver (`cfd-lbm`); next: `cfd-cli run/bench/verify` and the validation suite.
 
 - Documentation lives in `docs/` (index in `README.md`). Read `docs/05-implementation-plan.md` before starting any phase; commands and environment are in `docs/development.md`.
 - Language: **everything in the repository is in English** — code, comments, docs, UI text, commit messages (the project is part of the author's English CV/portfolio). The author may chat in Portuguese; reply in their language, but write repository content in English.

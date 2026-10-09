@@ -2,7 +2,7 @@
 
 A computational fluid dynamics (CFD) simulator in the browser. You draw the domain **pixel by pixel**, place walls, fluid inlets and outlets, temperatures and boundary properties, and the simulation runs on a local Rust server on the GPU (CUDA or wgpu), with the CPU as a fallback. Results are streamed back and visualised in the browser.
 
-> Status: **Phase 0 complete** — scene format, validation, frame format, CLI, web skeleton and CI. Next: Phase 1 (LBM solver on the CPU).
+> Status: **Phase 1 in progress** — the CPU LBM solver (D2Q9 + D2Q5 thermal, TRT, link-wise boundaries, Boussinesq, forces) is implemented and tested on top of the Phase 0 foundations (scene format, validation, frames, CLI, web skeleton, CI). Next: `cfd-cli run` / `bench` / `verify` and the validation suite.
 
 ## The idea in 30 seconds
 

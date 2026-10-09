@@ -80,23 +80,25 @@ Consistency rules (validated on the client **and** the server; implemented in `c
 ### 4.1 Velocity / pressure
 | Type | Parameters | LBM implementation (MVP) | Status |
 |------|------------|--------------------------|--------|
-| `noSlip` (wall) | — | Half-way bounce-back | in format |
-| `slip` (wall) | — | Specular reflection | in format |
-| `moving` (wall) | tangential velocity | Bounce-back with momentum correction | in format |
-| `uniform` (inlet) | velocity vector | Zou-He / velocity bounce-back | in format |
-| `parabolic` (inlet) | peak velocity | Zou-He per cell | in format |
+| `noSlip` (wall) | — | Half-way bounce-back | implemented |
+| `slip` (wall) | — | Specular reflection | in format (rejected by the Phase 1 solver) |
+| `moving` (wall) | tangential velocity | Bounce-back with momentum correction | implemented |
+| `uniform` (inlet) | velocity vector | Velocity bounce-back (imposes `ρ₀u`) | implemented |
+| `parabolic` (inlet) | peak velocity | Velocity bounce-back, one parameter slot per cell | implemented |
 | `massFlow` (inlet) | kg/s | Converted into a mean velocity | planned |
-| `pressure` (outlet) | gauge pressure | Pressure Zou-He / anti-bounce-back | in format |
-| `zeroGradient` (outlet) | — | Extrapolation / convective outflow | in format |
-| periodic | pair of edges | Periodic indexing (`grid.edges`) | in format |
+| `pressure` (outlet) | gauge pressure | Anti-bounce-back (velocity from the fluid cell) | implemented |
+| `zeroGradient` (outlet) | — | Copy of the interior neighbour along the outlet normal | implemented |
+| periodic | pair of edges | Periodic indexing (`grid.edges`) | implemented |
+
+All rules are link-wise and half-way, chosen so hand-drawn pixel geometry needs no normals ([ADR-014](07-decisions-and-questions.md)). A parabolic profile spans the full extent of the element's cells perpendicular to `peak`.
 
 ### 4.2 Thermal
 | Type | Parameters | Status |
 |------|-----------|--------|
-| `adiabatic` | — (zero flux) | in format |
-| `fixed` | temperature (K) | in format |
-| `flux` | W/m² | in format |
-| `convective` | h (W/m²K), ambient T | in format |
+| `adiabatic` | — (zero flux) | implemented (bounce-back of `g`; on inlets: zero gradient) |
+| `fixed` | temperature (K) | implemented (anti-bounce-back of `g`) |
+| `flux` | W/m² | implemented on walls (bounce-back + flux per link) |
+| `convective` | h (W/m²K), ambient T | in format (rejected by the Phase 1 solver) |
 | `volumetricSource` (in a solid) | W/m³ | planned |
 
 ### 4.3 Future
@@ -104,10 +106,22 @@ Roughness / wall functions (turbulence), contact angle (multiphase), porosity (p
 
 ## 5. Internal domain (`Domain`, solver side)
 
-Result of the `Scene → Domain` conversion in `cfd-core` (Phase 1):
-- Per-cell flag mask (`u16` bits: fluid, solid, boundary, BC type, solid neighbour in each direction — precomputed for branch-free kernels).
-- Per-element parameter tables already in **lattice units** (velocity, density, τ, dimensionless temperature).
-- Conversion factors (`dx`, `dt`, `ρ0`, `T_ref`, `ΔT`) and dimensionless numbers (Re, Ma, Pr, Ra) for reporting and stability checks.
+Result of the `Scene → Domain` conversion (`crates/cfd-core/src/domain.rs`). The arrays are uploaded unchanged to every backend; cells are indexed `y * width + x` as in the layers.
+
+- `flags: Vec<u16>` per cell:
+
+  | Bits | Meaning |
+  |------|---------|
+  | 0–2 | Flow kind: 0 fluid · 1 bounce-back (walls, moving walls, velocity inlets) · 2 pressure outlet · 3 zero-gradient outlet |
+  | 3–4 | Thermal kind of links into the cell: 0 adiabatic · 1 fixed temperature · 2 heat flux · 3 zero gradient |
+  | 5–7 | Outlets: inward axis direction (1–4) of the interior neighbour, for zero-gradient copies |
+  | 8–15 | Fluid cells: bit `7 + i` set when population `i` (1–8) is pulled through a boundary link (non-fluid neighbour or a non-periodic edge) — interior cells (mask 0) take a branch-free path |
+
+- `bc_slot: Vec<u32>` per cell → `bc_params: Vec<BcParams>` (32-byte `#[repr(C)]`: wall/inlet velocity, outlet density, θ, heat flux, all in lattice units). Slot 0 is the implicit no-slip adiabatic wall at the domain edges; uniform elements share one slot, parabolic inlets get one per cell. `slot_element` maps slots back to element ids (forces per element).
+- Lattice physics (ν, α, Boussinesq coefficient per unit θ, optional body force), initial state, run length in steps, probes.
+- Conversion factors (`dx`, `dt`, `ρ0`, `T_ref`, `ΔT`), characteristic scales and dimensionless numbers (Re, Ma, Pr, Ra), the hydrostatic pressure reference ([ADR-016](07-decisions-and-questions.md)), and the warnings from validation, support and stability checks.
+
+The direction order (rest, E, N, W, S, NE, NW, SW, SE) is `domain::LINKS`; D2Q5 uses the first five.
 
 ## 6. Results
 

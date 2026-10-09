@@ -57,16 +57,16 @@ Notes for C# developers:
 
 **Goal:** a correct, validated 2D LBM, runnable from the CLI.
 
-- [ ] M — `cfd-core`: `Domain`, per-cell flags, `Scene → Domain` conversion, units module (physical ↔ lattice) with stability checks and warnings.
-- [ ] M — `cfd-lbm`: D2Q9 BGK, fused stream-collide kernel (pull), ping-pong, parallelised by rows with `rayon`.
-- [ ] M — Boundary conditions: bounce-back, moving wall, velocity inlet (Zou-He), pressure and zero-gradient outlets, periodic.
-- [ ] S — Guo forcing (gravity).
-- [ ] M — TRT operator (default), keeping BGK as an option.
-- [ ] M — Thermal D2Q5 + Boussinesq; fixed/adiabatic/flux thermal BCs.
-- [ ] S — Diagnostics: mass, energy, maximum velocity, NaN detection.
+- [x] M — `cfd-core`: `Domain`, per-cell flags, `Scene → Domain` conversion, units module (physical ↔ lattice) with stability checks and warnings. *(2026-10-10)*
+- [x] M — `cfd-lbm`: D2Q9 BGK, fused stream-collide kernel (pull), ping-pong, parallelised by rows with `rayon`. *(SoA, shifted populations; ≈ 120 MLUPS on 16 threads)*
+- [x] M — Boundary conditions: bounce-back, moving wall, velocity inlet, pressure and zero-gradient outlets, periodic. *(link-wise: velocity bounce-back instead of Zou-He, see ADR-014)*
+- [x] S — Guo forcing (body force and Boussinesq buoyancy; hydrostatic gravity goes into the output pressure, ADR-016).
+- [x] M — TRT operator (default), keeping BGK as an option.
+- [x] M — Thermal D2Q5 + Boussinesq; fixed/adiabatic/flux thermal BCs.
+- [x] S — Diagnostics: mass, energy, maximum velocity, NaN detection.
 - [ ] M — `cfd-cli run`: reads a scene, runs it, writes PNGs (colour map) and binary frames; `cfd-cli bench` reports MLUPS.
 - [ ] L — Automated validation suite (`cfd-cli verify`, methodology in [08](08-validation-guide.md)), including convergence-order tests: Poiseuille, Couette, Taylor-Green, cavity (Ghia), cylinder (Schäfer-Turek), heated cavity (de Vahl Davis). Produces a report with errors and plots.
-- [ ] S — Forces on solids (momentum exchange) for C_D/C_L; probe time series.
+- [x] S — Forces on solids (momentum exchange) for C_D/C_L; probes. *(writing probe/force time series to CSV comes with `cfd-cli run`)*
 
 **Acceptance:** all applicable cases from [04 §7](04-numerical-methods.md#7-validation) within tolerance; ≥ 50 MLUPS on 8 cores; von Kármán street visible for the Re 100 cylinder.
 

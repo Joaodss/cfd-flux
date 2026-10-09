@@ -69,6 +69,26 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
 - **Decision:** everything in the repository — code, comments, documentation, UI text, commit messages, session logs — is written in English. The original Portuguese planning documents were translated on 2026-10-09.
 - **Consequences:** a single language for readers and contributors; conversations with the assistant may still happen in Portuguese.
 
+### ADR-014 — Link-wise boundary conditions driven by precomputed flags · *Accepted (2026-10-10)*
+- **Context:** boundaries are hand-drawn pixels: there is no reliable normal, and corners are everywhere. Node-based schemes such as Zou-He need a normal and special corner treatment, and are awkward to keep identical in three backends.
+- **Decision:** every boundary is a rule applied to a *link* between a fluid cell and a non-fluid neighbour, half-way between them; only fluid cells are updated. Walls, moving walls and **velocity inlets** use bounce-back with the wall velocity (`f_i = f*_ī + 6 w_i ρ₀ c_i·u_w`, with `ρ₀ = 1`); pressure outlets use anti-bounce-back; zero-gradient outlets copy the interior neighbour along a precomputed inward axis. `Scene → Domain` precomputes per-cell `u16` flags (kind, thermal kind, inward axis, 8-bit link mask) and a `#[repr(C)]` parameter table, uploaded unchanged to every backend (see [03 §5](03-data-model.md#5-internal-domain-domain-solver-side)).
+- **Consequences:** with TRT (Λ = 3/16) walls sit exactly half-way for any viscosity. Velocity bounce-back with `ρ₀` imposes the mass flux `ρ₀u`; using the local density instead was tried and makes inlets unstable with open outlets (the inflow grows with the density). A zero-gradient outlet cannot carry a pressure gradient, so velocity inlets without a pressure outlet produce the warning `domain.noPressureReference`.
+
+### ADR-015 — f32 storage with shifted populations · *Accepted (2026-10-10)*
+- **Context:** WebGPU has no f64 and consumer GPUs run f64 at 1/64 speed; the CPU backend is the parity reference for the GPU ones.
+- **Decision:** all backends store `f32`. The flow populations are stored shifted (`f̃ᵢ = fᵢ − wᵢ`, FluidX3D's trick) and rest populations are computed as the remainder of the sum (`f̃₀ = Δρ − Σ`, `g₀ = θ − Σ`), so mass and heat are conserved by construction. Temperatures are centred on the initial temperature (`θ = (T − T_ref)/ΔT`). A scene asking for `precision: "f64"` runs in f32 with the warning `support.precision`.
+- **Consequences:** second-order convergence is visible down to errors of ~1e-3 at 64² (Taylor-Green, Poiseuille); if a validation case ever needs more, the CPU kernel can be made generic over the float type.
+
+### ADR-016 — Gravity: hydrostatic part in the output, buoyancy in the solver · *Accepted (2026-10-10)*
+- **Context:** in a single-phase flow without a free surface, uniform gravity is balanced by a hydrostatic pressure gradient and does not change the velocity; applying it in a weakly compressible LBM only adds a density stratification (compressibility error).
+- **Decision:** gravity stays a scene property (`physics.gravity`, with `units::STANDARD_GRAVITY` as the Earth default). The solver applies only the Boussinesq force `−ρ₀β(T − T_ref)g`; the hydrostatic pressure `ρ₀ g·(x − x_ref)` is added to the output pressure (reference: centroid of the pressure outlets, else of the fluid). The free surface (Phase 6a) will apply full gravity.
+- **Consequences:** sampled pressure is the physical gauge pressure; the solver field is the dynamic part.
+
+### ADR-017 — Each backend implements `Solver` directly · *Accepted (2026-10-10)*
+- **Context:** the architecture listed both a `Solver` and a `Backend` trait.
+- **Decision:** a single `Solver` trait in `cfd-core`, implemented by each backend type (`CpuLbm` now; `WgpuLbm`, `CudaLbm` in Phase 2). Construction is backend-specific; code that chooses at runtime holds a `Box<dyn Solver>`. Backends expose raw lattice fields; conversion to physical fields, probes and units is shared code. Interactive updates (`update_boundaries`/`PatchCells`, ADR-011) will be added as trait methods in Phase 5b.
+- **Consequences:** less abstraction now; a device-level `Backend` trait is only worth it if several methods share the GPU backends (Phase 7).
+
 ## Open questions
 
 Answers to these questions can change priorities. Record the answer and the date here.
