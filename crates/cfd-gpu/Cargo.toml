@@ -1,0 +1,14 @@
+[package]
+name = "cfd-gpu"
+description = "wgpu/WGSL backend for the live-fluids solvers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cfd-core.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,21 @@
+[package]
+name = "cfd-cli"
+description = "Command-line tool for live-fluids: scenes, validation and (later) headless runs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "cfd-cli"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+cfd-core.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,25 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Simulation outputs
+/out/
+/results/
+*.cfdframe
+
+# Editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local env
+.env
+.env.*
+!.env.example

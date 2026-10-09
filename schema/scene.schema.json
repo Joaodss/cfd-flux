@@ -1,0 +1,833 @@
+{
+  "$defs": {
+    "BackendPreference": {
+      "oneOf": [
+        {
+          "enum": [
+            "cpu",
+            "wgpu",
+            "cuda"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "auto",
+          "description": "CUDA if available, then wgpu, then CPU.",
+          "type": "string"
+        }
+      ]
+    },
+    "Buoyancy": {
+      "enum": [
+        "none",
+        "boussinesq"
+      ],
+      "type": "string"
+    },
+    "DomainEdges": {
+      "additionalProperties": false,
+      "properties": {
+        "bottom": {
+          "$ref": "#/$defs/EdgeKind"
+        },
+        "left": {
+          "$ref": "#/$defs/EdgeKind"
+        },
+        "right": {
+          "$ref": "#/$defs/EdgeKind"
+        },
+        "top": {
+          "$ref": "#/$defs/EdgeKind"
+        }
+      },
+      "required": [
+        "left",
+        "right",
+        "bottom",
+        "top"
+      ],
+      "type": "object"
+    },
+    "EdgeKind": {
+      "oneOf": [
+        {
+          "const": "wall",
+          "description": "No-slip, adiabatic wall.",
+          "type": "string"
+        },
+        {
+          "const": "periodic",
+          "description": "Periodic with the opposite edge (both edges must be periodic).",
+          "type": "string"
+        }
+      ]
+    },
+    "Element": {
+      "description": "A boundary element: every cell carrying its id in the `elementId` layer shares its properties.",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "wall",
+              "type": "string"
+            },
+            "material": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "thermal": {
+              "$ref": "#/$defs/ThermalBc"
+            },
+            "velocity": {
+              "$ref": "#/$defs/WallVelocity"
+            }
+          },
+          "required": [
+            "kind",
+            "velocity",
+            "thermal"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "fluid": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "inlet",
+              "type": "string"
+            },
+            "thermal": {
+              "$ref": "#/$defs/ThermalBc"
+            },
+            "velocity": {
+              "$ref": "#/$defs/InletVelocity"
+            }
+          },
+          "required": [
+            "kind",
+            "velocity",
+            "thermal",
+            "fluid"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "outlet",
+              "type": "string"
+            },
+            "pressure": {
+              "$ref": "#/$defs/OutletBc"
+            }
+          },
+          "required": [
+            "kind",
+            "pressure"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "heatSource",
+              "type": "string"
+            },
+            "material": {
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "thermal": {
+              "$ref": "#/$defs/ThermalBc"
+            }
+          },
+          "required": [
+            "kind",
+            "thermal"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "id": {
+          "description": "Must be >= 1 and unique.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "Fluid": {
+      "additionalProperties": false,
+      "properties": {
+        "density": {
+          "description": "kg/m³",
+          "format": "double",
+          "type": "number"
+        },
+        "id": {
+          "description": "Referenced by `fluidId` layer values and by elements. Must be >= 1.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "kinematicViscosity": {
+          "description": "m²/s",
+          "format": "double",
+          "type": "number"
+        },
+        "name": {
+          "type": "string"
+        },
+        "preset": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "specificHeat": {
+          "description": "J/(kg·K)",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "thermalConductivity": {
+          "description": "W/(m·K)",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "thermalExpansion": {
+          "description": "1/K (Boussinesq coefficient)",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "density",
+        "kinematicViscosity"
+      ],
+      "type": "object"
+    },
+    "Grid": {
+      "additionalProperties": false,
+      "properties": {
+        "cellSize": {
+          "description": "Cell size in metres.",
+          "format": "double",
+          "type": "number"
+        },
+        "edges": {
+          "$ref": "#/$defs/DomainEdges",
+          "default": {
+            "bottom": "wall",
+            "left": "wall",
+            "right": "wall",
+            "top": "wall"
+          },
+          "description": "Behaviour of the four domain edges where no element is drawn."
+        },
+        "height": {
+          "description": "Number of cells along y.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "width": {
+          "description": "Number of cells along x.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "width",
+        "height",
+        "cellSize"
+      ],
+      "type": "object"
+    },
+    "InitialConditions": {
+      "additionalProperties": false,
+      "properties": {
+        "fluid": {
+          "description": "Fluid used where the `fluidId` layer is 0 (or absent).",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pressure": {
+          "description": "Gauge pressure in Pa.",
+          "format": "double",
+          "type": "number"
+        },
+        "temperature": {
+          "description": "K",
+          "format": "double",
+          "type": "number"
+        },
+        "velocity": {
+          "description": "m/s",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "fluid",
+        "velocity",
+        "temperature",
+        "pressure"
+      ],
+      "type": "object"
+    },
+    "InletVelocity": {
+      "oneOf": [
+        {
+          "description": "Same velocity (m/s) on every inlet cell.",
+          "properties": {
+            "type": {
+              "const": "uniform",
+              "type": "string"
+            },
+            "value": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Parabolic profile across the inlet with the given peak velocity (m/s).",
+          "properties": {
+            "peak": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            },
+            "type": {
+              "const": "parabolic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "peak"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LayerData": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "type": "string"
+        },
+        "dtype": {
+          "$ref": "#/$defs/LayerDtype"
+        },
+        "encoding": {
+          "$ref": "#/$defs/LayerEncoding"
+        }
+      },
+      "required": [
+        "encoding",
+        "dtype",
+        "data"
+      ],
+      "type": "object"
+    },
+    "LayerDtype": {
+      "enum": [
+        "u8",
+        "u16"
+      ],
+      "type": "string"
+    },
+    "LayerEncoding": {
+      "enum": [
+        "raw+base64",
+        "zstd+base64"
+      ],
+      "type": "string"
+    },
+    "Layers": {
+      "additionalProperties": false,
+      "description": "Per-cell layers, row-major from the bottom-left corner (`index = y * width + x`).",
+      "properties": {
+        "cellType": {
+          "$ref": "#/$defs/LayerData",
+          "description": "`u8` values of [`CellType`]."
+        },
+        "elementId": {
+          "$ref": "#/$defs/LayerData",
+          "description": "`u16` element ids; 0 = none."
+        },
+        "fluidId": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerData"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional `u8` initial fluid per cell; 0 = `initial.fluid`."
+        }
+      },
+      "required": [
+        "cellType",
+        "elementId"
+      ],
+      "type": "object"
+    },
+    "Method": {
+      "enum": [
+        "lbm"
+      ],
+      "type": "string"
+    },
+    "OutletBc": {
+      "oneOf": [
+        {
+          "description": "Gauge pressure in Pa.",
+          "properties": {
+            "type": {
+              "const": "pressure",
+              "type": "string"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "zeroGradient",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OutputField": {
+      "enum": [
+        "velocity",
+        "pressure",
+        "density",
+        "temperature",
+        "vorticity",
+        "fillFraction"
+      ],
+      "type": "string"
+    },
+    "Physics": {
+      "additionalProperties": false,
+      "properties": {
+        "buoyancy": {
+          "$ref": "#/$defs/Buoyancy"
+        },
+        "freeSurface": {
+          "default": false,
+          "description": "Liquid with a free surface; `empty` cells are gas/void.",
+          "type": "boolean"
+        },
+        "gravity": {
+          "description": "m/s²",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "thermal": {
+          "description": "Solve the temperature field.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "gravity",
+        "thermal",
+        "buoyancy"
+      ],
+      "type": "object"
+    },
+    "Precision": {
+      "enum": [
+        "f32",
+        "f64"
+      ],
+      "type": "string"
+    },
+    "Probe": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "position": {
+          "description": "Cell coordinates `[x, y]`, origin at the bottom-left corner.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "position"
+      ],
+      "type": "object"
+    },
+    "RunConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/BackendPreference"
+        },
+        "endTime": {
+          "description": "Simulated physical time in seconds.",
+          "format": "double",
+          "type": "number"
+        },
+        "method": {
+          "$ref": "#/$defs/Method"
+        },
+        "outputFields": {
+          "items": {
+            "$ref": "#/$defs/OutputField"
+          },
+          "type": "array"
+        },
+        "outputInterval": {
+          "description": "Physical time between output frames in seconds.",
+          "format": "double",
+          "type": "number"
+        },
+        "precision": {
+          "$ref": "#/$defs/Precision"
+        }
+      },
+      "required": [
+        "method",
+        "backend",
+        "precision",
+        "endTime",
+        "outputInterval",
+        "outputFields"
+      ],
+      "type": "object"
+    },
+    "SolidMaterial": {
+      "additionalProperties": false,
+      "properties": {
+        "density": {
+          "description": "kg/m³",
+          "format": "double",
+          "type": "number"
+        },
+        "id": {
+          "description": "Must be >= 1.",
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "specificHeat": {
+          "description": "J/(kg·K)",
+          "format": "double",
+          "type": "number"
+        },
+        "thermalConductivity": {
+          "description": "W/(m·K)",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "thermalConductivity",
+        "density",
+        "specificHeat"
+      ],
+      "type": "object"
+    },
+    "ThermalBc": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "adiabatic",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Temperature in K.",
+          "properties": {
+            "type": {
+              "const": "fixed",
+              "type": "string"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Heat flux in W/m² (positive into the fluid).",
+          "properties": {
+            "type": {
+              "const": "flux",
+              "type": "string"
+            },
+            "value": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "type",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Convective exchange: h in W/(m²·K), ambient temperature in K.",
+          "properties": {
+            "ambient": {
+              "format": "double",
+              "type": "number"
+            },
+            "h": {
+              "format": "double",
+              "type": "number"
+            },
+            "type": {
+              "const": "convective",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "h",
+            "ambient"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "WallVelocity": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "const": "noSlip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "type": {
+              "const": "slip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Tangential wall velocity in m/s.",
+          "properties": {
+            "type": {
+              "const": "moving",
+              "type": "string"
+            },
+            "velocity": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 2,
+              "minItems": 2,
+              "type": "array"
+            }
+          },
+          "required": [
+            "type",
+            "velocity"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A complete simulation problem: geometry (pixel layers), materials, boundary conditions and\nrun settings. Describes the physics, not the algorithm.",
+  "properties": {
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "elements": {
+      "description": "Boundary elements referenced by the `elementId` layer.",
+      "items": {
+        "$ref": "#/$defs/Element"
+      },
+      "type": "array"
+    },
+    "fluids": {
+      "items": {
+        "$ref": "#/$defs/Fluid"
+      },
+      "type": "array"
+    },
+    "grid": {
+      "$ref": "#/$defs/Grid"
+    },
+    "initial": {
+      "$ref": "#/$defs/InitialConditions"
+    },
+    "layers": {
+      "$ref": "#/$defs/Layers"
+    },
+    "name": {
+      "type": "string"
+    },
+    "physics": {
+      "$ref": "#/$defs/Physics"
+    },
+    "probes": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Probe"
+      },
+      "type": "array"
+    },
+    "run": {
+      "$ref": "#/$defs/RunConfig"
+    },
+    "schemaVersion": {
+      "description": "Format version; must equal the version supported by the server.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "solidMaterials": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SolidMaterial"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "name",
+    "grid",
+    "fluids",
+    "elements",
+    "initial",
+    "physics",
+    "run",
+    "layers"
+  ],
+  "title": "Scene",
+  "type": "object"
+}

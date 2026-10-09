@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "name": "Dam break",
+  "description": "Martin & Moyce (1952): collapse of a water column; compare the front position x(t).",
+  "grid": {
+    "width": 202,
+    "height": 101,
+    "cellSize": 0.0025,
+    "edges": {
+      "left": "wall",
+      "right": "wall",
+      "bottom": "wall",
+      "top": "wall"
+    }
+  },
+  "fluids": [
+    {
+      "id": 1,
+      "name": "Water",
+      "preset": "water",
+      "density": 998.2,
+      "kinematicViscosity": 1.004e-6,
+      "thermalConductivity": 0.598,
+      "specificHeat": 4182.0,
+      "thermalExpansion": 0.000207
+    }
+  ],
+  "solidMaterials": [],
+  "elements": [
+    {
+      "id": 1,
+      "name": "Tank",
+      "kind": "wall",
+      "velocity": {
+        "type": "noSlip"
+      },
+      "thermal": {
+        "type": "adiabatic"
+      }
+    }
+  ],
+  "probes": [
+    {
+      "name": "Right wall",
+      "position": [
+        199,
+        5
+      ]
+    }
+  ],
+  "initial": {
+    "fluid": 1,
+    "velocity": [
+      0.0,
+      0.0
+    ],
+    "temperature": 293.15,
+    "pressure": 0.0
+  },
+  "physics": {
+    "gravity": [
+      0.0,
+      -9.81
+    ],
+    "thermal": false,
+    "buoyancy": "none",
+    "freeSurface": true
+  },
+  "run": {
+    "method": "lbm",
+    "backend": "auto",
+    "precision": "f32",
+    "endTime": 1.0,
+    "outputInterval": 0.01,
+    "outputFields": [
+      "velocity",
+      "fillFraction"
+    ]
+  },
+  "layers": {
+    "cellType": {
+      "encoding": "zstd+base64",
+      "dtype": "u8",
+      "data": "KLUv/QQ4/QMAPAEAAQEBAQEAAAAAAAUFBQUFAQEBAR6oEANfAxBMNEMzmzwQImFIvCT+pwIJJ7pxG1xGiabJKaNKruQXeVlybJ5bBkSd4l+4+Uudfd/ZyUHZpJ4cSkudHOWLJqfUKrmSX+RlybF5pyeRi/yUxgDAWyoXFGQEq6fVi+zUxgAApEo5zKA="
+    },
+    "elementId": {
+      "encoding": "zstd+base64",
+      "dtype": "u16",
+      "data": "KLUv/QQ4bQMA7AAAAQABAAEAAAAAAAABAAEWqBCjFw4QfDMzpEkHEBoiKAIRjwQSSPxKJNFIMCIi8st4oEz0yUEpt54cyl11cpTkNTllO0qufLCLXY2WyD2kvTPi1VOZF2DXVAVQYDB0b8hij0U34d3C4zOupIv34BA="
+    }
+  }
+}

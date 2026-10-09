@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "name": "Channel",
+  "description": "Air entering a 0.4 m × 0.1 m channel at 0.05 m/s (Re ≈ 330).",
+  "grid": {
+    "width": 400,
+    "height": 100,
+    "cellSize": 0.001,
+    "edges": {
+      "left": "wall",
+      "right": "wall",
+      "bottom": "wall",
+      "top": "wall"
+    }
+  },
+  "fluids": [
+    {
+      "id": 1,
+      "name": "Air",
+      "preset": "air",
+      "density": 1.204,
+      "kinematicViscosity": 0.00001516,
+      "thermalConductivity": 0.0257,
+      "specificHeat": 1005.0,
+      "thermalExpansion": 0.00343
+    }
+  ],
+  "solidMaterials": [],
+  "elements": [
+    {
+      "id": 1,
+      "name": "Walls",
+      "kind": "wall",
+      "velocity": {
+        "type": "noSlip"
+      },
+      "thermal": {
+        "type": "adiabatic"
+      }
+    },
+    {
+      "id": 2,
+      "name": "Inlet",
+      "kind": "inlet",
+      "velocity": {
+        "type": "uniform",
+        "value": [
+          0.05,
+          0.0
+        ]
+      },
+      "thermal": {
+        "type": "adiabatic"
+      },
+      "fluid": 1
+    },
+    {
+      "id": 3,
+      "name": "Outlet",
+      "kind": "outlet",
+      "pressure": {
+        "type": "pressure",
+        "value": 0.0
+      }
+    }
+  ],
+  "probes": [
+    {
+      "name": "Centre",
+      "position": [
+        200,
+        50
+      ]
+    }
+  ],
+  "initial": {
+    "fluid": 1,
+    "velocity": [
+      0.0,
+      0.0
+    ],
+    "temperature": 293.15,
+    "pressure": 0.0
+  },
+  "physics": {
+    "gravity": [
+      0.0,
+      0.0
+    ],
+    "thermal": false,
+    "buoyancy": "none",
+    "freeSurface": false
+  },
+  "run": {
+    "method": "lbm",
+    "backend": "auto",
+    "precision": "f32",
+    "endTime": 20.0,
+    "outputInterval": 0.1,
+    "outputFields": [
+      "velocity",
+      "pressure",
+      "vorticity"
+    ]
+  },
+  "layers": {
+    "cellType": {
+      "encoding": "zstd+base64",
+      "dtype": "u8",
+      "data": "KLUv/QQ4JQMAzAAAAQEBAQECAAAAAAADFqgQXzoQfDMzJEk6EBphRrwj/mfiXtokOY2zmoQ66gApU38ckDvpx4EkWx8H2Ygeh7RNx5FvGifxHdLZGXE9Fb5AXaMcoPZQmM6I76nQBfoa5QCgyGsdTCY="
+    },
+    "elementId": {
+      "encoding": "zstd+base64",
+      "dtype": "u16",
+      "data": "KLUv/QQ4zQMA7AAAAQABAAEAAgAAAAAAAwAYqBADnwMQbDMzQ5KkAxASIigCIh4RSjwSI5FEIgHbJDkdx2oS6lEHkDL1jwPkTvrjgCRbPw5kI/o4SNv0OOSbjiMxzSBlPUPczqiGnuC5Mji4dgACB6rqG+T2hjX0CGYzsWX6AnJVCk1WyoE="
+    }
+  }
+}

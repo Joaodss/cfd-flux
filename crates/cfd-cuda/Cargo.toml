@@ -1,0 +1,19 @@
+[package]
+name = "cfd-cuda"
+description = "CUDA backend for the live-fluids solvers (enabled with the `cuda` feature)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cfd-core.workspace = true
+
+[features]
+# Enables the CUDA backend. Requires the NVIDIA CUDA Toolkit (NVRTC) at runtime.
+# The cudarc dependency is added in Phase 2b.
+cuda = []
+
+[lints]
+workspace = true

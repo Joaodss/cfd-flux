@@ -1,0 +1,15 @@
+[package]
+name = "cfd-server"
+description = "HTTP/WebSocket API and job manager for live-fluids"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cfd-core.workspace = true
+cfd-io.workspace = true
+
+[lints]
+workspace = true

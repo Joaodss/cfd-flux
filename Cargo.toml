@@ -1,0 +1,32 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/OWNER/live-fluids"
+rust-version = "1.85"
+
+[workspace.dependencies]
+cfd-core = { path = "crates/cfd-core" }
+cfd-io = { path = "crates/cfd-io" }
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4.5", features = ["derive"] }
+half = "2.4"
+ruzstd = "0.8"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.release]
+debug = "line-tables-only"
