@@ -158,3 +158,68 @@ pub fn run_to_steady(s: &mut CpuLbm, every: u32, tol: f64, max_steps: u64) -> La
     }
     panic!("not steady after {max_steps} steps (relative change {change:e})");
 }
+
+/// A thermal scene in lattice units: `ρ = c_p = 1`, so the conductivity equals the diffusivity
+/// `alpha`; the initial temperature is `t0` (= T_ref). With `boussinesq = Some(gβ)` gravity
+/// points down and buoyancy is on.
+pub fn thermal_domain(
+    canvas: &Canvas,
+    edges: DomainEdges,
+    elements: Vec<Element>,
+    nu: f64,
+    alpha: f64,
+    t0: f64,
+    boussinesq: Option<f64>,
+) -> Domain {
+    let mut scene = lattice_scene(canvas, edges, elements, nu);
+    scene.physics.thermal = true;
+    scene.fluids[0].thermal_conductivity = Some(alpha);
+    scene.fluids[0].specific_heat = Some(1.0);
+    scene.initial.temperature = t0;
+    if let Some(g_beta) = boussinesq {
+        let g = cfd_core::units::STANDARD_GRAVITY;
+        scene.physics.gravity = [0.0, -g];
+        scene.physics.buoyancy = cfd_core::scene::Buoyancy::Boussinesq;
+        scene.fluids[0].thermal_expansion = Some(g_beta / g);
+    }
+    let d =
+        Domain::from_scene(&scene, &LATTICE_UNITS).unwrap_or_else(|r| panic!("{:#?}", r.issues));
+    assert!((d.units.dt - 1.0).abs() < 1e-12);
+    assert!((d.physics.alpha.unwrap() - alpha).abs() < 1e-12);
+    d
+}
+
+pub fn thermal_wall(id: u16, thermal: ThermalBc) -> Element {
+    Element {
+        id,
+        name: None,
+        kind: ElementKind::Wall {
+            velocity: WallVelocity::NoSlip,
+            thermal,
+            material: None,
+        },
+    }
+}
+
+/// Runs until the max change of θ between checks, relative to `max |θ|`, is below `tol`.
+pub fn run_to_steady_theta(s: &mut CpuLbm, every: u32, tol: f64, max_steps: u64) -> LatticeFields {
+    let mut prev = s.lattice_fields();
+    let mut change = f64::INFINITY;
+    while s.steps_done() < max_steps {
+        s.step(every).expect("finite");
+        let now = s.lattice_fields();
+        let (a, b) = (now.theta.as_ref().unwrap(), prev.theta.as_ref().unwrap());
+        let tmax = a.iter().map(|v| v.abs() as f64).fold(1e-30, f64::max);
+        change = a
+            .iter()
+            .zip(b)
+            .map(|(x, y)| (x - y).abs() as f64)
+            .fold(0.0, f64::max)
+            / tmax;
+        prev = now;
+        if change < tol {
+            return prev;
+        }
+    }
+    panic!("θ not steady after {max_steps} steps (relative change {change:e})");
+}

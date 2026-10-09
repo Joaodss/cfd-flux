@@ -201,8 +201,7 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
 
             // ---- TRT collision with Guo forcing ----
             let (sp, sm) = (1.0 - 0.5 * wp, 1.0 - 0.5 * wm);
-            let feq0 = W9[0] * (drho - 1.5 * rho * usq);
-            fo[0][local] = f[0] - wp * (f[0] - feq0) + sp * W9[0] * (-3.0 * uf);
+            let mut moving = 0.0;
             for i in [1, 2, 5, 6] {
                 let o = OPPOSITE[i];
                 let wi = W9[i];
@@ -216,16 +215,22 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
                 let f_m = 0.5 * (f[i] - f[o]);
                 let relax_p = -wp * (f_p - eq_p) + sp * src_p;
                 let relax_m = -wm * (f_m - eq_m) + sm * src_m;
-                fo[i][local] = f[i] + relax_p + relax_m;
-                fo[o][local] = f[o] + relax_p - relax_m;
+                let (fi, fo_) = (f[i] + relax_p + relax_m, f[o] + relax_p - relax_m);
+                fo[i][local] = fi;
+                fo[o][local] = fo_;
+                moving += fi + fo_;
             }
+            // Rest population by difference: Σ f̃* = Δρ exactly (the Guo source sums to zero).
+            fo[0][local] = drho - moving;
             rho_o[local] = rho;
             ux_o[local] = u[0];
             uy_o[local] = u[1];
 
             if THERMAL {
                 let go = go.as_mut().expect("thermal outputs");
-                go[0][local] = g[0] - gwp * (g[0] - W5[0] * theta);
+                // The rest population takes what is left, so Σ g* = θ holds by construction:
+                // relaxing it directly leaves an f32 rounding bias that drifts the heat content.
+                let mut moving = 0.0;
                 for i in [1, 2] {
                     let o = OPPOSITE[i];
                     let cu = dot(LINKS[i], u);
@@ -233,9 +238,12 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
                     let eq_m = W5[i] * theta * 3.0 * cu;
                     let relax_p = -gwp * (0.5 * (g[i] + g[o]) - eq_p);
                     let relax_m = -gwm * (0.5 * (g[i] - g[o]) - eq_m);
-                    go[i][local] = g[i] + relax_p + relax_m;
-                    go[o][local] = g[o] + relax_p - relax_m;
+                    let (gi, go_) = (g[i] + relax_p + relax_m, g[o] + relax_p - relax_m);
+                    go[i][local] = gi;
+                    go[o][local] = go_;
+                    moving += gi + go_;
                 }
+                go[0][local] = theta - moving;
                 theta_o[local] = theta;
             }
         }
