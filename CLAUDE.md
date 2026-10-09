@@ -1,15 +1,15 @@
 # CLAUDE.md
 
-live-fluids — simulador CFD web: editor pixel a pixel no browser → servidor Rust local → solver em GPU (CUDA e wgpu) com fallback CPU. Estado: **Fase 0 concluída** (formato de cena, validação, frames, CLI, esqueleto web); ainda sem solver.
+live-fluids — web CFD simulator: pixel editor in the browser → local Rust server → GPU solver (CUDA and wgpu) with CPU fallback. Status: **Phase 0 complete, Phase 1 next** (scene format, validation, frames, CLI, web skeleton); no solver yet.
 
-- Documentação em `docs/` (índice no `README.md`). Ler `docs/05-plano-implementacao.md` antes de começar qualquer fase; comandos e ambiente em `docs/desenvolvimento.md`.
-- Língua: documentação de `docs/` em português (PT-PT); código, comentários e commits em inglês.
-- Decisões e perguntas em aberto: `docs/07-decisoes-e-perguntas.md` — atualizar quando o autor responder ou uma decisão mudar.
-- Formato da cena: fonte de verdade em `crates/cfd-core/src/scene.rs`. `schema/`, `scenes/` e `apps/web/src/generated/` são gerados (`cfd-cli schema`, `cfd-cli example --all scenes`, `npm run gen:types`); testes falham se estiverem desatualizados.
-- Autor: muita experiência em CFD (não explicar física básica), pouca em Rust/GPU, vem de C# → explicar idiomas Rust/wgpu/CUDA quando relevantes, com paralelos a C#. Os protótipos em `sandbox/` são para o autor aprender: não os escrever por ele sem pedido.
-- Ambiente local (Windows): toolchain `windows-gnu` não linka (`dlltool`); `cargo check/clippy/fmt` funcionam em Windows, testes correm no WSL Ubuntu com `CARGO_TARGET_DIR=$HOME/.cache/live-fluids-target` até o MSVC Build Tools ser instalado. GPU: RTX 4060 8 GB.
-- Regras de trabalho:
-  - Três backends: CPU (referência numérica), wgpu/WGSL e CUDA (`cfd-cuda`, feature `cuda`). Qualquer kernel GPU precisa de teste de paridade; manter a mesma disposição de memória nos três.
-  - Todo o solver novo tem de passar os casos de validação de `docs/04-metodos-numericos.md` §7 (método em `docs/08-guia-validacao.md`).
-  - Unidades físicas na cena; conversão para unidades de rede só no solver.
-- Ao concluir tarefas do plano, marcar as checkboxes em `docs/05-plano-implementacao.md`.
+- Documentation lives in `docs/` (index in `README.md`). Read `docs/05-implementation-plan.md` before starting any phase; commands and environment are in `docs/development.md`.
+- Language: **everything in the repository is in English** — code, comments, docs, UI text, commit messages (the project is part of the author's English CV/portfolio). The author may chat in Portuguese; reply in their language, but write repository content in English.
+- Decisions and open questions: `docs/07-decisions-and-questions.md` — update it when the author answers or a decision changes.
+- Scene format: source of truth is `crates/cfd-core/src/scene.rs`. `schema/`, `scenes/` and `apps/web/src/generated/` are generated (`cfd-cli schema`, `cfd-cli example --all scenes`, `npm run gen:types`); tests fail if they are out of date.
+- Author: strong CFD background (don't explain basic physics), little Rust/GPU experience, comes from C# → explain Rust/wgpu/CUDA idioms when relevant, with C# parallels. The prototypes in `sandbox/` are for the author to learn with: don't write them unless asked.
+- Local environment (Windows): Rust MSVC toolchain (native build/test OK), VS Build Tools 2022, CUDA Toolkit 13.4 (driver 610.62 = CUDA 13.3; prefer `sm_89` cubin over PTX), RTX 4060 8 GB. Details in `docs/development.md`. Repository: github.com/Joaodss/cfd-flux, branch `master`.
+- Working rules:
+  - Three backends: CPU (numerical reference), wgpu/WGSL and CUDA (`cfd-cuda`, `cuda` feature). Every GPU kernel needs a parity test; keep the same memory layout in all three.
+  - Every new solver must pass the validation cases in `docs/04-numerical-methods.md` §7 (method in `docs/08-validation-guide.md`).
+  - Physical units in the scene; conversion to lattice units only in the solver.
+- When finishing plan tasks, tick their checkboxes in `docs/05-implementation-plan.md`.

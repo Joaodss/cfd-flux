@@ -1,7 +1,7 @@
 //! Built-in example scenes, generated in code so they stay reproducible.
 //!
 //! `cfd-cli example --all scenes/` writes them to `scenes/`; a test checks the committed
-//! files match. Geometries follow the validation cases in `docs/08-guia-validacao.md`.
+//! files match. Geometries follow the validation cases in `docs/08-validation-guide.md`.
 
 use crate::layers::{LayerData, LayerEncoding};
 use crate::scene::*;

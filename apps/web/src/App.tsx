@@ -16,12 +16,12 @@ export default function App() {
   return (
     <main>
       <h1>live-fluids</h1>
-      <p>Simulador CFD no browser — em construção (Fase 0).</p>
-      <h2>Cenas de exemplo</h2>
+      <p>CFD simulator in the browser — under construction (Phase 0 done).</p>
+      <h2>Example scenes</h2>
       <ul>
         {scenes.map((s) => (
           <li key={s.name}>
-            <strong>{s.name}</strong> — {s.grid.width}×{s.grid.height} células
+            <strong>{s.name}</strong> — {s.grid.width}×{s.grid.height} cells
             {s.description ? `: ${s.description}` : ''}
           </li>
         ))}
