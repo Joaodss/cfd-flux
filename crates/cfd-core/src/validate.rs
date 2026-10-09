@@ -39,7 +39,7 @@ impl Report {
         self.issues.iter().filter(|i| i.severity == Severity::Error)
     }
 
-    fn error(&mut self, code: &'static str, message: impl Into<String>) {
+    pub fn error(&mut self, code: &'static str, message: impl Into<String>) {
         self.issues.push(Issue {
             severity: Severity::Error,
             code,
@@ -47,7 +47,7 @@ impl Report {
         });
     }
 
-    fn warning(&mut self, code: &'static str, message: impl Into<String>) {
+    pub fn warning(&mut self, code: &'static str, message: impl Into<String>) {
         self.issues.push(Issue {
             severity: Severity::Warning,
             code,

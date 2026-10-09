@@ -60,7 +60,7 @@
   "physics": {
     "gravity": [
       0.0,
-      -9.81
+      -9.80665
     ],
     "thermal": false,
     "buoyancy": "none",
