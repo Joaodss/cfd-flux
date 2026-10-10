@@ -106,7 +106,7 @@ Roughness / wall functions (turbulence), contact angle (multiphase), porosity (p
 
 ## 5. Internal domain (`Domain`, solver side)
 
-Result of the `Scene → Domain` conversion (`crates/cfd-core/src/domain.rs`). The arrays are uploaded unchanged to every backend; cells are indexed `y * width + x` as in the layers.
+Result of the `Scene → Domain` conversion (`crates/cfd-core/src/domain.rs`). The arrays are uploaded unchanged to every backend; cells are indexed `y * width + x` as in the layers. On the GPU the `u16` flags travel as the same bytes, two cells per 32-bit word (WGSL has no 16-bit storage type; [ADR-019](07-decisions-and-questions.md)).
 
 - `flags: Vec<u16>` per cell:
 

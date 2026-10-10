@@ -82,14 +82,14 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 
 ### 2a — wgpu / WGSL
 
-- [ ] M — `cfd-gpu`: adapter discovery, device selection, limits (`max_storage_buffer_binding_size`), CPU fallback when there is no GPU/memory.
-- [ ] M — SoA buffers for `f_i`, flags, per-element parameters (uniform/storage); D2Q9 TRT stream-collide WGSL kernel.
-- [ ] M — BCs in WGSL (element table indexed by flags, avoiding unnecessary divergent branches).
-- [ ] M — Thermal D2Q5 in WGSL.
-- [ ] M — GPU reductions (diagnostics, forces) and a sampling/f16 conversion kernel before copying to the CPU.
-- [ ] S — Asynchronous readback with double-buffered staging (the simulation keeps running while a frame is copied).
-- [ ] M — GPU vs CPU parity tests (tolerance in [04 §7](04-numerical-methods.md#7-validation)); run when an adapter exists (including software ones such as lavapipe/WARP in CI).
-- [ ] S — Benchmarks at several resolutions; recorded in `docs/benchmarks.md`.
+- [x] M — `cfd-gpu`: adapter discovery, device selection, limits (`max_storage_buffer_binding_size`), CPU fallback when there is no GPU/memory. *(`GpuContext`; `--backend auto` falls back to the CPU, `--backend wgpu` fails with the list of adapters.)*
+- [x] M — SoA buffers for `f_i`, flags, per-element parameters (uniform/storage); D2Q9 TRT stream-collide WGSL kernel. *(Same layout as the CPU; `u16` flags uploaded as bytes, ADR-019.)*
+- [x] M — BCs in WGSL (element table indexed by flags, avoiding unnecessary divergent branches). *(Interior cells take a branch-free path; boundary rules only on cells with a link mask.)*
+- [x] M — Thermal D2Q5 in WGSL. *(Same kernel, compiled out with a pipeline-overridable constant when not needed.)*
+- [x] M — GPU reductions (diagnostics, forces) and a sampling/f16 conversion kernel before copying to the CPU. *(Reductions done; the f16 sampling kernel moves to Phase 3, where frames are streamed.)*
+- [x] S — Asynchronous readback with double-buffered staging (the simulation keeps running while a frame is copied). *(`Solver::request_fields`, ADR-020; used by `cfd-cli run`.)*
+- [x] M — GPU vs CPU parity tests (tolerance in [04 §7](04-numerical-methods.md#7-validation)); run when an adapter exists (including software ones such as lavapipe/WARP in CI). *(12 cases, max difference ≤ 3e-6; `CFD_REQUIRE_GPU=1` in CI.)*
+- [x] S — Benchmarks at several resolutions; recorded in `docs/benchmarks.md`. *(2,834 MLUPS isothermal / 1,812 thermal at 1024² on the RTX 4060.)*
 - [ ] M — (Optional) AA pattern / Esoteric Pull to halve memory.
 
 ### 2b — CUDA (`crates/cfd-cuda`, Cargo feature `cuda`)
@@ -106,7 +106,7 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 - [ ] S — `cfd-cli bench --backends wgpu,cuda`: MLUPS table per resolution (256² → 4096²), f32 and (later) f16; results in `docs/benchmarks.md`.
 - [ ] S — In the API/UI (Phases 3–5): the chosen backend shows up in the job metadata; the same scenario can be launched on two backends and the differences viewed side by side (reusing the comparison UI).
 
-**Acceptance:** CPU↔wgpu↔CUDA parity within tolerance; ≥ 1,000 MLUPS at 1024² on both engines (NFR-01 targets ≥ 2,000 on the RTX 4060); `cfd-cli compare` produces a report for the validation cases; CUDA → wgpu → CPU fallback tested.
+**Acceptance:** CPU↔wgpu↔CUDA parity within tolerance; ≥ 1,000 MLUPS at 1024² on both engines (NFR-01 targets ≥ 2,000 on the RTX 4060); `cfd-cli compare` produces a report for the validation cases; CUDA → wgpu → CPU fallback tested. **wgpu part met (2026-10-10):** CPU↔wgpu parity ≤ 3e-6 on 12 cases, `verify --full --backend wgpu` 13/13 (St and C_D,max identical to the CPU to 4 digits), 2,834 MLUPS at 1024².
 
 ---
 
@@ -119,6 +119,7 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 - [ ] M — Job manager: in-memory queue, states (`queued/running/paused/completed/failed/cancelled`), per-device semaphore, cooperative cancellation.
 - [ ] M — Worker loop on a dedicated thread (the solver never blocks the tokio runtime); channel for frames. The loop processes **commands** (`Step`, `Pause`, `Resume`, `Cancel`, `PatchCells`, `SetParam`) between batches of steps — the foundation of interactive mode ([ADR-011](07-decisions-and-questions.md)).
 - [ ] M — WebSocket: progress (JSON) + frames (binary); backpressure (if the client is slow, drop intermediate *streaming* frames but keep all of them on disk).
+- [ ] M — *(moved from Phase 2a)* GPU sampling kernel: physical output fields and f16 conversion on the device before the copy, so streamed frames cross the bus at half size.
 - [ ] M — `ResultStore` on disk; SQLite for job and scene metadata.
 - [ ] S — `/api/capabilities` (backends, GPU, limits).
 - [ ] S — Integration tests: submit scene → receive N frames → `completed`.
