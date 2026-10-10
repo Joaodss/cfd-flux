@@ -281,7 +281,9 @@ impl Solver for CpuLbm {
     fn forces(&mut self) -> Vec<ElementForce> {
         // Momentum exchange over every link to a bounce-back cell: the population f*_ī leaving
         // the fluid cell towards the wall returns as f_i = f*_ī + 6 wᵢ cᵢ·u_w, so the wall
-        // receives c_ī (2 f*_ī + 6 wᵢ cᵢ·u_w) per step.
+        // receives c_ī (2 f*_ī + 6 wᵢ cᵢ·u_w) per step. Using the shifted population
+        // f̃*_ī = f*_ī − w_ī removes the reference pressure ρ₀ c_s² (which cancels on closed
+        // bodies), so open elements such as inlets and single walls report gauge forces.
         let p = &self.params;
         let d = &self.domain;
         let mut acc: BTreeMap<u16, [f64; 2]> = BTreeMap::new();
@@ -308,7 +310,7 @@ impl Solver for CpuLbm {
                     continue;
                 }
                 let o = OPPOSITE[i];
-                let out = (self.f[o * p.n + k] + W9[o]) as f64;
+                let out = self.f[o * p.n + k] as f64;
                 let uw = d.bc_params[slot].velocity;
                 let cu = (cx as f32 * uw[0] + cy as f32 * uw[1]) as f64;
                 let m = 2.0 * out + 6.0 * W9[i] as f64 * cu;

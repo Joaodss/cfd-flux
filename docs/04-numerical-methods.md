@@ -57,7 +57,7 @@ Given `dx` (= `cellSize`), a characteristic physical velocity `U` and viscosity 
 - **Shifted populations** `f̃ᵢ = fᵢ − wᵢ` in f32, and rest populations computed as the remainder (`f̃₀ = Δρ − Σ`, `g₀ = θ − Σ`), which conserves mass and heat by construction ([ADR-015](07-decisions-and-questions.md)).
 - TRT with Guo forcing split into symmetric/antisymmetric parts, each scaled by its own `(1 − ω±/2)`; BGK is the special case `ω⁺ = ω⁻`.
 - Only Boussinesq buoyancy is applied as a force; the hydrostatic pressure is added at sampling time ([ADR-016](07-decisions-and-questions.md)).
-- Forces on elements: momentum exchange over bounce-back links, `F = Σ c_ī (2 f*_ī + 6 wᵢ ρ₀ cᵢ·u_w)`.
+- Forces on elements: momentum exchange over bounce-back links, `F = Σ c_ī (2 f̃*_ī + 6 wᵢ ρ₀ cᵢ·u_w)` with the shifted population `f̃ = f − w`: this removes the reference pressure ρ₀c_s², so forces are gauge like every other output (it cancels on closed bodies anyway).
 
 ## 4. Heat transfer
 
