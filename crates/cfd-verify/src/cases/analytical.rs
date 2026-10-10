@@ -33,6 +33,15 @@ fn convergence_plot(file: &str, title: &str, n: &[f64], e: &[f64], label: &str) 
     }
 }
 
+/// Note for resolutions finer than the convergence fit.
+const FLOOR_NOTE: &str = "f32 round-off floor (ADR-015), not fitted";
+
+/// Number of leading resolutions up to `max_n`: those where the discretisation error is above
+/// the f32 round-off floor and that enter the order fit.
+fn fitted_levels(sizes: &[f64], max_n: f64) -> usize {
+    sizes.iter().take_while(|&&s| s <= max_n).count()
+}
+
 /// Pairwise orders as table cells ("—" for the first resolution).
 fn order_cells(n: &[f64], e: &[f64]) -> Vec<String> {
     (0..n.len())
@@ -50,6 +59,9 @@ fn order_cells(n: &[f64], e: &[f64]) -> Vec<String> {
 
 const TG_NU: f64 = 0.01;
 const TG_U0: f64 = 0.128;
+/// Finest resolution in the order fit: beyond it (u_lb = 0.0025 and ~17 000 steps at N = 256)
+/// accumulated f32 rounding (~2e-4) dominates the discretisation error.
+const TG_FIT_MAX: f64 = 128.0;
 
 /// Exact Taylor-Green fields in lattice units on an `n²` periodic box of side 1 m, at physical
 /// time `t`, for lattice velocity amplitude `u_lb` at t = 0 (pressure → lattice density).
@@ -129,6 +141,7 @@ pub fn taylor_green() -> Case {
             }
             let n: Vec<f64> = sizes.iter().map(|&v| v as f64).collect();
             let orders = order_cells(&n, &e);
+            let fit = fitted_levels(&n, TG_FIT_MAX);
             out.tables.push(Table {
                 title: "Convergence".into(),
                 headers: vec![
@@ -136,6 +149,7 @@ pub fn taylor_green() -> Case {
                     "velocity L2 error".into(),
                     "order".into(),
                     "decay-rate error".into(),
+                    "note".into(),
                 ],
                 rows: (0..n.len())
                     .map(|i| {
@@ -144,6 +158,7 @@ pub fn taylor_green() -> Case {
                             format!("{:.3e}", e[i]),
                             orders[i].clone(),
                             format!("{:.3e}", decay[i]),
+                            if i < fit { "" } else { FLOOR_NOTE }.into(),
                         ]
                     })
                     .collect(),
@@ -157,8 +172,8 @@ pub fn taylor_green() -> Case {
                 0.01,
             ));
             out.metrics.push(within(
-                "convergence order (fit)",
-                fitted_order(&n, &e),
+                format!("convergence order (fit, N ≤ {TG_FIT_MAX})"),
+                fitted_order(&n[..fit], &e[..fit]),
                 1.8,
                 2.3,
             ));
@@ -187,6 +202,8 @@ pub fn taylor_green() -> Case {
 /// Channel parameters: H = 1 m, ν = 1 m²/s, characteristic velocity 1 m/s (Re = 1);
 /// u_lb = 1/(6N) keeps τ = 1.
 const CH_NU: f64 = 1.0;
+/// Finest channel resolution in the order fit / exactness check (f32 round-off grows with N).
+const CH_FIT_MAX: f64 = 32.0;
 
 fn channel_options(n: u32, moving_wall: bool) -> DomainOptions {
     DomainOptions {
@@ -266,6 +283,7 @@ pub fn poiseuille() -> Case {
             }
             let n: Vec<f64> = sizes.iter().map(|&v| v as f64).collect();
             let orders = order_cells(&n, &e);
+            let fit = fitted_levels(&n, CH_FIT_MAX);
             out.tables.push(Table {
                 title: "Convergence".into(),
                 headers: vec![
@@ -273,6 +291,7 @@ pub fn poiseuille() -> Case {
                     "u(y) L2 error".into(),
                     "order".into(),
                     "wall-shear error".into(),
+                    "note".into(),
                 ],
                 rows: (0..n.len())
                     .map(|i| {
@@ -281,6 +300,7 @@ pub fn poiseuille() -> Case {
                             format!("{:.3e}", e[i]),
                             orders[i].clone(),
                             format!("{:.3e}", shear[i]),
+                            if i < fit { "" } else { FLOOR_NOTE }.into(),
                         ]
                     })
                     .collect(),
@@ -293,12 +313,12 @@ pub fn poiseuille() -> Case {
                 e[i32],
                 0.01,
             ));
-            let max_e = e.iter().copied().fold(0.0, f64::max);
+            let max_e = e[..fit].iter().copied().fold(0.0, f64::max);
             if max_e < 1e-5 {
                 // TRT with Λ = 3/16 puts bounce-back walls exactly half-way: no discretisation
                 // error is left to converge.
                 out.metrics.push(Metric::check(
-                    "largest L2 error (exact scheme)",
+                    format!("largest L2 error, N ≤ {CH_FIT_MAX} (exact scheme)"),
                     max_e,
                     "< 1e-5",
                     max_e,
@@ -306,8 +326,8 @@ pub fn poiseuille() -> Case {
                 ));
             } else {
                 out.metrics.push(within(
-                    "convergence order (fit)",
-                    fitted_order(&n, &e),
+                    format!("convergence order (fit, N ≤ {CH_FIT_MAX})"),
+                    fitted_order(&n[..fit], &e[..fit]),
                     1.8,
                     2.3,
                 ));

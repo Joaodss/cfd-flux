@@ -36,15 +36,17 @@ Requirements and known issues (Windows, CUDA): [docs/development.md](docs/develo
 ```
 crates/
   cfd-core/    Scene format, layer encoding, validation, examples
-  cfd-io/      binary format of result frames
-  cfd-cli/     CLI: schema, example, validate (later run, bench, compare)
+  cfd-io/      binary format of result frames, colour maps and PNG
+  cfd-cli/     CLI: schema, example, validate, run, render, bench, verify
   cfd-lbm/     LBM solver on the CPU          (Phase 1)
   cfd-gpu/     wgpu/WGSL backend              (Phase 2a)
   cfd-cuda/    CUDA backend, `cuda` feature   (Phase 2b)
+  cfd-verify/  backend-agnostic validation suite and report
   cfd-server/  HTTP/WebSocket API and jobs    (Phase 3)
 apps/web/      React + TypeScript + Vite frontend
 schema/        JSON Schema of the scene (generated from Rust)
 scenes/        example scenes (generated)
+validation/    reference data (with sources) and the validation report
 sandbox/       learning prototypes (outside the workspace)
 docs/          design and planning documentation
 ```
