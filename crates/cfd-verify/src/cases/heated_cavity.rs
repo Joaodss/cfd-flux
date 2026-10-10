@@ -2,6 +2,7 @@
 //! (type B/C).
 
 use anyhow::{anyhow, Result};
+use cfd_core::solver::LatticeFields;
 use cfd_core::DomainOptions;
 use cfd_io::image::Colormap;
 
@@ -14,8 +15,8 @@ use crate::{fmt_num, Level, Metric, Table};
 const PRANDTL: f64 = 0.71;
 /// Lattice value of the buoyancy velocity √(gβΔT L).
 const U_B_LB: f64 = 0.08;
-/// Steady when u and θ change by less than this (relative) over half a buoyancy time L/u_b.
-const STEADY_TOL: f64 = 1e-6;
+/// Steady when both Nusselt numbers change by less than this (relative) over 5 L/u_b.
+const STEADY_TOL: f64 = 1e-5;
 
 pub fn cases() -> Vec<Case> {
     [(1e3, "1e3"), (1e4, "1e4"), (1e5, "1e5"), (1e6, "1e6")]
@@ -74,50 +75,45 @@ fn run(ctx: &Ctx, ra: f64) -> Result<Outcome> {
         let theta_hot = d.units.temperature_to_lattice(T_HOT);
         let theta_span = theta_hot - d.units.temperature_to_lattice(T_COLD);
         let mut run = ctx.run(format!("N = {n}"), d)?;
+        let geo = Geometry {
+            n: n as usize,
+            alpha,
+            theta_hot,
+            theta_span,
+        };
+        // Steady when both Nusselt numbers change by less than STEADY_TOL (relative) over
+        // 5 buoyancy times L/u_b; at most one diffusive time L²/α (or 500 buoyancy times).
         let t_b = (n as f64 / U_B_LB) as u64;
         let t_diff = (n as f64 * n as f64 / alpha) as u64;
-        run.to_steady(t_b / 2, STEADY_TOL, t_diff.max(200 * t_b), true)?;
+        let max_steps = t_diff.max(500 * t_b);
+        let mut prev = [f64::INFINITY; 2];
+        let mut steady = false;
+        while run.stat.steps < max_steps {
+            run.step(5 * t_b)?;
+            let m = geo.measure(&run.fields());
+            let now = [m.nu_hot, m.nu_mean];
+            if now
+                .iter()
+                .zip(&prev)
+                .all(|(a, b)| ((a - b) / a).abs() < STEADY_TOL)
+            {
+                steady = true;
+                break;
+            }
+            prev = now;
+        }
+        run.stat.converged = Some(steady);
         let f = run.fields();
         let theta = f.theta.as_ref().expect("thermal fields");
-        let (nu_, w) = (n as usize, n as usize + 2);
-        let l = n as f64;
-
-        // Hot wall half-way between columns 0 (wall) and 1 (first fluid column).
-        let nu_hot = (0..nu_)
-            .map(|y| {
-                let (t1, t2) = (theta[y * w + 1] as f64, theta[y * w + 2] as f64);
-                let grad = (-8.0 * theta_hot + 9.0 * t1 - t2) / 3.0;
-                -grad * l / theta_span
-            })
-            .sum::<f64>()
-            / l;
-        let flux: f64 = (0..nu_)
-            .flat_map(|y| (1..=nu_).map(move |x| y * w + x))
-            .map(|i| (f.ux[i] * theta[i]) as f64)
-            .sum();
-        let nu_mean = 1.0 + l * (flux / (l * l)) / (alpha * theta_span);
-
-        // Mid-planes: x = 0.5 between fluid columns n/2 − 1 and n/2 (grid columns n/2, n/2 + 1);
-        // y = 0.5 between rows n/2 − 1 and n/2.
-        let scale = l / alpha;
-        let m = nu_ / 2;
-        let coord: Vec<f64> = (0..nu_).map(|i| (i as f64 + 0.5) / l).collect();
-        let u_mid: Vec<f64> = (0..nu_)
-            .map(|y| 0.5 * (f.ux[y * w + m] + f.ux[y * w + m + 1]) as f64 * scale)
-            .collect();
-        let v_mid: Vec<f64> = (0..nu_)
-            .map(|x| 0.5 * (f.uy[(m - 1) * w + x + 1] + f.uy[m * w + x + 1]) as f64 * scale)
-            .collect();
-        let (y_u_max, u_max) = refined_max(&coord, &u_mid);
-        let (x_v_max, v_max) = refined_max(&coord, &v_mid);
-        let meas = Measured {
+        let meas = geo.measure(&f);
+        let Measured {
             nu_hot,
             nu_mean,
             u_max,
             y_u_max,
             v_max,
             x_v_max,
-        };
+        } = meas;
         rows.push(vec![
             n.to_string(),
             format!("{nu_hot:.4}"),
@@ -185,4 +181,60 @@ fn run(ctx: &Ctx, ra: f64) -> Result<Outcome> {
         rows,
     });
     Ok(out)
+}
+
+/// Grid and lattice values needed to measure a solution.
+struct Geometry {
+    /// Fluid cells per side.
+    n: usize,
+    alpha: f64,
+    theta_hot: f64,
+    theta_span: f64,
+}
+
+impl Geometry {
+    /// de Vahl Davis' quantities on lattice fields (grid: hot wall column, n fluid columns,
+    /// cold wall column; n rows).
+    fn measure(&self, f: &LatticeFields) -> Measured {
+        let theta = f.theta.as_ref().expect("thermal fields");
+        let (n, w) = (self.n, self.n + 2);
+        let l = n as f64;
+
+        // Hot wall half-way between columns 0 (wall) and 1 (first fluid column).
+        let nu_hot = (0..n)
+            .map(|y| {
+                let (t1, t2) = (theta[y * w + 1] as f64, theta[y * w + 2] as f64);
+                let grad = (-8.0 * self.theta_hot + 9.0 * t1 - t2) / 3.0;
+                -grad * l / self.theta_span
+            })
+            .sum::<f64>()
+            / l;
+        let flux: f64 = (0..n)
+            .flat_map(|y| (1..=n).map(move |x| y * w + x))
+            .map(|i| (f.ux[i] * theta[i]) as f64)
+            .sum();
+        let nu_mean = 1.0 + l * (flux / (l * l)) / (self.alpha * self.theta_span);
+
+        // Mid-planes: x = 0.5 between fluid columns n/2 − 1 and n/2 (grid columns n/2, n/2 + 1);
+        // y = 0.5 between rows n/2 − 1 and n/2.
+        let scale = l / self.alpha;
+        let m = n / 2;
+        let coord: Vec<f64> = (0..n).map(|i| (i as f64 + 0.5) / l).collect();
+        let u_mid: Vec<f64> = (0..n)
+            .map(|y| 0.5 * (f.ux[y * w + m] + f.ux[y * w + m + 1]) as f64 * scale)
+            .collect();
+        let v_mid: Vec<f64> = (0..n)
+            .map(|x| 0.5 * (f.uy[(m - 1) * w + x + 1] + f.uy[m * w + x + 1]) as f64 * scale)
+            .collect();
+        let (y_u_max, u_max) = refined_max(&coord, &u_mid);
+        let (x_v_max, v_max) = refined_max(&coord, &v_mid);
+        Measured {
+            nu_hot,
+            nu_mean,
+            u_max,
+            y_u_max,
+            v_max,
+            x_v_max,
+        }
+    }
 }
