@@ -231,6 +231,56 @@ pub fn heated_cavity(n: u32, ra: f64, pr: f64) -> Scene {
     s
 }
 
+/// Critical wavenumber `k_c H` of Rayleigh-Bénard convection between rigid plates.
+pub const RB_CRITICAL_WAVENUMBER: f64 = 3.117;
+
+/// Rayleigh-Bénard layer of height 1 m resolved by `h` fluid rows, periodic along x over one
+/// critical wavelength `2π/k_c` (rounded to whole cells). Hot bottom plate (`ids::DRIVE`,
+/// [`T_HOT`]) and cold top plate (`ids::OUTLET`, [`T_COLD`]); the fluid is initially at the
+/// mean temperature. Properties as in [`heated_cavity`]: `√(gβΔT H)` = 1 m/s.
+pub fn rayleigh_benard(h: u32, ra: f64, pr: f64) -> Scene {
+    let w = (2.0 * std::f64::consts::PI / RB_CRITICAL_WAVENUMBER * h as f64).round() as u32;
+    let mut c = Canvas::new(w, h + 2, CellType::Fluid);
+    c.rect(0, 0, w, 1, CellType::Solid, ids::DRIVE);
+    c.rect(0, h + 1, w, h + 2, CellType::Solid, ids::OUTLET);
+    let edges = DomainEdges {
+        left: EdgeKind::Periodic,
+        right: EdgeKind::Periodic,
+        ..DomainEdges::default()
+    };
+    let mut s = heated_cavity(h, ra, pr);
+    let fluid = s.fluids.remove(0);
+    let mut rb = scene(
+        format!("Rayleigh-Bénard Ra={ra:.0} ({w}×{h})"),
+        &c,
+        1.0 / h as f64,
+        edges,
+        fluid,
+        vec![
+            wall(
+                ids::DRIVE,
+                "Hot plate",
+                [0.0; 2],
+                ThermalBc::Fixed { value: T_HOT },
+            ),
+            wall(
+                ids::OUTLET,
+                "Cold plate",
+                [0.0; 2],
+                ThermalBc::Fixed { value: T_COLD },
+            ),
+        ],
+        (
+            200.0,
+            2.0,
+            vec![OutputField::Velocity, OutputField::Temperature],
+        ),
+    );
+    rb.initial.temperature = s.initial.temperature;
+    rb.physics = s.physics;
+    rb
+}
+
 /// Schäfer & Turek (1996) channel with a cylinder resolved by `cells_per_diameter` cells (a
 /// multiple of 10, so the 0.41 m height is a whole number of cells), parabolic inlet with peak
 /// velocity `u_max` (0.3 m/s → Re 20, 1.5 m/s → Re 100) and a zero-pressure outlet.
@@ -341,6 +391,11 @@ mod tests {
         assert!(d.issues.is_empty(), "{:?}", d.issues);
         assert_eq!(d.probes[0].y, d.probes[1].y);
         assert!(d.probes[0].x < 41 && d.probes[1].x > 41);
+
+        let d = domain(&rayleigh_benard(16, 1700.0, 0.71));
+        assert_eq!((d.width, d.height), (32, 18));
+        assert_eq!(d.periodic, [true, false]);
+        assert!(d.physics.alpha.is_some());
 
         let d = domain(&plane_channel(16, 0.1, 0.0));
         assert_eq!(d.periodic, [true, false]);

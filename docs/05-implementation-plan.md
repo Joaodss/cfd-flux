@@ -68,7 +68,7 @@ Notes for C# developers:
 - [x] L — Automated validation suite (`cfd-cli verify`, methodology in [08](08-validation-guide.md)), including convergence-order tests: Poiseuille, Couette, Taylor-Green, cavity (Ghia), cylinder (Schäfer-Turek), heated cavity (de Vahl Davis). Produces a report with errors and plots. *(2026-10-10; crate `cfd-verify`, ADR-018; report in [`validation/report/`](../validation/report/README.md); `--quick` runs in CI)*
 - [x] S — Forces on solids (momentum exchange) for C_D/C_L; probes. *(time series written to CSV by `cfd-cli run`; forces are gauge)*
 
-**Acceptance:** all applicable cases from [04 §7](04-numerical-methods.md#7-validation) within tolerance; ≥ 50 MLUPS on 8 cores; von Kármán street visible for the Re 100 cylinder. **Met (2026-10-10):** 12/12 validation cases pass (`verify --full`); 65–137 MLUPS on 8 threads; vortex street in `cfd-cli run scenes/cylinder-re100.json` and in the report. Still to automate: the Rayleigh-Bénard onset case of 04 §7 (first task of Phase 2, on the CPU backend).
+**Acceptance:** all applicable cases from [04 §7](04-numerical-methods.md#7-validation) within tolerance; ≥ 50 MLUPS on 8 cores; von Kármán street visible for the Re 100 cylinder. **Met (2026-10-10):** 12/12 validation cases pass (`verify --full`); 65–137 MLUPS on 8 threads; vortex street in `cfd-cli run scenes/cylinder-re100.json` and in the report. The Rayleigh-Bénard onset case of 04 §7 was automated at the start of Phase 2.
 
 ---
 
@@ -78,7 +78,7 @@ Notes for C# developers:
 
 Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (2c). The kernels share the same memory layout (SoA, same indexing, same flags) so the comparison is fair and tests are reusable.
 
-- [ ] S — *(carried over from Phase 1)* Rayleigh-Bénard onset case in `cfd-verify` (Ra_c ≈ 1708, 04 §7), validated on the CPU backend before the GPU backends reuse the suite.
+- [x] S — *(carried over from Phase 1)* Rayleigh-Bénard onset case in `cfd-verify` (Ra_c ≈ 1708, 04 §7), validated on the CPU backend before the GPU backends reuse the suite. **Done (2026-10-10):** Ra_c = 1707.0 at H = 64 (−0.04%).
 
 ### 2a — wgpu / WGSL
 

@@ -8,6 +8,7 @@ mod analytical;
 mod cavity;
 mod cylinder;
 mod heated_cavity;
+mod rayleigh_benard;
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::Instant;
@@ -71,6 +72,7 @@ pub fn all() -> Vec<Case> {
     cases.extend(cavity::cases());
     cases.extend(cylinder::cases());
     cases.extend(heated_cavity::cases());
+    cases.push(rayleigh_benard::case());
     cases
 }
 

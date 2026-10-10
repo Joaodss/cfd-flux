@@ -70,6 +70,11 @@ On a log-log plot (error vs. resolution) the points should form a line with slop
 - **Measure:** **mean Nusselt number** on the hot wall: `Nu = (L / ΔT) · mean of (−∂T/∂x)` at the wall. Also maximum velocities along the centrelines.
 - **Target:** Nu ≈ 1.118 / 2.243 / 4.519 / 8.800 (Ra 10³ / 10⁴ / 10⁵ / 10⁶), error < 1–2%.
 
+### 4.5b Rayleigh-Bénard onset (linear stability theory) — type A
+- **Setup:** fluid layer between a hot bottom plate and a cold top plate (fixed temperatures), periodic along x over one critical wavelength `2π/k_c` (`k_c H = 3.117`), Pr = 0.71. It starts from the conduction profile in hydrostatic balance plus a small perturbation `ε sin(kx) sin(πy/H)`.
+- **Measure:** after the faster modes decay, the amplitude of the critical mode (the x-Fourier coefficient of `v` at `k`) evolves as `e^{σt}`. Fit σ at Ra = 1550 … 1850; the zero of a linear fit of σ(Ra) is Ra_c. Projecting onto `k` removes the x-independent acoustic mode.
+- **Target:** Ra_c = 1707.76 (Chandrasekhar 1961) within 2% (5% at H = 16 in `--quick`). Measured on the CPU: 1711.7 / 1707.7 / 1707.0 at H = 16 / 32 / 64.
+
 ### 4.6 Dam break (Martin & Moyce 1952) — type C, liquids
 - **Setup:** water column of width `a` resting against a wall, released at time 0.
 - **Measure:** water front position `x(t)` in dimensionless time `t·sqrt(2g/a)`, compared with the experimental points. Also liquid **mass conservation** (must stay < 0.1%).
