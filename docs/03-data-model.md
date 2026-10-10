@@ -141,9 +141,12 @@ results/{job_id}/
   scene.json          # exact scene used (reproducibility)
   meta.json           # solver version, backend, GPU, timings, diagnostics, Re/Ma/...
   frames/000123.bin   # encoded frames
-  probes.csv          # probe time series
-  forces.csv          # drag/lift per element (if requested)
+  png/<field>/000123.png, png/ranges.json   # colour-mapped images (one range per field)
+  probes.csv          # probe time series (u, v, p, T per probe)
+  forces.csv          # force per element (N/m, gauge)
+  diagnostics.csv     # mass, kinetic energy, max velocity/Mach, heat
 ```
+`cfd-cli run scene.json --out DIR` already writes this layout (`meta.json` also records the run status: `completed` or `diverged`).
 Later: Zarr/HDF5 for efficient partial reads; VTK (`.vti`) export for ParaView.
 
 ## 7. API (draft)

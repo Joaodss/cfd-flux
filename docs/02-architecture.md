@@ -114,12 +114,13 @@ live-fluids/
 │   ├── cfd-cuda/              # CUDA backend (cudarc + .cu kernels), `cuda` feature
 │   ├── cfd-io/                # result formats, frame encoding
 │   ├── cfd-server/            # axum API + jobs + streaming
-│   └── cfd-cli/               # run/benchmark/validation CLI
+│   ├── cfd-verify/            # backend-agnostic validation cases + report (uses `Box<dyn Solver>`)
+│   └── cfd-cli/               # run/render/bench/verify CLI
 ├── apps/
 │   └── web/                   # TS frontend
 ├── schema/                    # Scene JSON Schema (generated)
 ├── scenes/                    # example and validation scenes (generated)
-├── validation/                # reference data (Ghia, Schäfer-Turek, ...) and scripts
+├── validation/                # reference data with sources (Ghia, Schäfer-Turek, de Vahl Davis) + generated report
 ├── sandbox/                   # learning prototypes, outside the Cargo workspace
 └── tools/                     # scripts (benchmarks, AI data generation)
 ```

@@ -62,6 +62,16 @@ cd apps/web && npm run gen:types
 # Check scene files
 cargo run -p cfd-cli -- validate scenes/*.json
 
+# Run a scene headless (frames, PNGs, CSV series, meta.json); re-render PNGs with other ranges
+cargo run --release -p cfd-cli -- run scenes/cylinder-re100.json --out out/cyl --end-time 12 --output-interval 0.05
+cargo run --release -p cfd-cli -- render out/cyl --range vorticity=-50:50
+
+# Performance (results go to docs/benchmarks.md) and physics validation (docs/08-validation-guide.md)
+cargo run --release -p cfd-cli -- bench --threads 8
+cargo run --release -p cfd-cli -- verify --quick            # CI subset, ~1 min
+cargo run --release -p cfd-cli -- verify --full             # writes validation/report/ (commit it)
+cargo run --release -p cfd-cli -- verify --cases cavity --no-report
+
 # Web (in apps/web)
 npm install
 npm run dev          # development server
