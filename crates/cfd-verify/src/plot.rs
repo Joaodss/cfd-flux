@@ -286,7 +286,7 @@ impl Plot {
         }
         s.push_str("</g>");
 
-        // Legend (top right).
+        // Legend in the corner that hides the fewest data points.
         let lw = 12.0
             + 7.0
                 * self
@@ -296,7 +296,26 @@ impl Plot {
                     .max()
                     .unwrap_or(0) as f64
             + 30.0;
-        let (lx, ly) = (LEFT + pw - lw - 8.0, TOP + 8.0);
+        let lh = 8.0 + 16.0 * self.series.len() as f64;
+        let corners = [
+            (LEFT + pw - lw - 8.0, TOP + 8.0),
+            (LEFT + 8.0, TOP + 8.0),
+            (LEFT + pw - lw - 8.0, TOP + ph - lh - 8.0),
+            (LEFT + 8.0, TOP + ph - lh - 8.0),
+        ];
+        let hidden = |(cx, cy): (f64, f64)| {
+            all()
+                .filter(|p| ok(p))
+                .filter(|p| {
+                    let (x, y) = (px(p.0), py(p.1));
+                    x >= cx && x <= cx + lw && y >= cy && y <= cy + lh
+                })
+                .count()
+        };
+        let (lx, ly) = corners
+            .into_iter()
+            .min_by_key(|&c| hidden(c))
+            .expect("four corners");
         let _ = write!(
             s,
             r##"<rect x="{lx:.1}" y="{ly:.1}" width="{lw:.1}" height="{:.1}" fill="white" fill-opacity="0.85" stroke="#999"/>"##,
