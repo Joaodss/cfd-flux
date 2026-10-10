@@ -2,7 +2,7 @@
 
 A computational fluid dynamics (CFD) simulator in the browser. You draw the domain **pixel by pixel**, place walls, fluid inlets and outlets, temperatures and boundary properties, and the simulation runs on a local Rust server on the GPU (CUDA or wgpu), with the CPU as a fallback. Results are streamed back and visualised in the browser.
 
-> Status: **Phase 1 in progress** — the CPU LBM solver (D2Q9 + D2Q5 thermal, TRT, link-wise boundaries, Boussinesq, forces) is implemented and tested on top of the Phase 0 foundations (scene format, validation, frames, CLI, web skeleton, CI). Next: `cfd-cli run` / `bench` / `verify` and the validation suite.
+> Status: **Phase 1 complete** — a validated CPU LBM solver (D2Q9 + D2Q5 thermal, TRT, link-wise boundaries, Boussinesq, forces) with a headless CLI (`run`, `render`, `bench`, `verify`). It reproduces Ghia (1982), Schäfer & Turek (1996) and de Vahl Davis (1983) within 2% — see the [validation report](validation/report/README.md) — at 65–180 MLUPS on a desktop CPU ([benchmarks](docs/benchmarks.md)). Next: GPU backends (wgpu and CUDA).
 
 ## The idea in 30 seconds
 
@@ -26,6 +26,9 @@ A computational fluid dynamics (CFD) simulator in the browser. You draw the doma
 cargo test --workspace                          # Rust tests
 cargo run -p cfd-cli -- example --list          # example scenes
 cargo run -p cfd-cli -- validate scenes/*.json  # validate scenes
+cargo run --release -p cfd-cli -- run scenes/cylinder-re100.json --out out/cyl --end-time 12   # frames + PNGs
+cargo run --release -p cfd-cli -- verify --quick   # validation suite (CI subset)
+cargo run --release -p cfd-cli -- bench            # MLUPS
 cd apps/web && npm install && npm run dev       # frontend
 ```
 
@@ -36,15 +39,17 @@ Requirements and known issues (Windows, CUDA): [docs/development.md](docs/develo
 ```
 crates/
   cfd-core/    Scene format, layer encoding, validation, examples
-  cfd-io/      binary format of result frames
-  cfd-cli/     CLI: schema, example, validate (later run, bench, compare)
+  cfd-io/      binary format of result frames, colour maps and PNG
+  cfd-cli/     CLI: schema, example, validate, run, render, bench, verify
   cfd-lbm/     LBM solver on the CPU          (Phase 1)
   cfd-gpu/     wgpu/WGSL backend              (Phase 2a)
   cfd-cuda/    CUDA backend, `cuda` feature   (Phase 2b)
+  cfd-verify/  backend-agnostic validation suite and report
   cfd-server/  HTTP/WebSocket API and jobs    (Phase 3)
 apps/web/      React + TypeScript + Vite frontend
 schema/        JSON Schema of the scene (generated from Rust)
 scenes/        example scenes (generated)
+validation/    reference data (with sources) and the validation report
 sandbox/       learning prototypes (outside the workspace)
 docs/          design and planning documentation
 ```

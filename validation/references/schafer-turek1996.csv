@@ -1,0 +1,14 @@
+# Flow around a cylinder in a channel (2.2 m x 0.41 m, D = 0.1 m centred at (0.2, 0.2) m,
+#   rho = 1 kg/m3, nu = 1e-3 m2/s, parabolic inlet with mean velocity U = 2/3 U_max).
+# Source: M. Schaefer, S. Turek, "Benchmark computations of laminar flow around a cylinder", in
+#   Flow Simulation with High-Performance Computers II, Notes Numer. Fluid Mech. 52 (1996) 547-566.
+# Coefficients: C_D = 2 F_x / (rho U^2 D), C_L = 2 F_y / (rho U^2 D), St = D f / U,
+#   dp = p(0.15, 0.2) - p(0.25, 0.2) in Pa. Bounds are the "reference intervals" of the paper.
+case,quantity,lower,upper
+2D-1,c_d,5.5700,5.5900
+2D-1,c_l,0.0104,0.0110
+2D-1,dp,0.1172,0.1176
+2D-2,c_d_max,3.2200,3.2400
+2D-2,c_l_max,0.9900,1.0100
+2D-2,st,0.2950,0.3050
+2D-2,dp,2.4600,2.5000

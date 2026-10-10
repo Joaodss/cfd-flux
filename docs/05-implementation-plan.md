@@ -64,11 +64,11 @@ Notes for C# developers:
 - [x] M — TRT operator (default), keeping BGK as an option.
 - [x] M — Thermal D2Q5 + Boussinesq; fixed/adiabatic/flux thermal BCs.
 - [x] S — Diagnostics: mass, energy, maximum velocity, NaN detection.
-- [ ] M — `cfd-cli run`: reads a scene, runs it, writes PNGs (colour map) and binary frames; `cfd-cli bench` reports MLUPS.
-- [ ] L — Automated validation suite (`cfd-cli verify`, methodology in [08](08-validation-guide.md)), including convergence-order tests: Poiseuille, Couette, Taylor-Green, cavity (Ghia), cylinder (Schäfer-Turek), heated cavity (de Vahl Davis). Produces a report with errors and plots.
-- [x] S — Forces on solids (momentum exchange) for C_D/C_L; probes. *(writing probe/force time series to CSV comes with `cfd-cli run`)*
+- [x] M — `cfd-cli run`: reads a scene, runs it, writes PNGs (colour map) and binary frames; `cfd-cli bench` reports MLUPS. *(2026-10-10; also `render`, probe/force/diagnostic CSVs, `meta.json`, clean abort on NaN; results in [benchmarks.md](benchmarks.md))*
+- [x] L — Automated validation suite (`cfd-cli verify`, methodology in [08](08-validation-guide.md)), including convergence-order tests: Poiseuille, Couette, Taylor-Green, cavity (Ghia), cylinder (Schäfer-Turek), heated cavity (de Vahl Davis). Produces a report with errors and plots. *(2026-10-10; crate `cfd-verify`, ADR-018; report in [`validation/report/`](../validation/report/README.md); `--quick` runs in CI)*
+- [x] S — Forces on solids (momentum exchange) for C_D/C_L; probes. *(time series written to CSV by `cfd-cli run`; forces are gauge)*
 
-**Acceptance:** all applicable cases from [04 §7](04-numerical-methods.md#7-validation) within tolerance; ≥ 50 MLUPS on 8 cores; von Kármán street visible for the Re 100 cylinder.
+**Acceptance:** all applicable cases from [04 §7](04-numerical-methods.md#7-validation) within tolerance; ≥ 50 MLUPS on 8 cores; von Kármán street visible for the Re 100 cylinder. **Met (2026-10-10):** 12/12 validation cases pass (`verify --full`); 65–137 MLUPS on 8 threads; vortex street in `cfd-cli run scenes/cylinder-re100.json` and in the report.
 
 ---
 

@@ -37,10 +37,11 @@ fn wall_friction_balances_the_body_force() {
         "{bottom:?} {top:?} vs {total}"
     );
     assert!((bottom[0] / top[0] - 1.0).abs() < 1e-3);
-    // Normal force: the pressure p = ρ c_s² pushes the walls apart over their length w.
-    let p_wall = w as f64 / 3.0;
-    assert!((bottom[1] / -p_wall - 1.0).abs() < 1e-3, "{bottom:?}");
-    assert!((top[1] / p_wall - 1.0).abs() < 1e-3, "{top:?}");
+    // Forces are gauge: the uniform reference pressure ρ₀ c_s² (= w/3 per wall) is not
+    // included, and the density stays uniform, so there is no normal force.
+    let p_ref = w as f64 / 3.0;
+    assert!(bottom[1].abs() < 1e-5 * p_ref, "{bottom:?}");
+    assert!(top[1].abs() < 1e-5 * p_ref, "{top:?}");
 }
 
 #[test]

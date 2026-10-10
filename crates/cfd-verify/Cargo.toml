@@ -1,26 +1,21 @@
 [package]
-name = "cfd-cli"
-description = "Command-line tool for live-fluids: scenes, headless runs, benchmarks and validation"
+name = "cfd-verify"
+description = "Backend-agnostic validation cases for live-fluids solvers (analytical and benchmark references)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-[[bin]]
-name = "cfd-cli"
-path = "src/main.rs"
-
 [dependencies]
 anyhow.workspace = true
 cfd-core.workspace = true
 cfd-io.workspace = true
-cfd-lbm.workspace = true
-cfd-verify.workspace = true
-clap.workspace = true
-rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+cfd-lbm.workspace = true
 
 [lints]
 workspace = true

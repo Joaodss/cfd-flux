@@ -28,6 +28,22 @@ jobs:
       # The CUDA backend is not built here (no `cuda` feature): CI has no NVIDIA GPU.
       - run: cargo test --workspace
 
+  verify:
+    name: Validation suite (quick)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Physics validation on the CPU backend at reduced resolution (docs/08-validation-guide.md);
+      # fails if any case is outside its tolerance. The full suite runs locally (`--full`).
+      - run: cargo run --release -p cfd-cli -- verify --quick --report target/verify-report
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: verify-report
+          path: target/verify-report
+
   web:
     name: Web
     runs-on: ubuntu-latest
