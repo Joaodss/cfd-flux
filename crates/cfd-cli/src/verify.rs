@@ -26,9 +26,10 @@ pub struct VerifyArgs {
     /// List the cases and exit.
     #[arg(long)]
     pub list: bool,
-    /// Report directory.
-    #[arg(long, default_value = "validation/report")]
-    pub report: PathBuf,
+    /// Report directory [default: `validation/report` for the CPU backend,
+    /// `validation/report-<backend>` for the others].
+    #[arg(long)]
+    pub report: Option<PathBuf>,
     /// Do not write a report.
     #[arg(long)]
     pub no_report: bool,
@@ -68,7 +69,7 @@ pub fn verify(args: VerifyArgs) -> Result<ExitCode> {
     eprintln!(
         "verify ({level:?}): {} cases on the {} backend, {}, {} threads",
         selected.len(),
-        choice.backend,
+        choice.describe(),
         choice.collision,
         choice.threads
     );
@@ -103,7 +104,7 @@ pub fn verify(args: VerifyArgs) -> Result<ExitCode> {
     if !args.no_report {
         let info = report::RunInfo {
             level,
-            backend: choice.backend.into(),
+            backend: choice.describe(),
             collision: choice.collision.into(),
             threads: choice.threads,
             cpu: crate::bench::cpu_name(),
@@ -111,11 +112,12 @@ pub fn verify(args: VerifyArgs) -> Result<ExitCode> {
             commit: git_commit(),
             seconds,
         };
-        report::write(&args.report, &info, &results)?;
-        eprintln!(
-            "report written to {}",
-            args.report.join("README.md").display()
-        );
+        let dir = args.report.clone().unwrap_or_else(|| match choice.backend {
+            "cpu" => PathBuf::from("validation/report"),
+            b => PathBuf::from(format!("validation/report-{b}")),
+        });
+        report::write(&dir, &info, &results)?;
+        eprintln!("report written to {}", dir.join("README.md").display());
     }
     Ok(if failed == 0 {
         ExitCode::SUCCESS

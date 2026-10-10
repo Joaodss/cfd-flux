@@ -31,6 +31,23 @@ fn temp_dir(name: &str) -> PathBuf {
     d
 }
 
+/// Backend arguments; `None` for wgpu when the machine has no adapter (the test is skipped
+/// unless `CFD_REQUIRE_GPU` is set).
+fn backend_args(backend: &str) -> Option<Vec<&'static str>> {
+    match backend {
+        "cpu" => Some(vec!["--backend", "cpu"]),
+        _ if cfd_gpu::adapters().is_empty() => {
+            assert!(
+                std::env::var_os("CFD_REQUIRE_GPU").is_none(),
+                "CFD_REQUIRE_GPU is set but there is no wgpu adapter"
+            );
+            eprintln!("skipping: no wgpu adapter");
+            None
+        }
+        _ => Some(vec!["--backend", "wgpu", "--allow-software"]),
+    }
+}
+
 fn run(scene: &Scene, dir: &Path, extra: &[&str]) -> std::process::Output {
     let scene_path = dir.join("scene-in.json");
     std::fs::write(&scene_path, scene.to_json_pretty()).unwrap();
@@ -54,13 +71,22 @@ fn count(dir: &Path) -> usize {
 }
 
 #[test]
-fn run_writes_frames_series_images_and_metadata() {
-    let dir = temp_dir("ok");
-    let out = run(
-        &small_channel(),
-        &dir,
-        &["--end-time", "0.2", "--output-interval", "0.05"],
-    );
+fn run_writes_frames_series_images_and_metadata_cpu() {
+    writes_outputs("cpu");
+}
+
+#[test]
+fn run_writes_frames_series_images_and_metadata_wgpu() {
+    writes_outputs("wgpu");
+}
+
+fn writes_outputs(backend: &str) {
+    let Some(mut args) = backend_args(backend) else {
+        return;
+    };
+    let dir = temp_dir(&format!("ok-{backend}"));
+    args.extend(["--end-time", "0.2", "--output-interval", "0.05"]);
+    let out = run(&small_channel(), &dir, &args);
     assert!(
         out.status.success(),
         "{}",
@@ -68,6 +94,7 @@ fn run_writes_frames_series_images_and_metadata() {
     );
     let m = meta(&dir);
     assert_eq!(m["run"]["status"], "completed");
+    assert_eq!(m["solver"]["backend"], backend);
     assert_eq!(m["run"]["stepsDone"], 200);
     assert_eq!(m["run"]["frames"], 5);
     assert_eq!(m["units"]["dt"], 0.001);
@@ -124,31 +151,44 @@ fn run_writes_frames_series_images_and_metadata() {
     assert!(first[6] < 0.0, "{first:?}");
 
     // A second run into the same directory needs --force.
-    let again = run(&small_channel(), &dir, &["--end-time", "0.01"]);
+    let again = run(
+        &small_channel(),
+        &dir,
+        &["--backend", "cpu", "--end-time", "0.01"],
+    );
     assert!(!again.status.success());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
-fn run_aborts_cleanly_when_the_solution_diverges() {
-    let dir = temp_dir("nan");
+fn run_aborts_cleanly_when_the_solution_diverges_cpu() {
+    aborts_on_divergence("cpu");
+}
+
+#[test]
+fn run_aborts_cleanly_when_the_solution_diverges_wgpu() {
+    aborts_on_divergence("wgpu");
+}
+
+fn aborts_on_divergence(backend: &str) {
+    let Some(mut args) = backend_args(backend) else {
+        return;
+    };
+    let dir = temp_dir(&format!("nan-{backend}"));
     let mut scene = small_channel();
     // τ ≈ 0.506 with BGK at Ma ≈ 0.26: accepted with warnings, but blows up.
     scene.fluids[0].kinematic_viscosity = 6.7e-7;
-    let out = run(
-        &scene,
-        &dir,
-        &[
-            "--collision",
-            "bgk",
-            "--lattice-velocity",
-            "0.15",
-            "--end-time",
-            "20",
-            "--output-interval",
-            "0.3",
-        ],
-    );
+    args.extend([
+        "--collision",
+        "bgk",
+        "--lattice-velocity",
+        "0.15",
+        "--end-time",
+        "20",
+        "--output-interval",
+        "0.3",
+    ]);
+    let out = run(&scene, &dir, &args);
     assert_eq!(
         out.status.code(),
         Some(2),

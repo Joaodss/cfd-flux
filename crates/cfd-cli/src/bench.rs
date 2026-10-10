@@ -64,6 +64,9 @@ struct BenchReport {
     logical_cores: usize,
     threads: usize,
     backend: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device: Option<String>,
+    workgroup: Option<u32>,
     collision: &'static str,
     optimised_build: bool,
     results: Vec<BenchResult>,
@@ -121,13 +124,19 @@ pub fn bench(args: BenchArgs) -> Result<()> {
         logical_cores: std::thread::available_parallelism().map_or(0, |n| n.get()),
         threads: choice.threads,
         backend: choice.backend,
+        device: choice.device.clone(),
+        workgroup: choice.device.is_some().then_some(args.solver.workgroup),
         collision: choice.collision,
         optimised_build: optimised,
         results: Vec::new(),
     };
     eprintln!(
         "{} ({} logical cores), {} threads, {} backend, {}",
-        report.cpu, report.logical_cores, report.threads, report.backend, report.collision
+        report.cpu,
+        report.logical_cores,
+        report.threads,
+        choice.describe(),
+        report.collision
     );
 
     for &model in &args.model {
@@ -149,6 +158,7 @@ pub fn bench(args: BenchArgs) -> Result<()> {
                 solver.step(5).context("benchmark diverged")?;
                 warm += 5;
             }
+            solver.finish().context("benchmark diverged")?;
             let rate = warm as f64 / t.elapsed().as_secs_f64();
             let steps = ((rate * args.min_seconds).ceil() as u64).max(10);
 
@@ -161,6 +171,8 @@ pub fn bench(args: BenchArgs) -> Result<()> {
                         solver.step(chunk as u32).context("benchmark diverged")?;
                         left -= chunk;
                     }
+                    // Asynchronous backends: wait for the queued steps before reading the clock.
+                    solver.finish().context("benchmark diverged")?;
                     Ok(fluid as f64 * steps as f64 / t.elapsed().as_secs_f64() / 1e6)
                 })
                 .collect::<Result<_>>()?;
@@ -187,11 +199,14 @@ pub fn bench(args: BenchArgs) -> Result<()> {
     }
 
     println!(
-        "CPU: {} ({} logical cores), {} threads, backend {}, collision {}, {}\n",
+        "CPU: {} ({} logical cores), {} threads, backend {}{}, collision {}, {}\n",
         report.cpu,
         report.logical_cores,
         report.threads,
-        report.backend,
+        choice.describe(),
+        report
+            .workgroup
+            .map_or(String::new(), |w| format!(", workgroup {w}")),
         report.collision,
         report.generator
     );
