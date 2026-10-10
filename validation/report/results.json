@@ -6,8 +6,8 @@
     "threads": 16,
     "cpu": "AMD Ryzen 7 3700X 8-Core Processor",
     "generator": "cfd-cli 0.1.0",
-    "commit": "727020d-dirty",
-    "seconds": 1351.243694
+    "commit": "a5c7055-dirty",
+    "seconds": 1368.973374
   },
   "cases": [
     {
@@ -92,34 +92,34 @@
           "label": "N = 16",
           "fluidCells": 256,
           "steps": 65,
-          "seconds": 0.0032876
+          "seconds": 0.0018296
         },
         {
           "label": "N = 32",
           "fluidCells": 1024,
           "steps": 259,
-          "seconds": 0.0126616
+          "seconds": 0.0119726
         },
         {
           "label": "N = 64",
           "fluidCells": 4096,
           "steps": 1038,
-          "seconds": 0.0945949
+          "seconds": 0.087155
         },
         {
           "label": "N = 128",
           "fluidCells": 16384,
           "steps": 4150,
-          "seconds": 0.628205
+          "seconds": 0.7348339
         },
         {
           "label": "N = 256",
           "fluidCells": 65536,
           "steps": 16600,
-          "seconds": 7.5663841
+          "seconds": 7.0005715
         }
       ],
-      "seconds": 8.3244854
+      "seconds": 7.8546356
     },
     {
       "id": "poiseuille",
@@ -196,32 +196,32 @@
           "label": "N = 8",
           "fluidCells": 32,
           "steps": 550,
-          "seconds": 0.0220692,
+          "seconds": 0.0246474,
           "converged": true
         },
         {
           "label": "N = 16",
           "fluidCells": 64,
           "steps": 2142,
-          "seconds": 0.0561758,
+          "seconds": 0.0552186,
           "converged": true
         },
         {
           "label": "N = 32",
           "fluidCells": 128,
           "steps": 7982,
-          "seconds": 0.2414417,
+          "seconds": 0.23599739999999997,
           "converged": true
         },
         {
           "label": "N = 64",
           "fluidCells": 256,
           "steps": 39312,
-          "seconds": 1.9021616000000001,
+          "seconds": 1.7066605999999998,
           "converged": true
         }
       ],
-      "seconds": 2.2235455
+      "seconds": 2.0241931
     },
     {
       "id": "couette",
@@ -281,18 +281,18 @@
           "label": "N = 16",
           "fluidCells": 64,
           "steps": 1989,
-          "seconds": 0.0490732,
+          "seconds": 0.0434857,
           "converged": true
         },
         {
           "label": "N = 32",
           "fluidCells": 128,
           "steps": 7368,
-          "seconds": 0.22552300000000003,
+          "seconds": 0.2056664,
           "converged": true
         }
       ],
-      "seconds": 0.2755439
+      "seconds": 0.2498085
     },
     {
       "id": "cavity-re100",
@@ -355,25 +355,25 @@
           "label": "N = 64",
           "fluidCells": 4096,
           "steps": 14400,
-          "seconds": 1.1543108000000002,
+          "seconds": 1.085288,
           "converged": true
         },
         {
           "label": "N = 128",
           "fluidCells": 16384,
           "steps": 28800,
-          "seconds": 4.4173822,
+          "seconds": 4.1347301000000005,
           "converged": true
         },
         {
           "label": "N = 256",
           "fluidCells": 65536,
           "steps": 57600,
-          "seconds": 26.997124299999996,
+          "seconds": 24.1746387,
           "converged": true
         }
       ],
-      "seconds": 32.6064564
+      "seconds": 29.4278854
     },
     {
       "id": "cavity-re400",
@@ -436,25 +436,25 @@
           "label": "N = 64",
           "fluidCells": 4096,
           "steps": 32000,
-          "seconds": 3.231288599999999,
+          "seconds": 2.5008433999999995,
           "converged": true
         },
         {
           "label": "N = 128",
           "fluidCells": 16384,
           "steps": 63200,
-          "seconds": 13.485114700000002,
+          "seconds": 9.239319100000003,
           "converged": true
         },
         {
           "label": "N = 256",
           "fluidCells": 65536,
           "steps": 126400,
-          "seconds": 59.0892286,
+          "seconds": 53.11260720000001,
           "converged": true
         }
       ],
-      "seconds": 75.8728259
+      "seconds": 64.9050291
     },
     {
       "id": "cavity-re1000",
@@ -517,25 +517,25 @@
           "label": "N = 64",
           "fluidCells": 4096,
           "steps": 49200,
-          "seconds": 5.076560000000001,
+          "seconds": 4.0907640999999995,
           "converged": true
         },
         {
           "label": "N = 128",
           "fluidCells": 16384,
           "steps": 108000,
-          "seconds": 16.817053499999993,
+          "seconds": 16.446238799999996,
           "converged": true
         },
         {
           "label": "N = 256",
           "fluidCells": 65536,
           "steps": 222400,
-          "seconds": 93.2645192,
+          "seconds": 90.95927599999995,
           "converged": true
         }
       ],
-      "seconds": 115.230994
+      "seconds": 111.5742096
     },
     {
       "id": "cylinder-re20",
@@ -594,18 +594,18 @@
           "label": "D = 20 cells",
           "fluidCells": 35764,
           "steps": 37500,
-          "seconds": 9.9785567,
+          "seconds": 9.724593999999998,
           "converged": true
         },
         {
           "label": "D = 40 cells",
           "fluidCells": 143056,
           "steps": 75000,
-          "seconds": 58.2381751,
+          "seconds": 65.6691613,
           "converged": true
         }
       ],
-      "seconds": 68.2591246
+      "seconds": 75.4344591
     },
     {
       "id": "cylinder-re100",
@@ -681,25 +681,25 @@
           "label": "D = 20 cells",
           "fluidCells": 35764,
           "steps": 37500,
-          "seconds": 11.611447700000072,
+          "seconds": 13.38388680000005,
           "converged": true
         },
         {
           "label": "D = 40 cells",
           "fluidCells": 143056,
           "steps": 60000,
-          "seconds": 47.82288399999988,
+          "seconds": 49.9309591000002,
           "converged": true
         },
         {
           "label": "D = 80 cells",
           "fluidCells": 572256,
           "steps": 180000,
-          "seconds": 691.5867841999983,
+          "seconds": 673.4017014999968,
           "converged": true
         }
       ],
-      "seconds": 761.6191731
+      "seconds": 741.9855317
     },
     {
       "id": "heated-cavity-ra1e3",
@@ -781,18 +781,18 @@
           "label": "N = 64",
           "fluidCells": 4096,
           "steps": 16000,
-          "seconds": 1.4683889,
+          "seconds": 1.5579773000000001,
           "converged": true
         },
         {
           "label": "N = 128",
           "fluidCells": 16384,
           "steps": 32000,
-          "seconds": 5.407238099999999,
+          "seconds": 5.704828,
           "converged": true
         }
       ],
-      "seconds": 6.8810593
+      "seconds": 7.2685851
     },
     {
       "id": "heated-cavity-ra1e4",
@@ -874,18 +874,18 @@
           "label": "N = 64",
           "fluidCells": 4096,
           "steps": 28000,
-          "seconds": 2.6734740999999995,
+          "seconds": 2.7729166000000003,
           "converged": true
         },
         {
           "label": "N = 128",
           "fluidCells": 16384,
           "steps": 56000,
-          "seconds": 9.5967394,
+          "seconds": 10.0885181,
           "converged": true
         }
       ],
-      "seconds": 12.2755522
+      "seconds": 12.8671534
     },
     {
       "id": "heated-cavity-ra1e5",
@@ -967,18 +967,18 @@
           "label": "N = 64",
           "fluidCells": 4096,
           "steps": 56000,
-          "seconds": 5.1426298,
+          "seconds": 5.648513500000001,
           "converged": true
         },
         {
           "label": "N = 128",
           "fluidCells": 16384,
           "steps": 104000,
-          "seconds": 17.972092699999997,
+          "seconds": 18.5858299,
           "converged": true
         }
       ],
-      "seconds": 23.1203625
+      "seconds": 24.2403226
     },
     {
       "id": "heated-cavity-ra1e6",
@@ -1060,18 +1060,151 @@
           "label": "N = 128",
           "fluidCells": 16384,
           "steps": 224000,
-          "seconds": 38.1412666,
+          "seconds": 39.8182715,
           "converged": true
         },
         {
           "label": "N = 256",
           "fluidCells": 65536,
           "steps": 432000,
-          "seconds": 206.38760289999996,
+          "seconds": 213.61879919999996,
           "converged": true
         }
       ],
-      "seconds": 244.5532734
+      "seconds": 253.4647134
+    },
+    {
+      "id": "rayleigh-benard",
+      "title": "Rayleigh-Bénard onset of convection",
+      "reference": "Linear stability theory: Ra_c = 1707.76 for rigid plates (Chandrasekhar 1961)",
+      "description": "Layer of height H = 1 m between a hot bottom and a cold top plate (fixed temperatures, ΔT = 1 K), periodic along x over one critical wavelength 2π/k_c (k_c H = 3.117), Pr = 0.71, Boussinesq buoyancy with √(gβΔTH) mapped to lattice velocity 0.08. Initial state: conduction profile in hydrostatic balance plus a perturbation 1e-3 ΔT sin(kx) sin(πy/H). The amplitude A of the critical mode (the x-Fourier coefficient of v at wavenumber k, summed over rows) is fitted to e^(σt) over t = 0.5–2 H²/α, at Ra = 1550, 1650, 1750, 1850. Ra_c is the zero of a linear fit of σ(Ra). Pass/fail: Ra_c within 2% of 1707.76 at the finest resolution.",
+      "metrics": [
+        {
+          "name": "Ra_c at H = 64",
+          "value": 1707.0351673584296,
+          "reference": "1708",
+          "error": 0.00042443472242610284,
+          "limit": 0.02
+        }
+      ],
+      "tables": [
+        {
+          "title": "Critical Rayleigh number by resolution (σ in units of α/H²)",
+          "headers": [
+            "H (cells)",
+            "Ra_c",
+            "error",
+            "σ at Ra = 1550",
+            "σ at Ra = 1650",
+            "σ at Ra = 1750",
+            "σ at Ra = 1850"
+          ],
+          "rows": [
+            [
+              "16",
+              "1711.7",
+              "+0.23%",
+              "-1.0777",
+              "-0.4002",
+              "+0.2571",
+              "+0.9113"
+            ],
+            [
+              "32",
+              "1707.7",
+              "-0.00%",
+              "-1.0288",
+              "-0.3662",
+              "+0.2691",
+              "+0.9252"
+            ],
+            [
+              "64",
+              "1707.0",
+              "-0.04%",
+              "-1.0303",
+              "-0.3617",
+              "+0.2742",
+              "+0.9341"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "H = 16, Ra = 1550",
+          "fluidCells": 512,
+          "steps": 13280,
+          "seconds": 0.37773550000000006
+        },
+        {
+          "label": "H = 16, Ra = 1650",
+          "fluidCells": 512,
+          "steps": 13680,
+          "seconds": 0.5790623000000003
+        },
+        {
+          "label": "H = 16, Ra = 1750",
+          "fluidCells": 512,
+          "steps": 14080,
+          "seconds": 0.3918046000000001
+        },
+        {
+          "label": "H = 16, Ra = 1850",
+          "fluidCells": 512,
+          "steps": 14480,
+          "seconds": 0.4151190999999999
+        },
+        {
+          "label": "H = 32, Ra = 1550",
+          "fluidCells": 2080,
+          "steps": 26560,
+          "seconds": 1.4438334999999998
+        },
+        {
+          "label": "H = 32, Ra = 1650",
+          "fluidCells": 2080,
+          "steps": 27360,
+          "seconds": 1.4598601000000002
+        },
+        {
+          "label": "H = 32, Ra = 1750",
+          "fluidCells": 2080,
+          "steps": 28160,
+          "seconds": 1.6029818999999996
+        },
+        {
+          "label": "H = 32, Ra = 1850",
+          "fluidCells": 2080,
+          "steps": 28960,
+          "seconds": 1.588914
+        },
+        {
+          "label": "H = 64, Ra = 1550",
+          "fluidCells": 8256,
+          "steps": 53040,
+          "seconds": 7.111137200000002
+        },
+        {
+          "label": "H = 64, Ra = 1650",
+          "fluidCells": 8256,
+          "steps": 54800,
+          "seconds": 7.3386591999999995
+        },
+        {
+          "label": "H = 64, Ra = 1750",
+          "fluidCells": 8256,
+          "steps": 56400,
+          "seconds": 7.4969106
+        },
+        {
+          "label": "H = 64, Ra = 1850",
+          "fluidCells": 8256,
+          "steps": 58000,
+          "seconds": 7.780951400000001
+        }
+      ],
+      "seconds": 37.6757662
     }
   ]
 }
