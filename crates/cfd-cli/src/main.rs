@@ -1,3 +1,7 @@
+mod backend;
+mod render;
+mod run;
+
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -39,6 +43,15 @@ enum Command {
     Validate {
         #[arg(required = true)]
         files: Vec<PathBuf>,
+    },
+    /// Run a scene headless: frames, PNGs, probe/force/diagnostic CSVs and metadata.
+    Run(run::RunArgs),
+    /// Render the frames of a run directory as PNG sequences.
+    Render {
+        /// Directory written by `cfd-cli run`.
+        dir: PathBuf,
+        #[command(flatten)]
+        opts: render::RenderOpts,
     },
 }
 
@@ -88,6 +101,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             } else {
                 bail!("give an example name, --all <DIR> or --list");
             }
+        }
+        Command::Run(args) => return run::run(args),
+        Command::Render { dir, opts } => {
+            render::render_dir(&dir, &opts)?;
         }
         Command::Validate { files } => {
             let mut failed = false;

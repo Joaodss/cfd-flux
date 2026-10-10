@@ -12,6 +12,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 cfd-core = { path = "crates/cfd-core" }
 cfd-io = { path = "crates/cfd-io" }
+cfd-lbm = { path = "crates/cfd-lbm" }
 anyhow = "1"
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }

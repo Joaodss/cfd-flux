@@ -1,6 +1,6 @@
 [package]
 name = "cfd-cli"
-description = "Command-line tool for live-fluids: scenes, validation and (later) headless runs"
+description = "Command-line tool for live-fluids: scenes, headless runs, benchmarks and validation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,7 +14,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 cfd-core.workspace = true
+cfd-io.workspace = true
+cfd-lbm.workspace = true
 clap.workspace = true
+rayon.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [lints]
