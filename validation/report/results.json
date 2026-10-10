@@ -1,0 +1,1077 @@
+{
+  "run": {
+    "level": "full",
+    "backend": "cpu",
+    "collision": "trt",
+    "threads": 16,
+    "cpu": "AMD Ryzen 7 3700X 8-Core Processor",
+    "generator": "cfd-cli 0.1.0",
+    "commit": "727020d-dirty",
+    "seconds": 1351.243694
+  },
+  "cases": [
+    {
+      "id": "taylor-green",
+      "title": "Taylor-Green vortex decay",
+      "reference": "Analytical: u = U e^(−2νk²t) (−cos kx sin ky, sin kx cos ky)",
+      "description": "Periodic 1 m box, ν = 0.01 m²/s, U = 0.128 m/s (Re = UL/ν = 12.8), run for one viscous time 1/(2νk²) = 1.267 s. Diffusive scaling: u_lb = 0.64/N (τ = 0.65). Error: relative L2 of the velocity field; decay rate from the kinetic energy.",
+      "metrics": [
+        {
+          "name": "velocity L2 error at N = 32",
+          "value": 0.0039032809550587806,
+          "reference": "0 (limit 1%)",
+          "error": 0.0039032809550587806,
+          "limit": 0.01
+        },
+        {
+          "name": "convergence order (fit, N ≤ 128)",
+          "value": 2.156709751348328,
+          "reference": "1.800 – 2.300",
+          "error": 0.0,
+          "limit": 0.0
+        },
+        {
+          "name": "energy decay-rate error at N = 256",
+          "value": 0.00022759151168316727,
+          "reference": "0 (limit 1%)",
+          "error": 0.00022759151168316727,
+          "limit": 0.01
+        }
+      ],
+      "tables": [
+        {
+          "title": "Convergence",
+          "headers": [
+            "N",
+            "velocity L2 error",
+            "order",
+            "decay-rate error",
+            "note"
+          ],
+          "rows": [
+            [
+              "16",
+              "1.569e-2",
+              "—",
+              "1.575e-2",
+              ""
+            ],
+            [
+              "32",
+              "3.903e-3",
+              "2.01",
+              "3.908e-3",
+              ""
+            ],
+            [
+              "64",
+              "9.550e-4",
+              "2.03",
+              "9.540e-4",
+              ""
+            ],
+            [
+              "128",
+              "1.719e-4",
+              "2.47",
+              "1.708e-4",
+              ""
+            ],
+            [
+              "256",
+              "2.276e-4",
+              "-0.41",
+              "2.276e-4",
+              "f32 round-off floor (ADR-015), not fitted"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "N = 16",
+          "fluidCells": 256,
+          "steps": 65,
+          "seconds": 0.0032876
+        },
+        {
+          "label": "N = 32",
+          "fluidCells": 1024,
+          "steps": 259,
+          "seconds": 0.0126616
+        },
+        {
+          "label": "N = 64",
+          "fluidCells": 4096,
+          "steps": 1038,
+          "seconds": 0.0945949
+        },
+        {
+          "label": "N = 128",
+          "fluidCells": 16384,
+          "steps": 4150,
+          "seconds": 0.628205
+        },
+        {
+          "label": "N = 256",
+          "fluidCells": 65536,
+          "steps": 16600,
+          "seconds": 7.5663841
+        }
+      ],
+      "seconds": 8.3244854
+    },
+    {
+      "id": "poiseuille",
+      "title": "Plane Poiseuille flow (body force)",
+      "reference": "Analytical: u(y) = G y (H − y) / (2ν)",
+      "description": "Channel of height H = 1 m between no-slip walls, periodic in x, driven by a body acceleration G = 8 m/s² (u_max = 1 m/s, Re = 1, τ = 1). Run to steady state (relative change per 0.1 diffusive time < 1e-6). Error: relative L2 of u(y); wall shear stress from momentum exchange against ρGH/2.",
+      "metrics": [
+        {
+          "name": "u(y) L2 error at N = 32",
+          "value": 6.288273611200161e-6,
+          "reference": "0 (limit 1%)",
+          "error": 6.288273611200161e-6,
+          "limit": 0.01
+        },
+        {
+          "name": "largest L2 error, N ≤ 32 (exact scheme)",
+          "value": 6.606030624992032e-6,
+          "reference": "< 1e-5",
+          "error": 6.606030624992032e-6,
+          "limit": 0.00001
+        },
+        {
+          "name": "wall shear stress error at N = 64",
+          "value": 0.00001457706093788147,
+          "reference": "0 (limit 1%)",
+          "error": 0.00001457706093788147,
+          "limit": 0.01
+        }
+      ],
+      "tables": [
+        {
+          "title": "Convergence",
+          "headers": [
+            "N",
+            "u(y) L2 error",
+            "order",
+            "wall-shear error",
+            "note"
+          ],
+          "rows": [
+            [
+              "8",
+              "2.032e-6",
+              "—",
+              "1.200e-6",
+              ""
+            ],
+            [
+              "16",
+              "6.606e-6",
+              "-1.70",
+              "5.558e-6",
+              ""
+            ],
+            [
+              "32",
+              "6.288e-6",
+              "0.07",
+              "5.540e-6",
+              ""
+            ],
+            [
+              "64",
+              "4.010e-5",
+              "-2.67",
+              "1.458e-5",
+              "f32 round-off floor (ADR-015), not fitted"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "N = 8",
+          "fluidCells": 32,
+          "steps": 550,
+          "seconds": 0.0220692,
+          "converged": true
+        },
+        {
+          "label": "N = 16",
+          "fluidCells": 64,
+          "steps": 2142,
+          "seconds": 0.0561758,
+          "converged": true
+        },
+        {
+          "label": "N = 32",
+          "fluidCells": 128,
+          "steps": 7982,
+          "seconds": 0.2414417,
+          "converged": true
+        },
+        {
+          "label": "N = 64",
+          "fluidCells": 256,
+          "steps": 39312,
+          "seconds": 1.9021616000000001,
+          "converged": true
+        }
+      ],
+      "seconds": 2.2235455
+    },
+    {
+      "id": "couette",
+      "title": "Plane Couette flow (moving wall)",
+      "reference": "Analytical: u(y) = U y / H",
+      "description": "Channel of height H = 1 m, top wall moving at U = 1 m/s, periodic in x (Re = 1, τ = 1). Run to steady state. Error: relative L2 of u(y); shear stress ρνU/H on both walls from momentum exchange.",
+      "metrics": [
+        {
+          "name": "u(y) L2 error at N = 16",
+          "value": 3.3190652520734084e-6,
+          "reference": "0 (limit 1%)",
+          "error": 3.3190652520734084e-6,
+          "limit": 0.01
+        },
+        {
+          "name": "u(y) L2 error at N = 32",
+          "value": 0.000013511378707594504,
+          "reference": "0 (limit 1%)",
+          "error": 0.000013511378707594504,
+          "limit": 0.01
+        },
+        {
+          "name": "wall shear stress error at N = 32",
+          "value": 0.00006031990052690617,
+          "reference": "0 (limit 1%)",
+          "error": 0.00006031990052690617,
+          "limit": 0.01
+        }
+      ],
+      "tables": [
+        {
+          "title": "Results (exact shear stress ±1 Pa)",
+          "headers": [
+            "N",
+            "u(y) L2 error",
+            "bottom wall τ (Pa)",
+            "top wall τ (Pa)"
+          ],
+          "rows": [
+            [
+              "16",
+              "3.319e-6",
+              "1.0000",
+              "-1.000"
+            ],
+            [
+              "32",
+              "1.351e-5",
+              "1.0000",
+              "-1.000"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "N = 16",
+          "fluidCells": 64,
+          "steps": 1989,
+          "seconds": 0.0490732,
+          "converged": true
+        },
+        {
+          "label": "N = 32",
+          "fluidCells": 128,
+          "steps": 7368,
+          "seconds": 0.22552300000000003,
+          "converged": true
+        }
+      ],
+      "seconds": 0.2755439
+    },
+    {
+      "id": "cavity-re100",
+      "title": "Lid-driven cavity, Re = 100",
+      "reference": "Ghia, Ghia & Shin (1982), J. Comput. Phys. 48, 387–411, Tables I–II",
+      "description": "Square cavity of side 1 m, lid at 1 m/s, ν = 0.0100 m²/s; N² fluid cells, lid lattice velocity 0.08 (Ma ≈ 0.14). Run until the relative change of u over half a lid transit is below 1e-5. The centreline profiles are averaged over the two middle columns/rows and linearly interpolated (walls half-way) at Ghia's points; the 15 interior points of each profile are compared. Errors are relative to the lid velocity.",
+      "metrics": [
+        {
+          "name": "max |u − u_Ghia| / U at N = 256",
+          "value": 0.00518356569647796,
+          "reference": "0 (limit 2%)",
+          "error": 0.00518356569647796,
+          "limit": 0.02
+        },
+        {
+          "name": "max |v − v_Ghia| / U at N = 256",
+          "value": 0.00877196235880251,
+          "reference": "0 (limit 2%)",
+          "error": 0.00877196235880251,
+          "limit": 0.02
+        }
+      ],
+      "tables": [
+        {
+          "title": "Deviation from Ghia et al. (1982) by resolution",
+          "headers": [
+            "N",
+            "max |Δu|/U",
+            "max |Δv|/U",
+            "u relative L2",
+            "v relative L2"
+          ],
+          "rows": [
+            [
+              "64",
+              "0.0052",
+              "0.0077",
+              "6.650e-3",
+              "3.056e-2"
+            ],
+            [
+              "128",
+              "0.0052",
+              "0.0085",
+              "6.784e-3",
+              "3.329e-2"
+            ],
+            [
+              "256",
+              "0.0052",
+              "0.0088",
+              "6.711e-3",
+              "3.413e-2"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "N = 64",
+          "fluidCells": 4096,
+          "steps": 14400,
+          "seconds": 1.1543108000000002,
+          "converged": true
+        },
+        {
+          "label": "N = 128",
+          "fluidCells": 16384,
+          "steps": 28800,
+          "seconds": 4.4173822,
+          "converged": true
+        },
+        {
+          "label": "N = 256",
+          "fluidCells": 65536,
+          "steps": 57600,
+          "seconds": 26.997124299999996,
+          "converged": true
+        }
+      ],
+      "seconds": 32.6064564
+    },
+    {
+      "id": "cavity-re400",
+      "title": "Lid-driven cavity, Re = 400",
+      "reference": "Ghia, Ghia & Shin (1982), J. Comput. Phys. 48, 387–411, Tables I–II",
+      "description": "Square cavity of side 1 m, lid at 1 m/s, ν = 0.0025 m²/s; N² fluid cells, lid lattice velocity 0.08 (Ma ≈ 0.14). Run until the relative change of u over half a lid transit is below 1e-5. The centreline profiles are averaged over the two middle columns/rows and linearly interpolated (walls half-way) at Ghia's points; the 15 interior points of each profile are compared (the v point at x = 0.9063 is excluded: a known misprint in Ghia's Table II). Errors are relative to the lid velocity.",
+      "metrics": [
+        {
+          "name": "max |u − u_Ghia| / U at N = 256",
+          "value": 0.0032592731273173303,
+          "reference": "0 (limit 2%)",
+          "error": 0.0032592731273173303,
+          "limit": 0.02
+        },
+        {
+          "name": "max |v − v_Ghia| / U at N = 256",
+          "value": 0.005309671341180655,
+          "reference": "0 (limit 2%)",
+          "error": 0.005309671341180655,
+          "limit": 0.02
+        }
+      ],
+      "tables": [
+        {
+          "title": "Deviation from Ghia et al. (1982) by resolution",
+          "headers": [
+            "N",
+            "max |Δu|/U",
+            "max |Δv|/U",
+            "u relative L2",
+            "v relative L2"
+          ],
+          "rows": [
+            [
+              "64",
+              "0.0062",
+              "0.0036",
+              "9.635e-3",
+              "7.753e-3"
+            ],
+            [
+              "128",
+              "0.0039",
+              "0.0041",
+              "5.485e-3",
+              "8.210e-3"
+            ],
+            [
+              "256",
+              "0.0033",
+              "0.0053",
+              "4.448e-3",
+              "1.084e-2"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "N = 64",
+          "fluidCells": 4096,
+          "steps": 32000,
+          "seconds": 3.231288599999999,
+          "converged": true
+        },
+        {
+          "label": "N = 128",
+          "fluidCells": 16384,
+          "steps": 63200,
+          "seconds": 13.485114700000002,
+          "converged": true
+        },
+        {
+          "label": "N = 256",
+          "fluidCells": 65536,
+          "steps": 126400,
+          "seconds": 59.0892286,
+          "converged": true
+        }
+      ],
+      "seconds": 75.8728259
+    },
+    {
+      "id": "cavity-re1000",
+      "title": "Lid-driven cavity, Re = 1000",
+      "reference": "Ghia, Ghia & Shin (1982), J. Comput. Phys. 48, 387–411, Tables I–II",
+      "description": "Square cavity of side 1 m, lid at 1 m/s, ν = 0.0010 m²/s; N² fluid cells, lid lattice velocity 0.08 (Ma ≈ 0.14). Run until the relative change of u over half a lid transit is below 1e-5. The centreline profiles are averaged over the two middle columns/rows and linearly interpolated (walls half-way) at Ghia's points; the 15 interior points of each profile are compared. Errors are relative to the lid velocity.",
+      "metrics": [
+        {
+          "name": "max |u − u_Ghia| / U at N = 256",
+          "value": 0.006429505670368596,
+          "reference": "0 (limit 2%)",
+          "error": 0.006429505670368596,
+          "limit": 0.02
+        },
+        {
+          "name": "max |v − v_Ghia| / U at N = 256",
+          "value": 0.016031020554601927,
+          "reference": "0 (limit 2%)",
+          "error": 0.016031020554601927,
+          "limit": 0.02
+        }
+      ],
+      "tables": [
+        {
+          "title": "Deviation from Ghia et al. (1982) by resolution",
+          "headers": [
+            "N",
+            "max |Δu|/U",
+            "max |Δv|/U",
+            "u relative L2",
+            "v relative L2"
+          ],
+          "rows": [
+            [
+              "64",
+              "0.0173",
+              "0.0105",
+              "2.628e-2",
+              "1.669e-2"
+            ],
+            [
+              "128",
+              "0.0073",
+              "0.0110",
+              "1.175e-2",
+              "1.871e-2"
+            ],
+            [
+              "256",
+              "0.0064",
+              "0.0160",
+              "1.075e-2",
+              "2.663e-2"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "N = 64",
+          "fluidCells": 4096,
+          "steps": 49200,
+          "seconds": 5.076560000000001,
+          "converged": true
+        },
+        {
+          "label": "N = 128",
+          "fluidCells": 16384,
+          "steps": 108000,
+          "seconds": 16.817053499999993,
+          "converged": true
+        },
+        {
+          "label": "N = 256",
+          "fluidCells": 65536,
+          "steps": 222400,
+          "seconds": 93.2645192,
+          "converged": true
+        }
+      ],
+      "seconds": 115.230994
+    },
+    {
+      "id": "cylinder-re20",
+      "title": "Cylinder in a channel, Re = 20 (Schäfer-Turek 2D-1)",
+      "reference": "Schäfer & Turek (1996), Notes Numer. Fluid Mech. 52, 547–566",
+      "description": "Channel 2.2 m × 0.41 m, cylinder D = 0.1 m at (0.2, 0.2) m drawn as cells, parabolic inlet with U_max = 0.3 m/s (Ū = 0.2 m/s, Re = ŪD/ν = 20), zero-pressure outlet; inlet peak lattice velocity 0.08. Run until the relative change of u over 0.25 s is below 1e-6. C_D, C_L from momentum exchange on the cylinder; Δp between the fluid cells next to the front and back points. Pass/fail: C_D within 2% of the centre of the reference interval at the finest resolution.",
+      "metrics": [
+        {
+          "name": "C_D at D = 40 cells",
+          "value": 5.600212595801678,
+          "reference": "5.580 (interval 5.570 – 5.590)",
+          "error": 0.0036223289967165506,
+          "limit": 0.02
+        },
+        {
+          "name": "C_L at D = 40 cells",
+          "value": 0.0122497159296131,
+          "reference": "0.01040 – 0.01100"
+        },
+        {
+          "name": "Δp (Pa) at D = 40 cells",
+          "value": 0.1153422519564628,
+          "reference": "0.1172 – 0.1176"
+        }
+      ],
+      "tables": [
+        {
+          "title": "Results by resolution",
+          "headers": [
+            "D (cells)",
+            "C_D",
+            "C_D error",
+            "C_L",
+            "Δp (Pa)"
+          ],
+          "rows": [
+            [
+              "20",
+              "5.6092",
+              "+0.52%",
+              "0.0125",
+              "0.1136"
+            ],
+            [
+              "40",
+              "5.6002",
+              "+0.36%",
+              "0.0122",
+              "0.1153"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "D = 20 cells",
+          "fluidCells": 35764,
+          "steps": 37500,
+          "seconds": 9.9785567,
+          "converged": true
+        },
+        {
+          "label": "D = 40 cells",
+          "fluidCells": 143056,
+          "steps": 75000,
+          "seconds": 58.2381751,
+          "converged": true
+        }
+      ],
+      "seconds": 68.2591246
+    },
+    {
+      "id": "cylinder-re100",
+      "title": "Cylinder in a channel, Re = 100 (Schäfer-Turek 2D-2)",
+      "reference": "Schäfer & Turek (1996), Notes Numer. Fluid Mech. 52, 547–566",
+      "description": "Same channel and cylinder as 2D-1 with U_max = 1.5 m/s (Ū = 1 m/s, Re = 100); inlet peak lattice velocity 0.08. The run continues in 1 s windows until the C_L amplitude changes by less than 1% between windows, then records 3 s (≈ 9 shedding periods). St = fD/Ū from the upward zero crossings of C_L; C_D,max and C_L,max over the record. Pass/fail: St and C_D,max within 2% of the centre of the reference intervals at the finest resolution.",
+      "metrics": [
+        {
+          "name": "St at D = 80 cells",
+          "value": 0.3000338994353381,
+          "reference": "0.3000 (interval 0.2950 – 0.3050)",
+          "error": 0.000112998117793639,
+          "limit": 0.02
+        },
+        {
+          "name": "C_D,max at D = 80 cells",
+          "value": 3.257944272025526,
+          "reference": "3.230 (interval 3.220 – 3.240)",
+          "error": 0.008651477407283448,
+          "limit": 0.02
+        },
+        {
+          "name": "C_L,max at D = 80 cells",
+          "value": 0.9905103808041105,
+          "reference": "0.9900 – 1.010"
+        }
+      ],
+      "tables": [
+        {
+          "title": "Results by resolution",
+          "headers": [
+            "D (cells)",
+            "St",
+            "St error",
+            "C_D,max",
+            "C_D,max error",
+            "C_L,max",
+            "record starts at t (s)"
+          ],
+          "rows": [
+            [
+              "20",
+              "0.2963",
+              "-1.24%",
+              "3.3879",
+              "+4.89%",
+              "1.0226",
+              "7.0"
+            ],
+            [
+              "40",
+              "0.2993",
+              "-0.22%",
+              "3.3424",
+              "+3.48%",
+              "0.9953",
+              "5.0"
+            ],
+            [
+              "80",
+              "0.3000",
+              "+0.01%",
+              "3.2579",
+              "+0.87%",
+              "0.9905",
+              "9.0"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "D = 20 cells",
+          "fluidCells": 35764,
+          "steps": 37500,
+          "seconds": 11.611447700000072,
+          "converged": true
+        },
+        {
+          "label": "D = 40 cells",
+          "fluidCells": 143056,
+          "steps": 60000,
+          "seconds": 47.82288399999988,
+          "converged": true
+        },
+        {
+          "label": "D = 80 cells",
+          "fluidCells": 572256,
+          "steps": 180000,
+          "seconds": 691.5867841999983,
+          "converged": true
+        }
+      ],
+      "seconds": 761.6191731
+    },
+    {
+      "id": "heated-cavity-ra1e3",
+      "title": "Differentially heated cavity, Ra = 1e3",
+      "reference": "de Vahl Davis (1983), Int. J. Numer. Meth. Fluids 3, 249–264",
+      "description": "Square cavity of side L = 1 m, N² fluid cells; hot left wall, cold right wall (ΔT = 1 K), adiabatic top and bottom; Pr = 0.71, Boussinesq buoyancy. The buoyancy velocity √(gβΔTL) maps to lattice velocity 0.08. Run until u and θ change by less than 1e-5 (relative) over half a buoyancy time. Nu on the hot wall from a second-order one-sided temperature gradient at the half-way wall; Nū as the cavity average 1 + L⟨uθ⟩/(αΔT); velocity maxima on the mid-planes refined with a parabola, in units of α/L. Pass/fail: both Nusselt numbers within 2% at the finest resolution.",
+      "metrics": [
+        {
+          "name": "Nu on the hot wall at N = 128",
+          "value": 1.1176868577798207,
+          "reference": "1.117",
+          "error": 0.0006149129631340136,
+          "limit": 0.02
+        },
+        {
+          "name": "Nū (cavity average) at N = 128",
+          "value": 1.117683029325728,
+          "reference": "1.118",
+          "error": 0.0002835158088301025,
+          "limit": 0.02
+        },
+        {
+          "name": "u_max on x = 0.5 (α/L)",
+          "value": 3.648685769586147,
+          "reference": "3.649 at y = 0.813"
+        },
+        {
+          "name": "  at y",
+          "value": 0.8131333241718632,
+          "reference": "0.8130"
+        },
+        {
+          "name": "v_max on y = 0.5 (α/L)",
+          "value": 3.697942534273095,
+          "reference": "3.697 at x = 0.178"
+        },
+        {
+          "name": "  at x",
+          "value": 0.1783897373573135,
+          "reference": "0.1780"
+        }
+      ],
+      "tables": [
+        {
+          "title": "Results by resolution (reference: Nu_hot = 1.117, Nū = 1.118, u_max = 3.649 @ 0.813, v_max = 3.697 @ 0.178)",
+          "headers": [
+            "N",
+            "Nu hot wall",
+            "error",
+            "Nū",
+            "error",
+            "u_max @ y",
+            "v_max @ x"
+          ],
+          "rows": [
+            [
+              "64",
+              "1.1178",
+              "+0.07%",
+              "1.1178",
+              "-0.02%",
+              "3.648 @ 0.813",
+              "3.696 @ 0.179"
+            ],
+            [
+              "128",
+              "1.1177",
+              "+0.06%",
+              "1.1177",
+              "-0.03%",
+              "3.649 @ 0.813",
+              "3.698 @ 0.178"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "N = 64",
+          "fluidCells": 4096,
+          "steps": 16000,
+          "seconds": 1.4683889,
+          "converged": true
+        },
+        {
+          "label": "N = 128",
+          "fluidCells": 16384,
+          "steps": 32000,
+          "seconds": 5.407238099999999,
+          "converged": true
+        }
+      ],
+      "seconds": 6.8810593
+    },
+    {
+      "id": "heated-cavity-ra1e4",
+      "title": "Differentially heated cavity, Ra = 1e4",
+      "reference": "de Vahl Davis (1983), Int. J. Numer. Meth. Fluids 3, 249–264",
+      "description": "Square cavity of side L = 1 m, N² fluid cells; hot left wall, cold right wall (ΔT = 1 K), adiabatic top and bottom; Pr = 0.71, Boussinesq buoyancy. The buoyancy velocity √(gβΔTL) maps to lattice velocity 0.08. Run until u and θ change by less than 1e-5 (relative) over half a buoyancy time. Nu on the hot wall from a second-order one-sided temperature gradient at the half-way wall; Nū as the cavity average 1 + L⟨uθ⟩/(αΔT); velocity maxima on the mid-planes refined with a parabola, in units of α/L. Pass/fail: both Nusselt numbers within 2% at the finest resolution.",
+      "metrics": [
+        {
+          "name": "Nu on the hot wall at N = 128",
+          "value": 2.2450107634067535,
+          "reference": "2.238",
+          "error": 0.0031326020584242853,
+          "limit": 0.02
+        },
+        {
+          "name": "Nū (cavity average) at N = 128",
+          "value": 2.24492271436117,
+          "reference": "2.243",
+          "error": 0.0008572065809942921,
+          "limit": 0.02
+        },
+        {
+          "name": "u_max on x = 0.5 (α/L)",
+          "value": 16.180954461191913,
+          "reference": "16.18 at y = 0.823"
+        },
+        {
+          "name": "  at y",
+          "value": 0.8230805743780981,
+          "reference": "0.8230"
+        },
+        {
+          "name": "v_max on y = 0.5 (α/L)",
+          "value": 19.63424177420913,
+          "reference": "19.62 at x = 0.119"
+        },
+        {
+          "name": "  at x",
+          "value": 0.11898171437791864,
+          "reference": "0.1190"
+        }
+      ],
+      "tables": [
+        {
+          "title": "Results by resolution (reference: Nu_hot = 2.238, Nū = 2.243, u_max = 16.178 @ 0.823, v_max = 19.617 @ 0.119)",
+          "headers": [
+            "N",
+            "Nu hot wall",
+            "error",
+            "Nū",
+            "error",
+            "u_max @ y",
+            "v_max @ x"
+          ],
+          "rows": [
+            [
+              "64",
+              "2.2474",
+              "+0.42%",
+              "2.2468",
+              "+0.17%",
+              "16.181 @ 0.823",
+              "19.629 @ 0.119"
+            ],
+            [
+              "128",
+              "2.2450",
+              "+0.31%",
+              "2.2449",
+              "+0.09%",
+              "16.181 @ 0.823",
+              "19.634 @ 0.119"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "N = 64",
+          "fluidCells": 4096,
+          "steps": 28000,
+          "seconds": 2.6734740999999995,
+          "converged": true
+        },
+        {
+          "label": "N = 128",
+          "fluidCells": 16384,
+          "steps": 56000,
+          "seconds": 9.5967394,
+          "converged": true
+        }
+      ],
+      "seconds": 12.2755522
+    },
+    {
+      "id": "heated-cavity-ra1e5",
+      "title": "Differentially heated cavity, Ra = 1e5",
+      "reference": "de Vahl Davis (1983), Int. J. Numer. Meth. Fluids 3, 249–264",
+      "description": "Square cavity of side L = 1 m, N² fluid cells; hot left wall, cold right wall (ΔT = 1 K), adiabatic top and bottom; Pr = 0.71, Boussinesq buoyancy. The buoyancy velocity √(gβΔTL) maps to lattice velocity 0.08. Run until u and θ change by less than 1e-5 (relative) over half a buoyancy time. Nu on the hot wall from a second-order one-sided temperature gradient at the half-way wall; Nū as the cavity average 1 + L⟨uθ⟩/(αΔT); velocity maxima on the mid-planes refined with a parabola, in units of α/L. Pass/fail: both Nusselt numbers within 2% at the finest resolution.",
+      "metrics": [
+        {
+          "name": "Nu on the hot wall at N = 128",
+          "value": 4.52642885843913,
+          "reference": "4.509",
+          "error": 0.003865348955229393,
+          "limit": 0.02
+        },
+        {
+          "name": "Nū (cavity average) at N = 128",
+          "value": 4.525335601866947,
+          "reference": "4.519",
+          "error": 0.0014019920041926273,
+          "limit": 0.02
+        },
+        {
+          "name": "u_max on x = 0.5 (α/L)",
+          "value": 34.745237861104684,
+          "reference": "34.73 at y = 0.855"
+        },
+        {
+          "name": "  at y",
+          "value": 0.854499005681818,
+          "reference": "0.8550"
+        },
+        {
+          "name": "v_max on y = 0.5 (α/L)",
+          "value": 68.65601564939712,
+          "reference": "68.59 at x = 0.066"
+        },
+        {
+          "name": "  at x",
+          "value": 0.06611142577269942,
+          "reference": "0.06600"
+        }
+      ],
+      "tables": [
+        {
+          "title": "Results by resolution (reference: Nu_hot = 4.509, Nū = 4.519, u_max = 34.73 @ 0.855, v_max = 68.59 @ 0.066)",
+          "headers": [
+            "N",
+            "Nu hot wall",
+            "error",
+            "Nū",
+            "error",
+            "u_max @ y",
+            "v_max @ x"
+          ],
+          "rows": [
+            [
+              "64",
+              "4.5468",
+              "+0.84%",
+              "4.5395",
+              "+0.45%",
+              "34.770 @ 0.854",
+              "68.554 @ 0.067"
+            ],
+            [
+              "128",
+              "4.5264",
+              "+0.39%",
+              "4.5253",
+              "+0.14%",
+              "34.745 @ 0.854",
+              "68.656 @ 0.066"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "N = 64",
+          "fluidCells": 4096,
+          "steps": 56000,
+          "seconds": 5.1426298,
+          "converged": true
+        },
+        {
+          "label": "N = 128",
+          "fluidCells": 16384,
+          "steps": 104000,
+          "seconds": 17.972092699999997,
+          "converged": true
+        }
+      ],
+      "seconds": 23.1203625
+    },
+    {
+      "id": "heated-cavity-ra1e6",
+      "title": "Differentially heated cavity, Ra = 1e6",
+      "reference": "de Vahl Davis (1983), Int. J. Numer. Meth. Fluids 3, 249–264",
+      "description": "Square cavity of side L = 1 m, N² fluid cells; hot left wall, cold right wall (ΔT = 1 K), adiabatic top and bottom; Pr = 0.71, Boussinesq buoyancy. The buoyancy velocity √(gβΔTL) maps to lattice velocity 0.08. Run until u and θ change by less than 1e-5 (relative) over half a buoyancy time. Nu on the hot wall from a second-order one-sided temperature gradient at the half-way wall; Nū as the cavity average 1 + L⟨uθ⟩/(αΔT); velocity maxima on the mid-planes refined with a parabola, in units of α/L. Pass/fail: both Nusselt numbers within 2% at the finest resolution.",
+      "metrics": [
+        {
+          "name": "Nu on the hot wall at N = 256",
+          "value": 8.8332017660141,
+          "reference": "8.817",
+          "error": 0.0018375599426220881,
+          "limit": 0.02
+        },
+        {
+          "name": "Nū (cavity average) at N = 256",
+          "value": 8.831424086792463,
+          "reference": "8.800",
+          "error": 0.003570918953688914,
+          "limit": 0.02
+        },
+        {
+          "name": "u_max on x = 0.5 (α/L)",
+          "value": 64.84116836173384,
+          "reference": "64.63 at y = 0.85"
+        },
+        {
+          "name": "  at y",
+          "value": 0.8498867539857353,
+          "reference": "0.8500"
+        },
+        {
+          "name": "v_max on y = 0.5 (α/L)",
+          "value": 220.70566672656963,
+          "reference": "219.4 at x = 0.0379"
+        },
+        {
+          "name": "  at x",
+          "value": 0.0378557939894843,
+          "reference": "0.03790"
+        }
+      ],
+      "tables": [
+        {
+          "title": "Results by resolution (reference: Nu_hot = 8.817, Nū = 8.8, u_max = 64.63 @ 0.85, v_max = 219.36 @ 0.0379)",
+          "headers": [
+            "N",
+            "Nu hot wall",
+            "error",
+            "Nū",
+            "error",
+            "u_max @ y",
+            "v_max @ x"
+          ],
+          "rows": [
+            [
+              "128",
+              "8.8692",
+              "+0.59%",
+              "8.8562",
+              "+0.64%",
+              "64.796 @ 0.849",
+              "220.901 @ 0.038"
+            ],
+            [
+              "256",
+              "8.8332",
+              "+0.18%",
+              "8.8314",
+              "+0.36%",
+              "64.841 @ 0.850",
+              "220.706 @ 0.038"
+            ]
+          ]
+        }
+      ],
+      "runs": [
+        {
+          "label": "N = 128",
+          "fluidCells": 16384,
+          "steps": 224000,
+          "seconds": 38.1412666,
+          "converged": true
+        },
+        {
+          "label": "N = 256",
+          "fluidCells": 65536,
+          "steps": 432000,
+          "seconds": 206.38760289999996,
+          "converged": true
+        }
+      ],
+      "seconds": 244.5532734
+    }
+  ]
+}
