@@ -47,7 +47,7 @@
       },
       "thermal": {
         "type": "fixed",
-        "value": 293.6285
+        "value": 293.6286
       }
     },
     {
@@ -59,7 +59,7 @@
       },
       "thermal": {
         "type": "fixed",
-        "value": 292.6715
+        "value": 292.6714
       }
     }
   ],
@@ -84,7 +84,7 @@
   "physics": {
     "gravity": [
       0.0,
-      -9.81
+      -9.80665
     ],
     "thermal": true,
     "buoyancy": "boussinesq",

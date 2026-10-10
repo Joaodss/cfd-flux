@@ -5,6 +5,7 @@
 
 use crate::layers::{LayerData, LayerEncoding};
 use crate::scene::*;
+use crate::units::STANDARD_GRAVITY;
 
 /// Names accepted by [`by_name`].
 pub const NAMES: [&str; 4] = [
@@ -24,16 +25,16 @@ pub fn by_name(name: &str) -> Option<Scene> {
     })
 }
 
-/// Pixel canvas used to draw example geometry, mirroring what the web editor does.
-struct Canvas {
-    width: u32,
-    height: u32,
-    cell_type: Vec<u8>,
-    element_id: Vec<u16>,
+/// Pixel canvas used to draw scene geometry in code, mirroring what the web editor does.
+pub struct Canvas {
+    pub width: u32,
+    pub height: u32,
+    pub cell_type: Vec<u8>,
+    pub element_id: Vec<u16>,
 }
 
 impl Canvas {
-    fn new(width: u32, height: u32, fill: CellType) -> Self {
+    pub fn new(width: u32, height: u32, fill: CellType) -> Self {
         let n = width as usize * height as usize;
         Self {
             width,
@@ -43,14 +44,14 @@ impl Canvas {
         }
     }
 
-    fn set(&mut self, x: u32, y: u32, ct: CellType, element: u16) {
+    pub fn set(&mut self, x: u32, y: u32, ct: CellType, element: u16) {
         let i = (y * self.width + x) as usize;
         self.cell_type[i] = ct as u8;
         self.element_id[i] = element;
     }
 
     /// Fills `[x0, x1) × [y0, y1)`.
-    fn rect(&mut self, x0: u32, y0: u32, x1: u32, y1: u32, ct: CellType, element: u16) {
+    pub fn rect(&mut self, x0: u32, y0: u32, x1: u32, y1: u32, ct: CellType, element: u16) {
         for y in y0..y1 {
             for x in x0..x1 {
                 self.set(x, y, ct, element);
@@ -59,7 +60,7 @@ impl Canvas {
     }
 
     /// Fills every cell whose centre lies inside the circle (centre in cell-edge coordinates).
-    fn disk(&mut self, cx: f64, cy: f64, r: f64, ct: CellType, element: u16) {
+    pub fn disk(&mut self, cx: f64, cy: f64, r: f64, ct: CellType, element: u16) {
         for y in 0..self.height {
             for x in 0..self.width {
                 let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
@@ -70,7 +71,7 @@ impl Canvas {
         }
     }
 
-    fn layers(&self) -> Layers {
+    pub fn layers(&self) -> Layers {
         Layers {
             cell_type: LayerData::encode_u8(&self.cell_type, LayerEncoding::ZstdBase64),
             element_id: LayerData::encode_u16(&self.element_id, LayerEncoding::ZstdBase64),
@@ -287,7 +288,8 @@ pub fn heated_cavity_ra1e5() -> Scene {
     let fluid = air(1);
     // Ra = g β ΔT L³ / (ν α)  ⇒  ΔT
     let alpha = 0.0257 / (fluid.density * 1005.0);
-    let delta_t = 1.0e5 * fluid.kinematic_viscosity * alpha / (9.81 * 3.43e-3 * side.powi(3));
+    let delta_t =
+        1.0e5 * fluid.kinematic_viscosity * alpha / (STANDARD_GRAVITY * 3.43e-3 * side.powi(3));
     let t_ref = 293.15;
     let round = |t: f64| (t * 1e4).round() / 1e4;
 
@@ -315,7 +317,7 @@ pub fn heated_cavity_ra1e5() -> Scene {
         probes: vec![Probe { name: "Centre".into(), position: [65, 65] }],
         initial: InitialConditions { fluid: 1, velocity: [0.0, 0.0], temperature: t_ref, pressure: 0.0 },
         physics: Physics {
-            gravity: [0.0, -9.81],
+            gravity: [0.0, -STANDARD_GRAVITY],
             thermal: true,
             buoyancy: Buoyancy::Boussinesq,
             free_surface: false,
@@ -371,7 +373,7 @@ pub fn dam_break() -> Scene {
             pressure: 0.0,
         },
         physics: Physics {
-            gravity: [0.0, -9.81],
+            gravity: [0.0, -STANDARD_GRAVITY],
             thermal: false,
             buoyancy: Buoyancy::None,
             free_surface: true,

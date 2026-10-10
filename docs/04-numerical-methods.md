@@ -28,7 +28,7 @@ This document describes the methods to implement, in order, and why. All of them
 ### 3.1 Algorithm per step
 1. **Collision:** `f_i* = f_i − (f_i − f_i^eq)/τ + F_i` (BGK + Guo forcing for gravity/buoyancy).
 2. **Streaming:** `f_i(x + c_i, t+1) = f_i*(x, t)`.
-3. **Boundaries:** bounce-back (walls), Zou-He / imposed velocity (inlets), pressure or extrapolation (outlets).
+3. **Boundaries:** link-wise, half-way rules applied during the pull ([ADR-014](07-decisions-and-questions.md)): bounce-back with the wall velocity (walls, moving walls, velocity inlets), anti-bounce-back (pressure outlets), copy of the interior neighbour (zero-gradient outlets), periodic indexing.
 4. **Macroscopic quantities:** `ρ = Σ f_i`, `ρu = Σ c_i f_i + F/2`.
 
 Implemented as **a single fused kernel** (stream-collide, "pull") with two buffers (ping-pong). Later optimization: **AA pattern** or **Esoteric Pull** to use a single buffer (half the memory).
@@ -40,7 +40,7 @@ Implemented as **a single fused kernel** (stream-collide, "pull") with two buffe
 4. LES Smagorinsky (local effective τ) for turbulence.
 
 ### 3.3 Unit conversion (solver side)
-Given `dx` (= `cellSize`), a characteristic physical velocity `U` and viscosity `ν`:
+Given `dx` (= `cellSize`), a characteristic physical velocity `U` and viscosity `ν` (implemented in `cfd-core::units` and `domain`; `U` is the largest of the inlet peaks, moving-wall speeds, initial velocity and, with Boussinesq, `√(gβΔT·L)`, unless overridden):
 - Choose the lattice velocity `u_lb` ≤ 0.1 (default 0.05) → `dt = u_lb · dx / U`.
 - `ν_lb = ν · dt / dx²` → `τ = 3 ν_lb + 0.5`.
 - Checks: `τ > 0.5 + ε` (e.g. 0.505 with TRT); `Ma = u_lb·√3 < 0.17`; warning if the grid Reynolds number `U·dx/ν` is high.
@@ -50,9 +50,18 @@ Given `dx` (= `cellSize`), a characteristic physical velocity `U` and viscosity 
 `9 × 4 B × 2 buffers + flags + macroscopic fields ≈ 85 B/cell`.
 4096² ≈ 16.8 M cells → ~1.4 GB. With the AA pattern and f16 storage of `f_i` (FluidX3D technique) → ~0.5 GB.
 
+**As implemented (CPU, Phase 1):** `f` (9 × 2 buffers) + `g` (5 × 2, thermal only) + ρ, u, θ + flags and BC slot ≈ 100 B/cell isothermal, 140 B/cell thermal. Measured ≈ 120 MLUPS isothermal and ≈ 75 MLUPS thermal on 16 threads (no explicit SIMD yet).
+
+### 3.5 Implementation notes (shared by every backend)
+- SoA populations `f[i·n + cell]`, pull scheme, ping-pong buffers; one fused kernel per step also writes ρ, u (with the `F/2` correction) and θ.
+- **Shifted populations** `f̃ᵢ = fᵢ − wᵢ` in f32, and rest populations computed as the remainder (`f̃₀ = Δρ − Σ`, `g₀ = θ − Σ`), which conserves mass and heat by construction ([ADR-015](07-decisions-and-questions.md)).
+- TRT with Guo forcing split into symmetric/antisymmetric parts, each scaled by its own `(1 − ω±/2)`; BGK is the special case `ω⁺ = ω⁻`.
+- Only Boussinesq buoyancy is applied as a force; the hydrostatic pressure is added at sampling time ([ADR-016](07-decisions-and-questions.md)).
+- Forces on elements: momentum exchange over bounce-back links, `F = Σ c_ī (2 f*_ī + 6 wᵢ ρ₀ cᵢ·u_w)`.
+
 ## 4. Heat transfer
 
-- **Double distribution:** a second lattice `g_i` (D2Q5) for the temperature advection-diffusion equation, with `τ_g = α_lb / c_s,g² + 0.5`, where `c_s,g²` depends on the chosen D2Q5 weights (e.g. `w₀ = 1/3`, `wᵢ = 1/6` ⇒ `c_s,g² = 1/3` ⇒ `τ_g = 3 α_lb + 0.5`). Document the choice in the implementation.
+- **Double distribution:** a second lattice `g_i` (D2Q5) for the temperature advection-diffusion equation, with `τ_g = α_lb / c_s,g² + 0.5`. Implemented weights: `w₀ = 1/3`, `wᵢ = 1/6` ⇒ `c_s,g² = 1/3` ⇒ `τ_g = 3 α_lb + 0.5`, equilibrium `gᵢ = wᵢ θ (1 + 3 cᵢ·u)`. With TRT, `τ_g` sets the antisymmetric rate (diffusivity) and Λ = 3/16 sets the symmetric one.
 - **Coupling:** Boussinesq — force `F = −ρ₀ β (T − T_ref) g`, applied via Guo forcing.
 - **Thermal boundaries:** fixed temperature (anti-bounce-back), flux, adiabatic (bounce-back of `g`).
 - **Conjugate (solid-fluid):** later phase — the solid also solves diffusion with its own `α_s`, with flux continuity at the interface.
