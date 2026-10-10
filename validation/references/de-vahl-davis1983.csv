@@ -1,0 +1,12 @@
+# Differentially heated square cavity (air, Pr = 0.71): benchmark solution.
+# Source: G. de Vahl Davis, "Natural convection of air in a square cavity: a bench mark numerical
+#   solution", Int. J. Numer. Meth. Fluids 3 (1983) 249-264 (Richardson-extrapolated values).
+# Cross-checked against H. N. Dixit, V. Babu, Int. J. Heat Mass Transfer 49 (2006) 727-739, Table 3
+#   (which misprints u_max at Ra 1e3 as 3.469); mean Nu also in arXiv:physics/0305049, Table 1.
+# Velocities are scaled by alpha/L; positions by L. nu_mean: average Nusselt number over the cavity;
+#   nu_hot: average Nusselt number on the hot wall (Nu_0).
+ra,nu_mean,nu_hot,u_max,y_u_max,v_max,x_v_max
+1e3,1.118,1.117,3.649,0.813,3.697,0.178
+1e4,2.243,2.238,16.178,0.823,19.617,0.119
+1e5,4.519,4.509,34.73,0.855,68.59,0.066
+1e6,8.800,8.817,64.63,0.850,219.36,0.0379

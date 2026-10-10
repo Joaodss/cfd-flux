@@ -2,6 +2,7 @@ mod backend;
 mod bench;
 mod render;
 mod run;
+mod verify;
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -47,6 +48,8 @@ enum Command {
     },
     /// Run a scene headless: frames, PNGs, probe/force/diagnostic CSVs and metadata.
     Run(run::RunArgs),
+    /// Run the validation suite (analytical and benchmark cases) and write a report.
+    Verify(verify::VerifyArgs),
     /// Measure solver throughput (MLUPS) at several resolutions.
     Bench(bench::BenchArgs),
     /// Render the frames of a run directory as PNG sequences.
@@ -107,6 +110,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Run(args) => return run::run(args),
         Command::Bench(args) => bench::bench(args)?,
+        Command::Verify(args) => return verify::verify(args),
         Command::Render { dir, opts } => {
             render::render_dir(&dir, &opts)?;
         }

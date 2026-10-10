@@ -6,10 +6,10 @@ Stop after step 2 or 3 if the session gets long, with everything tested and comm
 | # | Task | Status |
 |---|------|--------|
 | 0 | Design proposal (CLI options, output layout, backend-agnostic cases) approved by the author | ✅ |
-| 1a | `cfd-io::image`: colour maps (viridis, inferno, coolwarm) and PNG encoding | ⏳ |
-| 1b | `cfd-cli run`: frames, `probes.csv`, `forces.csv`, `diagnostics.csv`, `meta.json`, clean abort on NaN | ⏳ |
-| 1c | `cfd-cli render`: PNG sequences with a fixed range per field (also called at the end of `run`) | ⏳ |
-| 2 | `cfd-cli bench`: MLUPS isothermal/thermal at several sizes; results in `docs/benchmarks.md` | ⏳ |
+| 1a | `cfd-io::image`: colour maps (viridis, inferno, coolwarm) and PNG encoding | ✅ |
+| 1b | `cfd-cli run`: frames, `probes.csv`, `forces.csv`, `diagnostics.csv`, `meta.json`, clean abort on NaN | ✅ |
+| 1c | `cfd-cli render`: PNG sequences with a fixed range per field (also called at the end of `run`) | ✅ |
+| 2 | `cfd-cli bench`: MLUPS isothermal/thermal at several sizes; results in `docs/benchmarks.md` | ✅ |
 | 3a | `cfd-verify` crate: harness (`SolverFactory`, steady state, error norms, orders), references with sources | ⏳ |
 | 3b | Cases: Taylor-Green, Poiseuille, Couette | ⏳ |
 | 3c | Cases: lid-driven cavity Re 100/400/1000 (Ghia 1982) | ⏳ |
