@@ -92,9 +92,10 @@ impl UnitSystem {
         q / (rho * cp * self.delta_t) * self.velocity_factor()
     }
 
-    /// Lattice force per unit depth → N/m (2D: force per metre of depth).
+    /// Lattice force per unit depth → N/m (2D: force per metre of depth). The lattice mass
+    /// unit is `ρ₀ dx³` and the force unit `ρ₀ dx⁴/dt²`; per metre of depth, `ρ₀ dx³/dt²`.
     pub fn force_to_physical(&self, f_lb: f64) -> f64 {
-        f_lb * self.rho0 * self.dx * self.dx / (self.dt * self.dt)
+        f_lb * self.rho0 * self.dx.powi(3) / (self.dt * self.dt)
     }
 
     /// Physical time (s) → number of steps, rounded to the nearest step (at least 1).
@@ -228,6 +229,18 @@ mod tests {
         ));
         assert_eq!(u.time_to_steps(1.0), 10_000);
         assert_eq!(u.time_to_steps(0.0), 1);
+    }
+
+    #[test]
+    fn force_per_depth_matches_a_stress_times_a_length() {
+        // A lattice pressure p_lb acting over L cells gives the force p_lb·L (lattice); in
+        // physical units that is (pressure in Pa) × (L dx in m).
+        let u = units();
+        let (p_lb, cells) = (2.5e-4, 40.0);
+        let pressure = p_lb * u.rho0 * (u.dx / u.dt).powi(2);
+        let expected = pressure * cells * u.dx;
+        let f = u.force_to_physical(p_lb * cells);
+        assert!((f / expected - 1.0).abs() < 1e-12, "{f} vs {expected}");
     }
 
     #[test]
