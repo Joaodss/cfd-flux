@@ -287,7 +287,7 @@ pub fn rayleigh_benard(h: u32, ra: f64, pr: f64) -> Scene {
 /// Probes `front` and `back` sit next to the cylinder at the benchmark's Δp points.
 pub fn schafer_turek(cells_per_diameter: u32, u_max: f64) -> Scene {
     assert!(
-        cells_per_diameter >= 10 && cells_per_diameter % 10 == 0,
+        cells_per_diameter >= 10 && cells_per_diameter.is_multiple_of(10),
         "cells per diameter must be a multiple of 10"
     );
     let dx = ST_DIAMETER / cells_per_diameter as f64;

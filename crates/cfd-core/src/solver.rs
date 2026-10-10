@@ -297,6 +297,38 @@ fn vorticity(domain: &Domain, lf: &LatticeFields) -> Vec<f32> {
     out
 }
 
+/// Macroscopic fields being copied from a device (see [`Solver::request_fields`]).
+pub trait PendingFields: Send {
+    /// Number of steps done when the copy was requested.
+    fn step(&self) -> u64;
+
+    /// The fields, if the copy has completed; never blocks. Returns `Some` at most once.
+    fn try_take(&mut self) -> Option<LatticeFields>;
+
+    /// Waits for the copy to complete.
+    fn wait(self: Box<Self>) -> LatticeFields;
+}
+
+/// A copy that completed immediately.
+pub struct ReadyFields {
+    pub step: u64,
+    pub fields: Option<LatticeFields>,
+}
+
+impl PendingFields for ReadyFields {
+    fn step(&self) -> u64 {
+        self.step
+    }
+
+    fn try_take(&mut self) -> Option<LatticeFields> {
+        self.fields.take()
+    }
+
+    fn wait(mut self: Box<Self>) -> LatticeFields {
+        self.fields.take().expect("fields already taken")
+    }
+}
+
 /// A simulation running on one backend.
 ///
 /// Construction is backend-specific (e.g. `CpuLbm::new(domain, config)`); code that picks a
@@ -310,7 +342,27 @@ pub trait Solver: Send {
     fn steps_done(&self) -> u64;
 
     /// Advances `n` steps. Fails if the solution stops being finite.
+    ///
+    /// Asynchronous backends (GPU) may return before the work is done; they report a
+    /// divergence at the latest on the next call to `step`, [`finish`](Self::finish),
+    /// [`diagnostics`](Self::diagnostics) or [`lattice_fields`](Self::lattice_fields).
     fn step(&mut self, n: u32) -> Result<(), SolverError>;
+
+    /// Waits until every queued step has been executed (a no-op for synchronous backends);
+    /// timed regions call it before reading the clock.
+    fn finish(&mut self) -> Result<(), SolverError> {
+        Ok(())
+    }
+
+    /// Starts copying the current macroscopic fields to the CPU and returns a handle to collect
+    /// them later, so that stepping can continue while the copy is in flight (in C# terms, a
+    /// `Task<LatticeFields>`). Synchronous backends return an already completed handle.
+    fn request_fields(&mut self) -> Box<dyn PendingFields> {
+        Box::new(ReadyFields {
+            step: self.steps_done(),
+            fields: Some(self.lattice_fields()),
+        })
+    }
 
     /// Re-initialises every cell to the equilibrium of the given lattice fields
     /// (used by validation cases with non-uniform initial conditions).
