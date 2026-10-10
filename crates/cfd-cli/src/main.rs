@@ -1,4 +1,5 @@
 mod backend;
+mod bench;
 mod render;
 mod run;
 
@@ -46,6 +47,8 @@ enum Command {
     },
     /// Run a scene headless: frames, PNGs, probe/force/diagnostic CSVs and metadata.
     Run(run::RunArgs),
+    /// Measure solver throughput (MLUPS) at several resolutions.
+    Bench(bench::BenchArgs),
     /// Render the frames of a run directory as PNG sequences.
     Render {
         /// Directory written by `cfd-cli run`.
@@ -103,6 +106,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         }
         Command::Run(args) => return run::run(args),
+        Command::Bench(args) => bench::bench(args)?,
         Command::Render { dir, opts } => {
             render::render_dir(&dir, &opts)?;
         }

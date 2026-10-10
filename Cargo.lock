@@ -84,6 +84,7 @@ dependencies = [
  "cfd-core",
  "cfd-io",
  "cfd-lbm",
+ "cfd-verify",
  "clap",
  "rayon",
  "serde",
@@ -142,6 +143,18 @@ version = "0.1.0"
 dependencies = [
  "cfd-core",
  "cfd-io",
+]
+
+[[package]]
+name = "cfd-verify"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cfd-core",
+ "cfd-io",
+ "cfd-lbm",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
