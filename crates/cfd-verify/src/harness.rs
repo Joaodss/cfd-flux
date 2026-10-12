@@ -85,6 +85,10 @@ impl Run {
                 .map_err(|e| anyhow!("{}: {e}", self.stat.label))?;
             left -= chunk;
         }
+        // Asynchronous backends: the run is only timed once the queued steps are done.
+        self.solver
+            .finish()
+            .map_err(|e| anyhow!("{}: {e}", self.stat.label))?;
         self.stat.steps += n;
         self.stat.seconds += t.elapsed().as_secs_f64();
         Ok(())

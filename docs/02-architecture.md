@@ -50,8 +50,8 @@ Initially **server and worker run in the same process** (tokio tasks + a dedicat
 
 ### 2.4 Simulation core — `cfd-core` and solvers
 - `cfd-core`: shared types (Scene, `Domain`, units and physical ↔ lattice conversion, the `Solver` trait, sampling to physical fields).
-- `cfd-lbm`: LBM D2Q9 (+ D2Q5 thermal), CPU backend (`CpuLbm`).
-- `cfd-gpu`: `wgpu` setup, buffer management, compute pipelines, WGSL shaders.
+- `cfd-lbm`: LBM D2Q9 (+ D2Q5 thermal), CPU backend (`CpuLbm`, the numerical reference), and the pieces every LBM backend shares (`shared`: initial state, equilibrium populations, bounce-back links and force summation).
+- `cfd-gpu`: wgpu backend (`WgpuLbm`): adapter selection (`GpuContext`), buffers and bind groups with the CPU layout, WGSL shaders with a prelude generated from the Rust constants ([ADR-019](07-decisions-and-questions.md)).
 - `cfd-cuda`: CUDA backend (`cudarc` + NVRTC kernels) behind the `cuda` feature.
 - Common interface (`crates/cfd-core/src/solver.rs`), implemented directly by each backend type ([ADR-017](07-decisions-and-questions.md)):
 
@@ -60,9 +60,11 @@ pub trait Solver: Send {
     fn backend(&self) -> BackendKind;
     fn domain(&self) -> &Domain;
     fn steps_done(&self) -> u64;
-    fn step(&mut self, n: u32) -> Result<(), SolverError>;                 // advance n steps; fails on NaN/Inf
+    fn step(&mut self, n: u32) -> Result<(), SolverError>;                 // advance n steps; fails on NaN/Inf (GPU: may return before the work is done)
+    fn finish(&mut self) -> Result<(), SolverError> { … }                  // wait for queued steps (no-op on the CPU)
     fn set_equilibrium(&mut self, f: &LatticeFields) -> Result<(), SolverError>; // custom initial fields
     fn lattice_fields(&mut self) -> LatticeFields;                         // copy ρ, u, θ to the CPU
+    fn request_fields(&mut self) -> Box<dyn PendingFields> { … }          // the same copy, collected later (ADR-020)
     fn diagnostics(&mut self) -> Diagnostics;                              // mass, energy, max velocity, NaN check
     fn forces(&mut self) -> Vec<ElementForce>;                             // momentum exchange per element
     fn sample(&mut self, req: &SampleRequest) -> FieldSet { … }            // physical fields (shared code)
@@ -70,7 +72,7 @@ pub trait Solver: Send {
 }
 ```
 
-Construction is backend-specific (`CpuLbm::new(domain, config)`); code that picks a backend at runtime holds a `Box<dyn Solver>`. Interactive updates (`update_boundaries`, ADR-011) are added in Phase 5b.
+Construction is backend-specific (`CpuLbm::new(domain, config)`, `WgpuLbm::new(gpu_context, domain, config)`); code that picks a backend at runtime holds a `Box<dyn Solver>`. Interactive updates (`update_boundaries`, ADR-011) are added in Phase 5b.
 
 ### 2.5 CLI — `crates/cfd-cli`
 Runs scenes from files without a server: essential for development, benchmarks and validation tests (`cfd-cli run scene.json --backend cuda --out out/`).

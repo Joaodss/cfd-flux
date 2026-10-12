@@ -4,7 +4,7 @@
 
 | Tool | Version | Used for |
 |------|---------|----------|
-| Rust (rustup) | ≥ 1.85 (tested with 1.90) | `crates/` workspace |
+| Rust (rustup) | ≥ 1.87 (wgpu 30; tested with 1.99) | `crates/` workspace |
 | Node.js | ≥ 22 (tested with 24) | `apps/web` |
 | CUDA Toolkit | 13.x (tested with 13.4) *(used from Phase 2b)* | `cfd-cuda` backend (NVRTC) |
 
@@ -62,14 +62,17 @@ cd apps/web && npm run gen:types
 # Check scene files
 cargo run -p cfd-cli -- validate scenes/*.json
 
-# Run a scene headless (frames, PNGs, CSV series, meta.json); re-render PNGs with other ranges
+# Run a scene headless (frames, PNGs, CSV series, meta.json); re-render PNGs with other ranges.
+# --backend auto (default) uses a hardware GPU through wgpu when there is one, else the CPU.
 cargo run --release -p cfd-cli -- run scenes/cylinder-re100.json --out out/cyl --end-time 12 --output-interval 0.05
 cargo run --release -p cfd-cli -- render out/cyl --range vorticity=-50:50
 
 # Performance (results go to docs/benchmarks.md) and physics validation (docs/08-validation-guide.md)
-cargo run --release -p cfd-cli -- bench --threads 8
-cargo run --release -p cfd-cli -- verify --quick            # CI subset, ~1 min
-cargo run --release -p cfd-cli -- verify --full             # writes validation/report/ (commit it)
+cargo run --release -p cfd-cli -- bench --backend cpu --threads 8
+cargo run --release -p cfd-cli -- bench --backend wgpu --sizes 256,512,1024,2048,4000
+cargo run --release -p cfd-cli -- verify --quick --backend cpu   # CI subset, ~20 s
+cargo run --release -p cfd-cli -- verify --full --backend cpu    # writes validation/report/ (commit it)
+cargo run --release -p cfd-cli -- verify --full --backend wgpu   # writes validation/report-wgpu/ (commit it)
 cargo run --release -p cfd-cli -- verify --cases cavity --no-report
 
 # Web (in apps/web)
@@ -78,6 +81,20 @@ npm run dev          # development server
 npm test             # Vitest (checks scenes/ against the JSON Schema)
 npm run typecheck && npm run lint && npm run format:check && npm run build
 ```
+
+## GPU (wgpu) backend
+
+- `cargo test --workspace` runs the CPU ↔ wgpu parity tests (`crates/cfd-gpu/tests/parity.rs`) on the best adapter
+  it finds, software ones included; without any adapter they print `skipping` and pass. Set `CFD_REQUIRE_GPU=1` to
+  make them fail instead (CI does).
+- Software adapters: **WARP** (DX12) ships with Windows; on Linux install Mesa's **lavapipe**
+  (`sudo apt-get install mesa-vulkan-drivers`). `--backend auto` never picks them (slower than the CPU backend);
+  `--backend wgpu --allow-software` does.
+- Choosing an adapter: `CFD_WGPU_ADAPTER=<part of the name>` (e.g. `"basic render"` for WARP), and wgpu's own
+  `WGPU_BACKEND=vulkan|dx12`. The chosen adapter is printed by `run`/`bench`/`verify` and stored in `meta.json`
+  and the reports.
+- The shaders are in `crates/cfd-gpu/shaders/`; constants shared with the CPU are generated into a WGSL prelude
+  (`crates/cfd-gpu/src/prelude.rs`). naga validates every shader in `cargo test`, with or without a GPU.
 
 ## Conventions
 

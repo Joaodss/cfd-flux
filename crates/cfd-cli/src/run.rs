@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use anyhow::{bail, Context, Result};
 use cfd_core::domain::Domain;
 use cfd_core::scene::OutputField;
-use cfd_core::solver::{Diagnostics, SampleRequest, Solver, SolverError};
+use cfd_core::solver::{Diagnostics, FieldSet, PendingFields, SampleRequest, Solver, SolverError};
 use cfd_core::units::DEFAULT_LATTICE_VELOCITY;
 use cfd_core::validate::Severity;
 use cfd_core::{DomainOptions, Scene};
@@ -125,6 +125,8 @@ struct Meta {
 #[serde(rename_all = "camelCase")]
 struct SolverMeta {
     backend: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device: Option<String>,
     method: &'static str,
     lattices: Vec<&'static str>,
     collision: &'static str,
@@ -388,6 +390,44 @@ impl Series {
 
 // ---- the run -----------------------------------------------------------------------------
 
+/// Converts copied lattice fields into a frame file.
+struct FrameWriter {
+    dir: PathBuf,
+    job_id: String,
+    req: SampleRequest,
+    dtype: Dtype,
+}
+
+impl FrameWriter {
+    fn write(&self, domain: &Domain, index: u32, pending: Box<dyn PendingFields>) -> Result<()> {
+        let step = pending.step();
+        let fs = FieldSet::from_lattice(domain, &pending.wait(), step, &self.req);
+        let frame = Frame {
+            job_id: self.job_id.clone(),
+            frame_index: index,
+            step: fs.step,
+            sim_time: fs.time,
+            width: fs.width,
+            height: fs.height,
+            fields: fs
+                .fields
+                .into_iter()
+                .map(|f| Field {
+                    desc: FieldDesc {
+                        name: output_field_name(f.field).into(),
+                        components: f.components,
+                        dtype: self.dtype,
+                    },
+                    values: f.values,
+                })
+                .collect(),
+        };
+        let path = self.dir.join(format!("{index:06}.bin"));
+        std::fs::write(&path, frame.encode()?)
+            .with_context(|| format!("cannot write {}", path.display()))
+    }
+}
+
 fn prepare_out_dir(dir: &Path, force: bool) -> Result<()> {
     if dir.exists() {
         let non_empty = std::fs::read_dir(dir)?.next().is_some();
@@ -498,7 +538,7 @@ pub fn run(args: RunArgs) -> Result<ExitCode> {
         n.reynolds,
         n.mach,
         domain.physics.tau(),
-        choice.backend,
+        choice.describe(),
         choice.collision,
         choice.threads
     );
@@ -508,6 +548,7 @@ pub fn run(args: RunArgs) -> Result<ExitCode> {
         scene: scene.name.clone(),
         solver: SolverMeta {
             backend: choice.backend,
+            device: choice.device.clone(),
             method: "lbm",
             lattices: if thermal {
                 vec!["D2Q9", "D2Q5"]
@@ -603,6 +644,13 @@ pub fn run(args: RunArgs) -> Result<ExitCode> {
     let (mut solver_time, mut output_time) = (Duration::ZERO, Duration::ZERO);
     let mut last_report = Instant::now();
     let mut failure: Option<String> = None;
+    let writer = FrameWriter {
+        dir: out.join("frames"),
+        job_id,
+        req,
+        dtype,
+    };
+    let mut pending: Option<(u32, Box<dyn PendingFields>)> = None;
 
     loop {
         let step = solver.steps_done();
@@ -621,44 +669,35 @@ pub fn run(args: RunArgs) -> Result<ExitCode> {
         }
         if step >= next_output {
             if !args.no_frames {
-                let fs = solver.sample(&req);
-                let frame = Frame {
-                    job_id: job_id.clone(),
-                    frame_index,
-                    step: fs.step,
-                    sim_time: fs.time,
-                    width: fs.width,
-                    height: fs.height,
-                    fields: fs
-                        .fields
-                        .into_iter()
-                        .map(|f| Field {
-                            desc: FieldDesc {
-                                name: output_field_name(f.field).into(),
-                                components: f.components,
-                                dtype,
-                            },
-                            values: f.values,
-                        })
-                        .collect(),
-                };
-                let path = out.join("frames").join(format!("{frame_index:06}.bin"));
-                std::fs::write(&path, frame.encode()?)
-                    .with_context(|| format!("cannot write {}", path.display()))?;
+                // Only start the copy here: the frame is converted and written while the next
+                // steps run (on asynchronous backends; the CPU backend copies immediately).
+                pending = Some((frame_index, solver.request_fields()));
             }
             frame_index += 1;
             next_output += output_every;
         }
         output_time += t0.elapsed();
         if step >= total {
+            if let Some((index, p)) = pending.take() {
+                writer.write(solver.domain(), index, p)?;
+            }
             break;
         }
 
         let target = next_sample.min(next_output).min(total);
         let chunk = (target - step).min(u32::MAX as u64) as u32;
         let t1 = Instant::now();
-        let result = solver.step(chunk);
+        let mut result = solver.step(chunk);
         solver_time += t1.elapsed();
+        if let Some((index, p)) = pending.take() {
+            let t = Instant::now();
+            writer.write(solver.domain(), index, p)?;
+            output_time += t.elapsed();
+        }
+        // GPU time hidden behind the frame output above is not counted as solver time.
+        let t2 = Instant::now();
+        result = result.and_then(|_| solver.finish());
+        solver_time += t2.elapsed();
         match result {
             Ok(()) => {}
             Err(SolverError::NonFinite { step }) => {

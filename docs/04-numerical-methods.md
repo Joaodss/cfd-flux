@@ -52,12 +52,17 @@ Given `dx` (= `cellSize`), a characteristic physical velocity `U` and viscosity 
 
 **As implemented (CPU, Phase 1):** `f` (9 × 2 buffers) + `g` (5 × 2, thermal only) + ρ, u, θ + flags and BC slot ≈ 100 B/cell isothermal, 140 B/cell thermal. Measured ≈ 120 MLUPS isothermal and ≈ 75 MLUPS thermal on 16 threads (no explicit SIMD yet).
 
+**As implemented (wgpu, Phase 2a):** the same arrays plus one 4-plane buffer for ρ, ux, uy, θ: ≈ 100 B/cell isothermal, ≈ 140 B/cell thermal (4000² thermal ≈ 2.2 GB). An update moves ≈ 86 B (isothermal) / 130 B (thermal); measured 2,850 / 1,850 MLUPS on an RTX 4060, ≈ 90% of its memory bandwidth ([benchmarks](benchmarks.md)).
+
 ### 3.5 Implementation notes (shared by every backend)
 - SoA populations `f[i·n + cell]`, pull scheme, ping-pong buffers; one fused kernel per step also writes ρ, u (with the `F/2` correction) and θ.
 - **Shifted populations** `f̃ᵢ = fᵢ − wᵢ` in f32, and rest populations computed as the remainder (`f̃₀ = Δρ − Σ`, `g₀ = θ − Σ`), which conserves mass and heat by construction ([ADR-015](07-decisions-and-questions.md)).
 - TRT with Guo forcing split into symmetric/antisymmetric parts, each scaled by its own `(1 − ω±/2)`; BGK is the special case `ω⁺ = ω⁻`.
 - Only Boussinesq buoyancy is applied as a force; the hydrostatic pressure is added at sampling time ([ADR-016](07-decisions-and-questions.md)).
 - Forces on elements: momentum exchange over bounce-back links, `F = Σ c_ī (2 f̃*_ī + 6 wᵢ ρ₀ cᵢ·u_w)` with the shifted population `f̃ = f − w`: this removes the reference pressure ρ₀c_s², so forces are gauge like every other output (it cancels on closed bodies anyway).
+- The initial populations, relaxation rates and the list of bounce-back links come from shared code (`cfd_lbm::shared`). The GPU gathers the outgoing population of every link and the CPU sums the forces in f64 in the CPU backend's order; diagnostics are reduced per workgroup on the GPU (Σ(ρ − 1) rather than Σρ, to keep f32 partial sums accurate) and finished in f64.
+- Divergence (NaN/Inf) checks on the GPU test values *loaded* from memory (the populations): compilers may assume arithmetic results are finite and fold a check on them away ([ADR-019](07-decisions-and-questions.md)).
+- Parity with the CPU (§7) is measured on ρ in absolute terms and on u and θ relative to the field maximum; both velocity components share the scale (a component that is zero up to round-off must not set it). Measured on the RTX 4060: ≤ 3e-6.
 
 ## 4. Heat transfer
 

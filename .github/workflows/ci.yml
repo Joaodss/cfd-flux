@@ -22,11 +22,19 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # Software GPU adapters for the wgpu parity tests: lavapipe (Vulkan, Mesa) on Linux; Windows
+      # runners already have WARP (DX12).
+      - name: Install lavapipe
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      # Includes the checks that schema/ and scenes/ match the Rust code.
+      # Includes the checks that schema/ and scenes/ match the Rust code, and the CPU <-> wgpu
+      # parity tests (CFD_REQUIRE_GPU: fail rather than skip when no adapter is found).
       # The CUDA backend is not built here (no `cuda` feature): CI has no NVIDIA GPU.
       - run: cargo test --workspace
+        env:
+          CFD_REQUIRE_GPU: "1"
 
   verify:
     name: Validation suite (quick)
@@ -37,12 +45,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       # Physics validation on the CPU backend at reduced resolution (docs/08-validation-guide.md);
       # fails if any case is outside its tolerance. The full suite runs locally (`--full`).
-      - run: cargo run --release -p cfd-cli -- verify --quick --report target/verify-report
+      - run: cargo run --release -p cfd-cli -- verify --quick --backend cpu --report target/verify-report
+      # The same subset on the wgpu backend, on lavapipe (a software Vulkan adapter).
+      - name: Install lavapipe
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+      - run: cargo run --release -p cfd-cli -- verify --quick --backend wgpu --allow-software --report target/verify-report-wgpu
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: verify-report
-          path: target/verify-report
+          path: |
+            target/verify-report
+            target/verify-report-wgpu
 
   web:
     name: Web

@@ -4,6 +4,8 @@
 //! - [`config`]: collision operator (BGK or TRT, the default).
 //! - [`CpuLbm`]: the CPU backend of the [`cfd_core::Solver`] trait: fused stream-collide
 //!   (pull, ping-pong, SoA), link-wise boundaries, Guo forcing, Boussinesq coupling.
+//! - [`shared`]: initial state, equilibrium populations, relaxation rates and momentum-exchange
+//!   bookkeeping, used unchanged by the GPU backends.
 //!
 //! This backend is the numerical reference that the GPU backends are tested against; the
 //! memory layout is documented in `kernel.rs` and must stay identical in WGSL and CUDA.
@@ -12,6 +14,7 @@ pub mod config;
 mod cpu;
 mod kernel;
 pub mod lattice;
+pub mod shared;
 
 pub use config::{Collision, LbmConfig};
 pub use cpu::CpuLbm;

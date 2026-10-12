@@ -8,7 +8,16 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+bytemuck.workspace = true
 cfd-core.workspace = true
+cfd-lbm.workspace = true
+pollster.workspace = true
+thiserror.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+cfd-verify.workspace = true
+naga.workspace = true
 
 [lints]
 workspace = true

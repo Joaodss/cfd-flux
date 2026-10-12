@@ -1,16 +1,17 @@
 //! CPU backend: the numerical reference, parallelised over blocks of rows with `rayon`.
 
-use std::collections::BTreeMap;
-
-use cfd_core::domain::{flags, Domain, LINKS, OPPOSITE};
+use cfd_core::domain::{flags, Domain};
 use cfd_core::solver::{
     BackendKind, Diagnostics, ElementForce, LatticeFields, Solver, SolverError,
 };
 use rayon::prelude::*;
 
-use crate::config::{flow_rates, thermal_rates, LbmConfig};
-use crate::kernel::{equilibrium, thermal_equilibrium, update_block, Block, Source, StepParams};
-use crate::lattice::W9;
+use crate::config::LbmConfig;
+use crate::kernel::{update_block, Block, Source, StepParams};
+use crate::shared::{
+    equilibrium_populations, initial_fields, outgoing_index, relaxation_rates, wall_forces,
+    wall_links, WallLink,
+};
 
 pub struct CpuLbm {
     domain: Domain,
@@ -27,8 +28,8 @@ pub struct CpuLbm {
     uy: Vec<f32>,
     theta: Vec<f32>,
     steps: u64,
-    /// Fluid cells with at least one boundary link (for forces).
-    boundary_cells: Vec<usize>,
+    /// Bounce-back links, for momentum-exchange forces.
+    links: Vec<WallLink>,
 }
 
 impl CpuLbm {
@@ -36,12 +37,7 @@ impl CpuLbm {
     pub fn new(domain: Domain, config: LbmConfig) -> Self {
         let n = domain.cell_count();
         let thermal = domain.physics.thermal();
-        let omega = flow_rates(config.collision, domain.physics.tau()).map(|v| v as f32);
-        let omega_g = domain
-            .physics
-            .tau_thermal()
-            .map_or([1.0; 2], |tau| thermal_rates(config.collision, tau))
-            .map(|v| v as f32);
+        let (omega, omega_g) = relaxation_rates(&domain, config);
         let params = StepParams {
             w: domain.width as usize,
             h: domain.height as usize,
@@ -52,12 +48,7 @@ impl CpuLbm {
             body_force: domain.physics.body_force.map(|v| v as f32),
             buoyancy: domain.physics.buoyancy.map(|v| v as f32),
         };
-        let boundary_cells = (0..n)
-            .filter(|&i| {
-                let fl = domain.flags[i];
-                flags::flow(fl) == flags::FLUID && fl & flags::LINK_MASK != 0
-            })
-            .collect();
+        let links = wall_links(&domain);
         let g_len = if thermal { 5 * n } else { 0 };
         let mut solver = CpuLbm {
             config,
@@ -71,15 +62,10 @@ impl CpuLbm {
             uy: vec![0.0; n],
             theta: vec![0.0; n],
             steps: 0,
-            boundary_cells,
+            links,
             domain,
         };
-        let mut initial = LatticeFields::initial(&solver.domain);
-        for i in 0..n {
-            if flags::flow(solver.domain.flags[i]) != flags::FLUID {
-                (initial.density[i], initial.ux[i], initial.uy[i]) = (1.0, 0.0, 0.0);
-            }
-        }
+        let initial = initial_fields(&solver.domain);
         solver
             .set_equilibrium(&initial)
             .expect("initial fields match the domain");
@@ -190,17 +176,13 @@ impl Solver for CpuLbm {
     fn set_equilibrium(&mut self, fields: &LatticeFields) -> Result<(), SolverError> {
         let n = self.params.n;
         fields.check_len(n)?;
-        for c in 0..n {
-            let (rho, u) = (fields.density[c], [fields.ux[c], fields.uy[c]]);
-            for (i, v) in equilibrium(rho, u).into_iter().enumerate() {
-                self.f[i * n + c] = v;
-            }
-            if !self.g.is_empty() {
-                let theta = fields.theta.as_ref().map_or(0.0, |t| t[c]);
-                for (i, v) in thermal_equilibrium(theta, u).into_iter().enumerate() {
-                    self.g[i * n + c] = v;
-                }
-                self.theta[c] = theta;
+        let thermal = !self.g.is_empty();
+        (self.f, self.g) = equilibrium_populations(fields, thermal);
+        if thermal {
+            if let Some(t) = &fields.theta {
+                self.theta.copy_from_slice(t);
+            } else {
+                self.theta.fill(0.0);
             }
         }
         self.rho.copy_from_slice(&fields.density);
@@ -279,48 +261,12 @@ impl Solver for CpuLbm {
     }
 
     fn forces(&mut self) -> Vec<ElementForce> {
-        // Momentum exchange over every link to a bounce-back cell: the population f*_ī leaving
-        // the fluid cell towards the wall returns as f_i = f*_ī + 6 wᵢ cᵢ·u_w, so the wall
-        // receives c_ī (2 f*_ī + 6 wᵢ cᵢ·u_w) per step. Using the shifted population
-        // f̃*_ī = f*_ī − w_ī removes the reference pressure ρ₀ c_s² (which cancels on closed
-        // bodies), so open elements such as inlets and single walls report gauge forces.
-        let p = &self.params;
-        let d = &self.domain;
-        let mut acc: BTreeMap<u16, [f64; 2]> = BTreeMap::new();
-        for &k in &self.boundary_cells {
-            let fl = d.flags[k];
-            let (x, y) = (k % p.w, k / p.w);
-            for i in 1..9 {
-                if !flags::is_boundary_link(fl, i) {
-                    continue;
-                }
-                let [cx, cy] = LINKS[i];
-                let sx = x as i64 - cx as i64;
-                let sy = y as i64 - cy as i64;
-                let inside = |v: i64, len: usize| (0..len as i64).contains(&v);
-                let (flow, slot) =
-                    if (inside(sx, p.w) || p.periodic[0]) && (inside(sy, p.h) || p.periodic[1]) {
-                        let src = sy.rem_euclid(p.h as i64) as usize * p.w
-                            + sx.rem_euclid(p.w as i64) as usize;
-                        (flags::flow(d.flags[src]), d.bc_slot[src] as usize)
-                    } else {
-                        (flags::BOUNCE_BACK, 0)
-                    };
-                if flow != flags::BOUNCE_BACK {
-                    continue;
-                }
-                let o = OPPOSITE[i];
-                let out = self.f[o * p.n + k] as f64;
-                let uw = d.bc_params[slot].velocity;
-                let cu = (cx as f32 * uw[0] + cy as f32 * uw[1]) as f64;
-                let m = 2.0 * out + 6.0 * W9[i] as f64 * cu;
-                let e = acc.entry(d.slot_element[slot]).or_default();
-                e[0] -= cx as f64 * m;
-                e[1] -= cy as f64 * m;
-            }
-        }
-        acc.into_iter()
-            .map(|(element, lattice)| ElementForce { element, lattice })
-            .collect()
+        let n = self.params.n;
+        let outgoing: Vec<f32> = self
+            .links
+            .iter()
+            .map(|l| self.f[outgoing_index(l, n)])
+            .collect();
+        wall_forces(&self.domain, &self.links, &outgoing)
     }
 }
