@@ -36,11 +36,16 @@ mod tests {
     use super::*;
     use crate::{compile, CudaError, Target};
 
+    /// `CFD_REQUIRE_NVRTC=1` (CI, NVRTC without a GPU) or `CFD_REQUIRE_CUDA=1`: fail instead of skip.
+    fn nvrtc_required() -> bool {
+        ["CFD_REQUIRE_NVRTC", "CFD_REQUIRE_CUDA"]
+            .iter()
+            .any(|v| std::env::var_os(v).is_some())
+    }
+
     fn compiles(src: &str) -> Option<Result<Vec<u8>, CudaError>> {
         match compile(Target::Cubin(75), "test.cu", src, OPTIONS) {
-            Err(e @ CudaError::NoNvrtc { .. })
-                if std::env::var_os("CFD_REQUIRE_CUDA").is_none() =>
-            {
+            Err(e @ CudaError::NoNvrtc { .. }) if !nvrtc_required() => {
                 eprintln!("skipping: {e}");
                 None
             }

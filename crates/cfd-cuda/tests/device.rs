@@ -1,5 +1,6 @@
 //! Device discovery and NVRTC. The tests that need an NVIDIA GPU (or NVRTC) print `skipping`
-//! without one; `CFD_REQUIRE_CUDA=1` makes them fail instead.
+//! without one; `CFD_REQUIRE_CUDA=1` makes them fail instead (`CFD_REQUIRE_NVRTC=1` only for the
+//! tests that need NVRTC but no GPU).
 #![cfg(feature = "cuda")]
 
 use cfd_cuda::{compile, CudaDevice, CudaError, CudaOptions, Target};
@@ -51,7 +52,11 @@ fn a_missing_device_is_a_clear_error() {
 fn nvrtc_builds_cubin_and_ptx_without_a_gpu() {
     let cubin = match compile(Target::Cubin(75), "scale.cu", KERNEL, &[]) {
         Ok(c) => c,
-        Err(e @ CudaError::NoNvrtc { .. }) if !required() => return eprintln!("skipping: {e}"),
+        Err(e @ CudaError::NoNvrtc { .. })
+            if !required() && std::env::var_os("CFD_REQUIRE_NVRTC").is_none() =>
+        {
+            return eprintln!("skipping: {e}")
+        }
         Err(e) => panic!("{e}"),
     };
     assert_eq!(&cubin[..4], b"\x7fELF", "a cubin is an ELF image");

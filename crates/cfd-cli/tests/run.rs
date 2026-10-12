@@ -263,7 +263,13 @@ fn cuda_available() -> Result<(), String> {
 fn auto_falls_back_from_cuda_to_wgpu_to_cpu() {
     let hardware_wgpu = cfd_gpu::adapters().iter().any(|a| !cfd_gpu::is_software(a));
     let without_cuda = if hardware_wgpu { "wgpu" } else { "cpu" };
-    let cases: [(&str, &[(&str, &str)], &str); 3] = [
+    // (name, environment, expected backend)
+    type Case = (
+        &'static str,
+        &'static [(&'static str, &'static str)],
+        &'static str,
+    );
+    let cases: [Case; 3] = [
         (
             "all",
             &[],

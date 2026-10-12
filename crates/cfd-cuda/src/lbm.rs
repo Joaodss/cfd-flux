@@ -19,7 +19,9 @@
 //! solver's compute stream (≈ a few µs of CPU time). `step(n)` queues the steps in batches of up to
 //! `MAX_BATCH`, each followed by a 4-byte copy of the status word into pinned memory and an event;
 //! the CPU waits only when more than `MAX_IN_FLIGHT` batches are queued, and checks each batch's
-//! status word when its event has fired (ADR-020, as in the wgpu backend).
+//! status word when its event has fired (ADR-020, as in the wgpu backend). Within a batch, steps
+//! are replayed from a CUDA graph of `graph_steps` steps (see `raw::StepGraph`), which cuts the CPU
+//! cost per step from ≈ 8 µs (one launch) to ≈ 0.6 µs.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -44,6 +46,8 @@ use crate::{CudaDevice, CudaError};
 
 /// Default threads per block of the stream-collide kernel.
 pub const DEFAULT_BLOCK: u32 = 128;
+/// Default number of steps per CUDA graph (see `raw::StepGraph`).
+pub const DEFAULT_GRAPH_STEPS: u32 = 50;
 /// Maximum number of blocks of the diagnostics reduction.
 const MAX_REDUCE_BLOCKS: u32 = 1024;
 /// Steps queued between two status checks.
@@ -69,6 +73,8 @@ pub struct CudaLbmOptions {
     /// Let the compiler fuse multiply-adds (`--fmad=true`). Off by default: every operation then
     /// rounds as in the CPU reference.
     pub fmad: bool,
+    /// Steps replayed per CUDA graph launch (an even number; 0 launches every step on its own).
+    pub graph_steps: u32,
 }
 
 impl Default for CudaLbmOptions {
@@ -76,6 +82,7 @@ impl Default for CudaLbmOptions {
         Self {
             block: DEFAULT_BLOCK,
             fmad: false,
+            graph_steps: DEFAULT_GRAPH_STEPS,
         }
     }
 }
@@ -125,6 +132,12 @@ impl CudaLbm {
         config: LbmConfig,
         options: CudaLbmOptions,
     ) -> Result<Self, CudaError> {
+        if !options.graph_steps.is_multiple_of(2) {
+            return Err(CudaError::Driver(format!(
+                "graph_steps must be even (got {})",
+                options.graph_steps
+            )));
+        }
         if !(1..=1024).contains(&options.block) {
             return Err(CudaError::Driver(format!(
                 "block size {} is not supported (1–1024)",
@@ -223,18 +236,34 @@ impl CudaLbm {
         self.stream.memcpy_htod(&mac, &mut self.lattice.mac_mut())
     }
 
-    /// Queues `steps` steps, then a copy of the status word and an event.
+    /// Queues `steps` steps, then a copy of the status word and an event. Whole graphs are
+    /// replayed while the populations are in `f[0]`; single launches do the rest.
     fn submit_batch(&mut self, steps: u32) -> Result<(), DriverError> {
-        for _ in 0..steps {
-            let parity = (self.steps % 2) as usize;
-            self.lattice.stream_collide(
-                &self.kernels,
-                &self.stream,
-                self.options.block,
-                &self.params,
-                parity,
-            )?;
-            self.steps += 1;
+        let graph = self.options.graph_steps;
+        let mut left = steps;
+        while left > 0 {
+            if graph > 0 && left >= graph && self.steps.is_multiple_of(2) {
+                self.lattice.replay_steps(
+                    &self.kernels,
+                    &self.stream,
+                    self.options.block,
+                    &self.params,
+                    graph,
+                )?;
+                self.steps += graph as u64;
+                left -= graph;
+            } else {
+                let parity = (self.steps % 2) as usize;
+                self.lattice.stream_collide(
+                    &self.kernels,
+                    &self.stream,
+                    self.options.block,
+                    &self.params,
+                    parity,
+                )?;
+                self.steps += 1;
+                left -= 1;
+            }
         }
         let mut status = match self.status_pool.pop() {
             Some(s) => s,

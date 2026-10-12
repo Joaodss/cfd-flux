@@ -29,7 +29,7 @@ pub use device::{
     choose_target, compile, CudaDevice, CudaOptions, Target, DEVICE_ENV, MIN_DRIVER_VERSION,
 };
 #[cfg(feature = "cuda")]
-pub use lbm::{CudaLbm, CudaLbmOptions, DEFAULT_BLOCK};
+pub use lbm::{CudaLbm, CudaLbmOptions, DEFAULT_BLOCK, DEFAULT_GRAPH_STEPS};
 
 /// Errors of the CUDA backend.
 #[derive(Debug, thiserror::Error)]

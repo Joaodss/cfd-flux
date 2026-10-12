@@ -15,8 +15,8 @@ use std::sync::Arc;
 use cfd_lbm::abi::KernelParams;
 use cudarc::driver::sys as driver_sys;
 use cudarc::driver::{
-    CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, CudaViewMut, DeviceRepr,
-    DriverError, LaunchConfig, PinnedHostSlice, PushKernelArg,
+    CudaContext, CudaFunction, CudaGraph, CudaModule, CudaSlice, CudaStream, CudaViewMut,
+    DeviceRepr, DriverError, LaunchConfig, PinnedHostSlice, PushKernelArg,
 };
 use cudarc::nvrtc::{result as nvrtc, sys as nvrtc_sys};
 
@@ -278,6 +278,26 @@ pub(crate) struct LatticeInit<'a> {
     pub blocks: u32,
 }
 
+/// A captured sequence of steps, replayed with a single launch.
+///
+/// Launching a kernel costs ≈ 9 µs of CPU time on Windows (WDDM), more than a step takes on a
+/// 256² grid, so the GPU would wait for the CPU. A CUDA graph is recorded once by *capturing* the
+/// launches queued on a stream (they are not executed then) and replayed with one call — the
+/// counterpart of a recorded wgpu command buffer. The graph keeps the kernel arguments it was
+/// captured with: the buffer pointers (stable for the lifetime of the `Lattice` that owns it) and
+/// the parameters by value (so a parameter change needs a new capture).
+struct StepGraph {
+    graph: CudaGraph,
+    steps: u32,
+    params: KernelParams,
+    block: u32,
+}
+
+// SAFETY: a CUDA graph may be used from any thread as long as calls on one graph are serialised
+// (CUDA's graph thread-safety rules). A `StepGraph` is only reachable through `&mut Lattice`, so
+// calls on it never overlap; moving it to another thread with its solver is therefore sound.
+unsafe impl Send for StepGraph {}
+
 /// The device buffers of one solver, in the layout of the CPU backend (see `lbm.rs`).
 ///
 /// The buffers that hold indices (flags, slots, links) are private and never change after
@@ -285,6 +305,8 @@ pub(crate) struct LatticeInit<'a> {
 /// macroscopic buffers can be read and overwritten through views, but not replaced (their
 /// lengths are fixed).
 pub(crate) struct Lattice {
+    /// Declared first, so it is dropped before the buffers its kernels point to.
+    graph: Option<StepGraph>,
     n: usize,
     thermal: bool,
     flags: CudaSlice<u16>,
@@ -329,6 +351,7 @@ impl Lattice {
             init.links
         };
         Ok(Self {
+            graph: None,
             n,
             thermal: init.thermal,
             flags: stream.clone_htod(init.flags)?,
@@ -422,6 +445,65 @@ impl Lattice {
         // buffers (the borrow checker guarantees it), and the launch is queued on the solver's
         // compute stream after all earlier work on these buffers.
         unsafe { launch.launch(cfg) }.map(|_| ())
+    }
+
+    /// `steps` stream-collide steps (an even number, starting from `f[0]`, so they end in `f[0]`)
+    /// replayed from a CUDA graph, captured on first use and again whenever the parameters, the
+    /// block size or the number of steps change.
+    pub fn replay_steps(
+        &mut self,
+        k: &Kernels,
+        stream: &Arc<CudaStream>,
+        block: u32,
+        p: &KernelParams,
+        steps: u32,
+    ) -> Result<(), DriverError> {
+        assert!(
+            steps > 0 && steps.is_multiple_of(2),
+            "graphs hold whole ping-pong cycles"
+        );
+        let current = self
+            .graph
+            .as_ref()
+            .is_some_and(|g| g.steps == steps && g.block == block && g.params == *p);
+        if !current {
+            self.graph = None;
+            self.graph = Some(self.capture(k, stream, block, p, steps)?);
+        }
+        self.graph.as_ref().expect("captured").graph.launch()
+    }
+
+    fn capture(
+        &mut self,
+        k: &Kernels,
+        stream: &Arc<CudaStream>,
+        block: u32,
+        p: &KernelParams,
+        steps: u32,
+    ) -> Result<StepGraph, DriverError> {
+        // Thread-local mode: only this thread's CUDA calls are restricted during the capture, so
+        // solvers on other threads keep working.
+        stream
+            .begin_capture(driver_sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)?;
+        let mut launched = Ok(());
+        for s in 0..steps {
+            launched = self.stream_collide(k, stream, block, p, (s % 2) as usize);
+            if launched.is_err() {
+                break;
+            }
+        }
+        // End the capture even after an error, so the stream is usable again.
+        let graph = stream.end_capture(driver_sys::CUgraphInstantiate_flags(0));
+        launched?;
+        let graph = graph?.ok_or(DriverError(
+            driver_sys::cudaError_enum::CUDA_ERROR_STREAM_CAPTURE_INVALIDATED,
+        ))?;
+        Ok(StepGraph {
+            graph,
+            steps,
+            params: *p,
+            block,
+        })
     }
 
     /// Per-block partial sums of the diagnostics into `partials`.

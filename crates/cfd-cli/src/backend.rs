@@ -49,6 +49,9 @@ pub struct SolverArgs {
     /// keeps CUDA bit-identical to the CPU backend.
     #[arg(long)]
     pub fmad: bool,
+    /// Steps replayed per CUDA graph launch (even; 0 launches every step on its own).
+    #[arg(long, default_value_t = 50)]
+    pub graph_steps: u32,
 }
 
 /// The engine a choice runs on, with its shared device handle.
@@ -74,6 +77,8 @@ pub struct SolverChoice {
     workgroup: u32,
     #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
     fmad: bool,
+    #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+    graph_steps: u32,
 }
 
 /// The outcome of `auto`: the first engine that opens, in the order CUDA > wgpu > CPU. Each
@@ -189,6 +194,7 @@ impl SolverArgs {
             engine,
             workgroup: self.workgroup,
             fmad: self.fmad,
+            graph_steps: self.graph_steps,
         })
     }
 }
@@ -212,6 +218,7 @@ impl SolverChoice {
                 cfd_cuda::CudaLbmOptions {
                     block: self.workgroup,
                     fmad: self.fmad,
+                    graph_steps: self.graph_steps,
                 },
             )?),
         })

@@ -28,13 +28,36 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
       - run: cargo fmt --all --check
+      # cfd-cli enables the `cuda` feature by default, so the workspace build includes the CUDA
+      # backend: cudarc loads the CUDA libraries at runtime, so no toolkit is needed to build it.
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The build without CUDA must keep working too.
+      - run: cargo clippy -p cfd-cli -p cfd-cuda --all-targets --no-default-features -- -D warnings
       # Includes the checks that schema/ and scenes/ match the Rust code, and the CPU <-> wgpu
-      # parity tests (CFD_REQUIRE_GPU: fail rather than skip when no adapter is found).
-      # The CUDA backend is not built here (no `cuda` feature): CI has no NVIDIA GPU.
+      # parity tests (CFD_REQUIRE_GPU: fail rather than skip when no adapter is found). The CUDA
+      # tests skip: there is no NVIDIA GPU here (see the `cuda-kernels` job for NVRTC).
       - run: cargo test --workspace
         env:
           CFD_REQUIRE_GPU: "1"
+
+  cuda-kernels:
+    name: CUDA kernels (NVRTC, no GPU)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Only the CUDA runtime compiler (no driver, no GPU): enough to compile every kernel and
+      # check the generated static_asserts on the Params/BcParams layouts against Rust.
+      - name: Install NVRTC
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update && sudo apt-get install -y cuda-nvrtc-13-4
+          echo "LD_LIBRARY_PATH=$(dirname "$(find /usr/local -name 'libnvrtc.so.13*' | head -1)")" >> "$GITHUB_ENV"
+      - run: cargo test -p cfd-cuda --features cuda
+        env:
+          CFD_REQUIRE_NVRTC: "1"
 
   verify:
     name: Validation suite (quick)
