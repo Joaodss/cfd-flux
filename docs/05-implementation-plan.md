@@ -106,7 +106,7 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 - [ ] S — `cfd-cli bench --backends wgpu,cuda`: MLUPS table per resolution (256² → 4096²), f32 and (later) f16; results in `docs/benchmarks.md`.
 - [ ] S — In the API/UI (Phases 3–5): the chosen backend shows up in the job metadata; the same scenario can be launched on two backends and the differences viewed side by side (reusing the comparison UI).
 
-**Acceptance:** CPU↔wgpu↔CUDA parity within tolerance; ≥ 1,000 MLUPS at 1024² on both engines (NFR-01 targets ≥ 2,000 on the RTX 4060); `cfd-cli compare` produces a report for the validation cases; CUDA → wgpu → CPU fallback tested. **wgpu part met (2026-10-10):** CPU↔wgpu parity ≤ 3e-6 on 12 cases, `verify --full --backend wgpu` 13/13 (St and C_D,max identical to the CPU to 4 digits), 2,834 MLUPS at 1024².
+**Acceptance:** CPU↔wgpu↔CUDA parity within tolerance; ≥ 1,000 MLUPS at 1024² on both engines (NFR-01 targets ≥ 2,000 on the RTX 4060); `cfd-cli compare` produces a report for the validation cases; CUDA → wgpu → CPU fallback tested. **wgpu part met (2026-10-10):** CPU↔wgpu parity ≤ 3e-6 on 12 cases, `verify --full --backend wgpu` 13/13 (St and C_D,max identical to the CPU to 4 digits), 2,834 MLUPS at 1024². **CUDA part met (2026-10-12):** CPU↔CUDA bit-identical on the 12 parity cases (`--fmad=false`), `verify --full --backend cuda` 13/13 with every plot byte-identical to the CPU report, 2,870 MLUPS at 1024² on a quiet desktop (kernel at 94% of DRAM bandwidth), CUDA → wgpu → CPU fallback tested end to end. Remaining: `cfd-cli compare` (2c).
 
 ---
 
