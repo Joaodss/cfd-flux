@@ -51,13 +51,20 @@ cargo run --release -p cfd-cli -- bench --backend cuda --graph-steps 0   # one l
 
 - **Phase 2 criterion (≥ 1,000 MLUPS at 1024²): met** on CUDA too — 2,600–2,750 isothermal and
   1,690–1,790 thermal; NFR-01's ≥ 2,000 is met for the isothermal model.
-- **Both engines are bandwidth-bound from 1024² on**, and the kernels are equally fast: Nsight Systems
-  shows 83% of the CUDA steps at 1024² taking 360–380 µs (≈ 2,850 MLUPS, ≈ 245 GB/s, 90% of the card's
-  272 GB/s), which is wgpu's rate. The 3–8% that CUDA loses in wall time comes from the display: the
-  same GPU drives a 144 Hz desktop, and every ~6.9 ms (one refresh) the compositor time-slices the
-  running CUDA kernel, stretching ~8% of the steps by 200–600 µs and leaving short idle gaps (the GPU
-  is busy 97.4% of the time). wgpu's Vulkan queue is apparently interleaved with the compositor more
-  cheaply. A headless GPU (or one not driving a display) should remove the difference.
+- **The CUDA kernel runs at the card's memory limit.** Nsight Compute on one 1024² isothermal step
+  (driver 617.42): 355.8 µs (≈ 2,950 MLUPS), **DRAM throughput 93.8% of peak** (247 GB/s at the P2 memory
+  clock), 39.9 MB read + 48.1 MB written = **84 B per cell, exactly the ideal traffic** (36 B of
+  populations in and out, 12 B of ρ/u, 2 B of flags), SM throughput 18%, 40 registers per thread, 100%
+  theoretical / 85% achieved occupancy. Only moving fewer bytes (AA pattern, f16 storage) can make it
+  faster; FMA cannot (the arithmetic units are mostly idle).
+- **Wall-clock rates depend on what the desktop is drawing.** The same GPU drives a 144 Hz display, and
+  once per refresh (every ~6.9 ms) the Windows compositor (`dwm`) preempts the running kernel. Nsight
+  Systems shows the undisturbed steps at 360–400 µs and one step per refresh stretched by what the
+  compositor needs: 200–600 µs in the run above, ~1.6 ms (≈ 23% of the GPU) in a later run while `dwm`
+  used 41% of the 3D engine (an animated window on screen), when both backends dropped to ~2,150–2,250
+  MLUPS at 1024². The kernels of the two engines are equally fast; the few-percent differences between
+  them in the table are within this desktop noise. For clean numbers, benchmark with the screen still
+  (nothing animating or playing video), or on a GPU that does not drive a display.
 - **Launch overhead:** a CUDA kernel launch costs ≈ 8 µs of CPU time on Windows (WDDM), more than a
   whole step at 256² (≈ 7 µs on the GPU), so with one launch per step the GPU waits for the CPU (6,000
   vs 9,300 MLUPS). Replaying 50 captured steps per CUDA graph launch (the default) brings the CPU cost

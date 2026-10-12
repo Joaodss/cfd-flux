@@ -37,9 +37,12 @@ Stop after step 3 or 4 if the session gets long, with everything tested and comm
 - **Launch overhead:** a CUDA kernel launch costs ≈ 8 µs of CPU time on Windows (WDDM), more than a 256²
   step, so the GPU waited for the CPU (6,000 vs wgpu's 9,300 MLUPS). Replaying 50 captured steps per CUDA
   graph brings it to ≈ 0.6 µs per step and 256² to wgpu's rate (ADR-021).
-- **The remaining 3–8% gap to wgpu at ≥ 1024² is the desktop compositor, not the kernel:** Nsight Systems
-  shows 83% of the 1024² CUDA steps at 360–380 µs (wgpu's rate), and ~8% stretched by 200–600 µs once
-  every ~6.9 ms — one refresh of the 144 Hz display driven by the same GPU.
+- **The kernel is at the memory limit; the wall-clock gaps are the desktop compositor.** Nsight Compute
+  (after the author enabled the performance counters and updated the driver to 617.42 = CUDA 13.4): one
+  1024² step takes 355.8 µs at 93.8% of peak DRAM throughput, moving exactly the ideal 84 B per cell.
+  Nsight Systems shows one step per 144 Hz refresh (every ~6.9 ms) preempted by `dwm`: by 200–600 µs in
+  one run, by ~1.6 ms in another while `dwm` used 41% of the 3D engine (an animated window), when CUDA
+  and wgpu both dropped to ~2,150–2,250 MLUPS. The few-percent CUDA vs wgpu differences are desktop noise.
 - FMA (`--fmad`) changes neither parity tolerance compliance nor throughput (bandwidth-bound kernel).
 - `cudarc`'s defaults are tuned for safety, not for a solver: per-buffer event tracking (several driver
   calls per launch) and write-combined pinned memory (slow for the CPU to read) are both turned off here.

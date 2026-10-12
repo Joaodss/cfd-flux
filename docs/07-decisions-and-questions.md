@@ -122,7 +122,7 @@ Answers to these questions can change priorities. Record the answer and the date
 | # | Question | Answer / default assumed until answered |
 |---|----------|-----------------------------------------|
 | Q1 | Who is the main audience: personal/educational use, or a public multi-user service? | **Answered (2026-10-09):** portfolio and exploration project; **open source and public**; useful for education and quick simulation examples. Multi-user production remains far off |
-| Q2 | Which GPU(s) are available for development and for the server (vendor, VRAM)? | **Answered (2026-10-09):** **NVIDIA GeForce RTX 4060, 8 GB** (driver 610.62 = CUDA 13.3); CUDA Toolkit 13.4 installed and verified |
+| Q2 | Which GPU(s) are available for development and for the server (vendor, VRAM)? | **Answered (2026-10-09):** **NVIDIA GeForce RTX 4060, 8 GB** (driver 610.62 = CUDA 13.3, updated to 617.42 = CUDA 13.4 on 2026-10-12); CUDA Toolkit 13.4 installed and verified; GPU performance counters enabled for Nsight Compute |
 | Q3 | Where will the server run: local machine, own server, cloud? | **Answered (2026-10-09):** only on the development machine; no budget for a server. It should be easy for others to self-host (see ADR-010) |
 | Q4 | Is engineering-grade accuracy (quantitative validation) needed, or is the focus visual/interactive? | **Answered (2026-10-09):** yes, quantitative accuracy validation; method explained in [08 — Validation guide](08-validation-guide.md) |
 | Q5 | Priority between gases (aerodynamics, ventilation, cooling) and liquids (free surface)? | **Answered (2026-10-09):** **gases and liquids in the first stage** → free-surface liquids are in the MVP (see ADR-008) |
