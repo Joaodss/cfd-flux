@@ -168,6 +168,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cfd-core",
+ "cfd-cuda",
  "cfd-gpu",
  "cfd-io",
  "cfd-lbm",

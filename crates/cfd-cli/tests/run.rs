@@ -36,6 +36,17 @@ fn temp_dir(name: &str) -> PathBuf {
 fn backend_args(backend: &str) -> Option<Vec<&'static str>> {
     match backend {
         "cpu" => Some(vec!["--backend", "cpu"]),
+        "cuda" => match cuda_available() {
+            Ok(()) => Some(vec!["--backend", "cuda"]),
+            Err(e) => {
+                assert!(
+                    std::env::var_os("CFD_REQUIRE_CUDA").is_none(),
+                    "CFD_REQUIRE_CUDA is set but CUDA is unavailable: {e}"
+                );
+                eprintln!("skipping: {e}");
+                None
+            }
+        },
         _ if cfd_gpu::adapters().is_empty() => {
             assert!(
                 std::env::var_os("CFD_REQUIRE_GPU").is_none(),
@@ -49,6 +60,15 @@ fn backend_args(backend: &str) -> Option<Vec<&'static str>> {
 }
 
 fn run(scene: &Scene, dir: &Path, extra: &[&str]) -> std::process::Output {
+    run_env(scene, dir, extra, &[])
+}
+
+fn run_env(
+    scene: &Scene,
+    dir: &Path,
+    extra: &[&str],
+    env: &[(&str, &str)],
+) -> std::process::Output {
     let scene_path = dir.join("scene-in.json");
     std::fs::write(&scene_path, scene.to_json_pretty()).unwrap();
     Command::new(env!("CARGO_BIN_EXE_cfd-cli"))
@@ -58,6 +78,7 @@ fn run(scene: &Scene, dir: &Path, extra: &[&str]) -> std::process::Output {
         .arg(dir.join("out"))
         .args(["--threads", "2"])
         .args(extra)
+        .envs(env.iter().copied())
         .output()
         .expect("cfd-cli runs")
 }
@@ -78,6 +99,11 @@ fn run_writes_frames_series_images_and_metadata_cpu() {
 #[test]
 fn run_writes_frames_series_images_and_metadata_wgpu() {
     writes_outputs("wgpu");
+}
+
+#[test]
+fn run_writes_frames_series_images_and_metadata_cuda() {
+    writes_outputs("cuda");
 }
 
 fn writes_outputs(backend: &str) {
@@ -170,6 +196,11 @@ fn run_aborts_cleanly_when_the_solution_diverges_wgpu() {
     aborts_on_divergence("wgpu");
 }
 
+#[test]
+fn run_aborts_cleanly_when_the_solution_diverges_cuda() {
+    aborts_on_divergence("cuda");
+}
+
 fn aborts_on_divergence(backend: &str) {
     let Some(mut args) = backend_args(backend) else {
         return;
@@ -213,4 +244,62 @@ fn aborts_on_divergence(backend: &str) {
             .all(|f| f.values.iter().all(|v| v.is_finite())));
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Whether this build has the CUDA backend and the machine can run it.
+fn cuda_available() -> Result<(), String> {
+    #[cfg(feature = "cuda")]
+    return cfd_cuda::CudaDevice::new(&cfd_cuda::CudaOptions::default())
+        .map(|_| ())
+        .map_err(|e| e.to_string());
+    #[cfg(not(feature = "cuda"))]
+    Err(cfd_cuda::CudaError::NotBuilt.to_string())
+}
+
+/// `--backend auto` takes CUDA, else a hardware wgpu adapter, else the CPU. Each engine is made
+/// unavailable in turn: CUDA through a device ordinal that does not exist, wgpu through an
+/// adapter filter that matches nothing.
+#[test]
+fn auto_falls_back_from_cuda_to_wgpu_to_cpu() {
+    let hardware_wgpu = cfd_gpu::adapters().iter().any(|a| !cfd_gpu::is_software(a));
+    let without_cuda = if hardware_wgpu { "wgpu" } else { "cpu" };
+    let cases: [(&str, &[(&str, &str)], &str); 3] = [
+        (
+            "all",
+            &[],
+            if cuda_available().is_ok() {
+                "cuda"
+            } else {
+                without_cuda
+            },
+        ),
+        ("no-cuda", &[("CFD_CUDA_DEVICE", "99")], without_cuda),
+        (
+            "neither",
+            &[
+                ("CFD_CUDA_DEVICE", "99"),
+                ("CFD_WGPU_ADAPTER", "no adapter has this name"),
+            ],
+            "cpu",
+        ),
+    ];
+    for (name, env, expected) in cases {
+        let dir = temp_dir(&format!("auto-{name}"));
+        let args = ["--backend", "auto", "--end-time", "0.02"];
+        let out = run_env(&small_channel(), &dir, &args, env);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{name}: {stderr}");
+        assert_eq!(
+            meta(&dir)["solver"]["backend"],
+            expected,
+            "{name}: {stderr}"
+        );
+        if name != "all" {
+            assert!(
+                stderr.contains("note: CUDA unavailable"),
+                "{name}: {stderr}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
