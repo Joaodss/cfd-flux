@@ -17,6 +17,8 @@ mod device;
 #[cfg(feature = "cuda")]
 pub mod kernels;
 #[cfg(feature = "cuda")]
+mod lbm;
+#[cfg(feature = "cuda")]
 #[allow(unsafe_code)]
 mod raw;
 
@@ -24,6 +26,8 @@ mod raw;
 pub use device::{
     choose_target, compile, CudaDevice, CudaOptions, Target, DEVICE_ENV, MIN_DRIVER_VERSION,
 };
+#[cfg(feature = "cuda")]
+pub use lbm::{CudaLbm, CudaLbmOptions, DEFAULT_BLOCK};
 
 /// Errors of the CUDA backend.
 #[derive(Debug, thiserror::Error)]

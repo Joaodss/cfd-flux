@@ -5,8 +5,10 @@
 use cfd_lbm::abi::{cuda_layout_checks, cuda_prelude};
 
 pub const COMMON_CUH: &str = include_str!("../kernels/common.cuh");
+pub const LBM_CU: &str = include_str!("../kernels/lbm.cu");
+pub const REDUCE_CU: &str = include_str!("../kernels/reduce.cu");
 
-/// NVRTC options of every kernel: no fast math (IEEE division and square root, denormals kept).
+/// NVRTC options of the layout tests (the solver picks `--fmad` per `CudaLbmOptions`).
 pub const OPTIONS: &[&str] = &["--fmad=false"];
 
 /// The complete program: generated constants, common types, layout checks, then `kernels`
@@ -22,6 +24,11 @@ pub fn source(kernels: &[(&str, &str)]) -> String {
         s += src;
     }
     s
+}
+
+/// The program of the LBM solver: every kernel `CudaLbm` launches.
+pub fn program() -> String {
+    source(&[("lbm.cu", LBM_CU), ("reduce.cu", REDUCE_CU)])
 }
 
 #[cfg(test)]
@@ -45,6 +52,13 @@ mod tests {
     fn common_types_match_the_rust_layouts() {
         if let Some(r) = compiles(&source(&[])) {
             r.unwrap();
+        }
+    }
+
+    #[test]
+    fn the_solver_kernels_compile() {
+        if let Some(r) = compiles(&program()) {
+            assert_eq!(&r.unwrap()[..4], b"ELF");
         }
     }
 

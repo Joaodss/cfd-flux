@@ -1,0 +1,294 @@
+//! `CudaLbm`: the LBM solver on CUDA, with the memory layout of the CPU reference.
+//!
+//! Device buffers (`raw::Lattice`), the same as the CPU and wgpu backends:
+//!
+//! | buffer | content |
+//! |---|---|
+//! | `flags` | `Domain::flags` (`u16`), read directly as `unsigned short` |
+//! | `slot`, `bc` | `Domain::bc_slot`; `Domain::bc_params` as 32-byte records |
+//! | `f[a]`, `f[b]` | D2Q9 populations, SoA `f[i·n + cell]`, shifted (`f̃ = f − w`) |
+//! | `g[a]`, `g[b]` | D2Q5 populations (a single dummy value without the thermal lattice) |
+//! | `mac` | planes ρ, ux, uy, θ and a status word at `4n` |
+//!
+//! Ping-pong without copies: step `s` reads `f[s % 2]` and writes `f[(s + 1) % 2]`. Kernel
+//! arguments are captured when a launch is queued, so swapping is just passing the other pointer
+//! (wgpu needed two prebuilt bind groups for the same effect). The run constants
+//! ([`KernelParams`]) are passed by value with every launch.
+
+use std::sync::Arc;
+
+use cfd_core::domain::Domain;
+use cfd_core::solver::{
+    BackendKind, Diagnostics, ElementForce, LatticeFields, Solver, SolverError,
+};
+use cfd_lbm::abi::{bc_words, KernelParams};
+use cfd_lbm::shared::{
+    diagnostics_from_partials, equilibrium_populations, initial_fields, wall_forces, wall_links,
+    WallLink,
+};
+use cfd_lbm::LbmConfig;
+use cudarc::driver::{CudaStream, DriverError};
+
+use crate::raw::{Kernels, Lattice, LatticeInit, REDUCE_BLOCK};
+use crate::{CudaDevice, CudaError};
+
+/// Default threads per block of the stream-collide kernel.
+pub const DEFAULT_BLOCK: u32 = 128;
+/// Maximum number of blocks of the diagnostics reduction.
+const MAX_REDUCE_BLOCKS: u32 = 1024;
+
+/// Launch and compilation options (for benchmarks and the FMA comparison).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CudaLbmOptions {
+    /// Threads per block of the stream-collide kernel (1–1024).
+    pub block: u32,
+    /// Let the compiler fuse multiply-adds (`--fmad=true`). Off by default: every operation then
+    /// rounds as in the CPU reference.
+    pub fmad: bool,
+}
+
+impl Default for CudaLbmOptions {
+    fn default() -> Self {
+        Self {
+            block: DEFAULT_BLOCK,
+            fmad: false,
+        }
+    }
+}
+
+pub struct CudaLbm {
+    dev: Arc<CudaDevice>,
+    /// The compute stream: every kernel and copy of this solver, in order.
+    stream: Arc<CudaStream>,
+    kernels: Kernels,
+    domain: Domain,
+    config: LbmConfig,
+    options: CudaLbmOptions,
+    thermal: bool,
+    n: usize,
+    steps: u64,
+    params: KernelParams,
+    lattice: Lattice,
+    links: Vec<WallLink>,
+    reduce_blocks: u32,
+}
+
+fn driver(e: DriverError) -> SolverError {
+    SolverError::Backend(format!("CUDA: {e}"))
+}
+
+impl From<CudaError> for SolverError {
+    fn from(e: CudaError) -> Self {
+        SolverError::Backend(e.to_string())
+    }
+}
+
+impl CudaLbm {
+    /// Creates the solver on `dev` with every cell at the equilibrium of the domain's initial
+    /// state (exactly the CPU backend's initial populations).
+    pub fn new(dev: Arc<CudaDevice>, domain: Domain, config: LbmConfig) -> Result<Self, CudaError> {
+        Self::with_options(dev, domain, config, CudaLbmOptions::default())
+    }
+
+    pub fn with_options(
+        dev: Arc<CudaDevice>,
+        domain: Domain,
+        config: LbmConfig,
+        options: CudaLbmOptions,
+    ) -> Result<Self, CudaError> {
+        if !(1..=1024).contains(&options.block) {
+            return Err(CudaError::Driver(format!(
+                "block size {} is not supported (1–1024)",
+                options.block
+            )));
+        }
+        let n = domain.cell_count();
+        let thermal = domain.physics.thermal();
+        let links = wall_links(&domain);
+        dev.check_memory(
+            "the lattice buffers",
+            n as u64 * Lattice::bytes_per_cell(thermal) + links.len() as u64 * 8,
+        )?;
+        let kernels = dev.kernels(options.fmad)?;
+        let err = |e: DriverError| CudaError::Driver(e.to_string());
+        let stream = dev.context().new_stream().map_err(err)?;
+        let reduce_blocks = (n.div_ceil(REDUCE_BLOCK as usize) as u32).clamp(1, MAX_REDUCE_BLOCKS);
+        let packed: Vec<u32> = links.iter().map(|l| l.cell << 4 | l.dir as u32).collect();
+        let lattice = Lattice::new(
+            &stream,
+            &LatticeInit {
+                flags: &domain.flags,
+                slot: &domain.bc_slot,
+                bc_words: &bc_words(&domain.bc_params),
+                links: &packed,
+                thermal,
+                blocks: reduce_blocks,
+            },
+        )
+        .map_err(err)?;
+        let body_force = domain.physics.body_force.map(|v| v as f32);
+        let params = KernelParams::new(&domain, config, body_force, links.len());
+        let mut solver = Self {
+            dev,
+            stream,
+            kernels,
+            domain,
+            config,
+            options,
+            thermal,
+            n,
+            steps: 0,
+            params,
+            lattice,
+            links,
+            reduce_blocks,
+        };
+        let initial = initial_fields(&solver.domain);
+        solver.upload_equilibrium(&initial).map_err(err)?;
+        Ok(solver)
+    }
+
+    pub fn device(&self) -> &Arc<CudaDevice> {
+        &self.dev
+    }
+
+    pub fn config(&self) -> &LbmConfig {
+        &self.config
+    }
+
+    pub fn options(&self) -> CudaLbmOptions {
+        self.options
+    }
+
+    /// Updates the body force (lattice units), e.g. for validation cases. Launches capture the
+    /// parameters when they are queued, so steps already queued keep the old force.
+    pub fn set_body_force(&mut self, force: [f64; 2]) {
+        self.domain.physics.body_force = force;
+        self.params.body_force = force.map(|v| v as f32);
+    }
+
+    /// Writes the equilibrium of `fields` into the current population buffers and the
+    /// macroscopic planes, and clears the status word (queued after earlier work).
+    fn upload_equilibrium(&mut self, fields: &LatticeFields) -> Result<(), DriverError> {
+        let cur = (self.steps % 2) as usize;
+        let (f, g) = equilibrium_populations(fields, self.thermal);
+        self.stream.memcpy_htod(&f, &mut self.lattice.f_mut(cur))?;
+        if self.thermal {
+            self.stream.memcpy_htod(&g, &mut self.lattice.g_mut(cur))?;
+        }
+        let n = self.n;
+        let mut mac = Vec::with_capacity(4 * n + 4);
+        mac.extend_from_slice(&fields.density);
+        mac.extend_from_slice(&fields.ux);
+        mac.extend_from_slice(&fields.uy);
+        match (&fields.theta, self.thermal) {
+            (Some(t), true) => mac.extend_from_slice(t),
+            _ => mac.resize(4 * n, 0.0),
+        }
+        mac.resize(4 * n + 4, 0.0);
+        self.stream.memcpy_htod(&mac, &mut self.lattice.mac_mut())
+    }
+
+    /// Reads the status word; non-zero once a step has read a non-finite population.
+    fn check_status(&self) -> Result<(), SolverError> {
+        let status = self
+            .stream
+            .clone_dtoh(&self.lattice.mac().slice(4 * self.n..4 * self.n + 1))
+            .map_err(driver)?;
+        if status[0] != 0.0 {
+            return Err(SolverError::NonFinite { step: self.steps });
+        }
+        Ok(())
+    }
+}
+
+impl Solver for CudaLbm {
+    fn backend(&self) -> BackendKind {
+        BackendKind::Cuda
+    }
+
+    fn domain(&self) -> &Domain {
+        &self.domain
+    }
+
+    fn steps_done(&self) -> u64 {
+        self.steps
+    }
+
+    fn step(&mut self, n: u32) -> Result<(), SolverError> {
+        for _ in 0..n {
+            let parity = (self.steps % 2) as usize;
+            self.lattice
+                .stream_collide(
+                    &self.kernels,
+                    &self.stream,
+                    self.options.block,
+                    &self.params,
+                    parity,
+                )
+                .map_err(driver)?;
+            self.steps += 1;
+        }
+        self.check_status()
+    }
+
+    fn set_equilibrium(&mut self, fields: &LatticeFields) -> Result<(), SolverError> {
+        fields.check_len(self.n)?;
+        self.upload_equilibrium(fields).map_err(driver)
+    }
+
+    fn lattice_fields(&mut self) -> LatticeFields {
+        let n = self.n;
+        let raw = self
+            .stream
+            .clone_dtoh(&self.lattice.mac().slice(..4 * n))
+            .unwrap_or_else(|_| vec![f32::NAN; 4 * n]);
+        LatticeFields {
+            density: raw[..n].to_vec(),
+            ux: raw[n..2 * n].to_vec(),
+            uy: raw[2 * n..3 * n].to_vec(),
+            theta: self.thermal.then(|| raw[3 * n..4 * n].to_vec()),
+        }
+    }
+
+    fn diagnostics(&mut self) -> Diagnostics {
+        let partials = self
+            .lattice
+            .diagnostics(&self.kernels, &self.stream, &self.params)
+            .and_then(|_| self.stream.clone_dtoh(self.lattice.partials()))
+            .unwrap_or_default();
+        diagnostics_from_partials(
+            self.steps,
+            &partials,
+            self.reduce_blocks as usize,
+            self.thermal,
+        )
+    }
+
+    fn forces(&mut self) -> Vec<ElementForce> {
+        if self.links.is_empty() {
+            return Vec::new();
+        }
+        let current = (self.steps % 2) as usize;
+        let outgoing = self
+            .lattice
+            .gather_links(&self.kernels, &self.stream, &self.params, current)
+            .and_then(|_| self.stream.clone_dtoh(self.lattice.link_out()))
+            .unwrap_or_else(|_| vec![f32::NAN; self.links.len()]);
+        wall_forces(&self.domain, &self.links, &outgoing)
+    }
+}
+
+impl Drop for CudaLbm {
+    fn drop(&mut self) {
+        // Event tracking is off (see `raw::disable_event_tracking`): make sure no queued work
+        // still uses the buffers before they are freed.
+        let _ = self.stream.synchronize();
+    }
+}
+
+// `Solver: Send`: the solver may move to a worker thread (`cudarc` handles are `Send + Sync`).
+const _: fn() = || {
+    fn is_send<T: Send>() {}
+    is_send::<CudaLbm>();
+};

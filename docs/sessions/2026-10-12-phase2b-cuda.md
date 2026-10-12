@@ -8,7 +8,7 @@ Stop after step 3 or 4 if the session gets long, with everything tested and comm
 | D | Design proposal (crates/features, compilation and caching, constant generator, layout and ping-pong, launches, async stepping, reductions/readback, parity harness, `unsafe` boundary, CI) approved by the author | ✅ |
 | 1 | `cfd-cuda` with `cudarc` (`cuda` feature, dynamic loading): device discovery, compute capability, memory checks, NVRTC → `sm_XY` cubin (PTX only when the driver allows it), clear errors without a GPU/NVRTC | ✅ |
 | 2 | Shared constants: `cfd_lbm::abi` (`KernelParams`, WGSL prelude, CUDA header with `static_assert` layout checks); wgpu moved onto it | ✅ |
-| 3 | `CudaLbm`: SoA layout, pointer ping-pong, fused kernel translated from `lbm.wgsl`; shared parity harness in `cfd_verify::parity`; FMA policy decided from parity numbers | ⬜ |
+| 3 | `CudaLbm`: SoA layout, pointer ping-pong, fused kernel translated from `lbm.wgsl`; shared parity harness in `cfd_verify::parity`; FMA policy decided from parity numbers | ✅ |
 | 4 | Warp-shuffle diagnostics, link gather, non-blocking `step` with events, `finish`, `request_fields` via a copy stream and pinned buffers | ⬜ |
 | 5 | `--backend cuda`, `auto` = CUDA > wgpu > CPU (fallback tested); `verify --full --backend cuda`; benchmarks and wgpu vs CUDA discussion | ⬜ |
 | 6 | (2c) `cfd-cli compare`, `bench --backends` | ⬜ |

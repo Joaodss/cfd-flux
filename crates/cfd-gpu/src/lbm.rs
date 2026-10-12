@@ -25,7 +25,10 @@ use cfd_core::solver::{
     BackendKind, Diagnostics, ElementForce, LatticeFields, PendingFields, Solver, SolverError,
 };
 use cfd_lbm::abi::{bc_words, KernelParams};
-use cfd_lbm::shared::{equilibrium_populations, initial_fields, wall_forces, wall_links, WallLink};
+use cfd_lbm::shared::{
+    diagnostics_from_partials, equilibrium_populations, initial_fields, wall_forces, wall_links,
+    WallLink, DIAGNOSTIC_PARTIALS,
+};
 use cfd_lbm::LbmConfig;
 use wgpu::util::DeviceExt;
 
@@ -43,7 +46,7 @@ const MAX_IN_FLIGHT: usize = 2;
 const REDUCE_WG: u32 = 256;
 const MAX_REDUCE_GROUPS: u32 = 1024;
 /// Values per workgroup in the diagnostics partials (see `reduce.wgsl`).
-const PARTIALS: usize = 8;
+const PARTIALS: usize = DIAGNOSTIC_PARTIALS;
 
 /// The uniform `Params` of the kernels (`shaders/common.wgsl`): the words of
 /// [`KernelParams`]. Layout checked against the WGSL struct by a test.
@@ -602,25 +605,7 @@ impl Solver for WgpuLbm {
         }
         let size = (self.diag_groups as usize * PARTIALS * 4) as u64;
         let p = self.read_now(&self.small_pool, &self.partials, size, enc);
-        let (mut cells, mut dmass, mut energy, mut umax, mut heat) = (0.0, 0.0, 0.0, 0.0f64, 0.0);
-        let mut finite = p.len() == self.diag_groups as usize * PARTIALS;
-        for w in p.chunks_exact(PARTIALS) {
-            cells += w[0] as f64;
-            dmass += w[1] as f64;
-            energy += w[2] as f64;
-            umax = umax.max(w[3] as f64);
-            heat += w[4] as f64;
-            finite &= w[5] == 0.0;
-        }
-        Diagnostics {
-            step: self.steps,
-            fluid_cells: cells as usize,
-            mass: cells + dmass,
-            kinetic_energy: energy,
-            max_velocity: umax,
-            thermal_energy: self.thermal.then_some(heat),
-            finite: finite && umax.is_finite() && energy.is_finite(),
-        }
+        diagnostics_from_partials(self.steps, &p, self.diag_groups as usize, self.thermal)
     }
 
     fn forces(&mut self) -> Vec<ElementForce> {

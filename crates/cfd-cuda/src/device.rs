@@ -25,7 +25,8 @@ use std::sync::{Arc, Mutex};
 use cudarc::driver::{CudaContext, CudaModule};
 use cudarc::nvrtc::Ptx;
 
-use crate::raw::{self, Output};
+use crate::kernels;
+use crate::raw::{self, Kernels, Output};
 use crate::CudaError;
 
 /// Environment variable that selects the device by ordinal (default 0).
@@ -262,6 +263,7 @@ impl CudaDevice {
         let ctx = guarded("opening the device", || {
             CudaContext::new(ordinal).map_err(|e| e.to_string())
         })?;
+        raw::disable_event_tracking(&ctx);
         let (name, (major, minor), total_memory) = guarded("querying the device", || {
             let s = |e: cudarc::driver::DriverError| e.to_string();
             Ok((
@@ -338,6 +340,13 @@ impl CudaDevice {
             });
         }
         Ok(())
+    }
+
+    /// The solver kernels (`kernels::program`), compiled once per set of options.
+    pub(crate) fn kernels(&self, fmad: bool) -> Result<Kernels, CudaError> {
+        let fmad = if fmad { "--fmad=true" } else { "--fmad=false" };
+        let module = self.module("lbm.cu", &kernels::program(), &[fmad])?;
+        Kernels::load(&module).map_err(|e| CudaError::Driver(format!("loading the kernels: {e}")))
     }
 
     /// Compiles `source` for this device with the given extra NVRTC options and loads it, or
