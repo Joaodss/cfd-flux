@@ -43,6 +43,9 @@ Stop after step 3 or 4 if the session gets long, with everything tested and comm
   Nsight Systems shows one step per 144 Hz refresh (every ~6.9 ms) preempted by `dwm`: by 200–600 µs in
   one run, by ~1.6 ms in another while `dwm` used 41% of the 3D engine (an animated window), when CUDA
   and wgpu both dropped to ~2,150–2,250 MLUPS. The few-percent CUDA vs wgpu differences are desktop noise.
+- **With the display at 50 Hz and nothing animating** the interference disappears (5 preempted steps per second,
+  0.1% of the time): CUDA 2,870 MLUPS at 1024² isothermal, 1,880 thermal, identical between rounds; wgpu
+  2,740–2,970 and 1,940. Both engines are at 90–94% of the card's memory bandwidth.
 - FMA (`--fmad`) changes neither parity tolerance compliance nor throughput (bandwidth-bound kernel).
 - `cudarc`'s defaults are tuned for safety, not for a solver: per-buffer event tracking (several driver
   calls per launch) and write-combined pinned memory (slow for the CPU to read) are both turned off here.

@@ -65,6 +65,28 @@ cargo run --release -p cfd-cli -- bench --backend cuda --graph-steps 0   # one l
   MLUPS at 1024². The kernels of the two engines are equally fast; the few-percent differences between
   them in the table are within this desktop noise. For clean numbers, benchmark with the screen still
   (nothing animating or playing video), or on a GPU that does not drive a display.
+
+**Quiet desktop (display at 50 Hz, nothing animating), driver 617.42, two interleaved rounds:**
+
+| Model | Grid (fluid) | CUDA | wgpu |
+|-------|--------------|-----:|-----:|
+| isothermal (D2Q9) | 256² | 10161 / 10109 | 9825 / 9125 |
+| isothermal (D2Q9) | 512² | 8232 / 8228 | 7562 / 6941 |
+| isothermal (D2Q9) | 1024² | 2873 / 2873 | 2969 / 2737 |
+| isothermal (D2Q9) | 2048² | 2852 / 2852 | 2960 / 2730 |
+| isothermal (D2Q9) | 4000² | 2882 / 2882 | 2964 / 2733 |
+| thermal (D2Q9 + D2Q5) | 256² | 6505 / 6419 | 5387 / 4977 |
+| thermal (D2Q9 + D2Q5) | 512² | 1979 / 1945 | 1994 / 1849 |
+| thermal (D2Q9 + D2Q5) | 1024² | 1880 / 1879 | 1943 / 1942 |
+| thermal (D2Q9 + D2Q5) | 2048² | 1865 / 1865 | 1923 / 1923 |
+| thermal (D2Q9 + D2Q5) | 4000² | 1897 / 1748 | 1960 / 1960 |
+
+- The compositor no longer shows up: Nsight Systems finds 5 preempted steps per second (vs ~145 at
+  144 Hz) costing 0.1% of the time, the GPU busy 99.5%, and `dwm` below 0.5% of the 3D engine.
+- CUDA now reaches **2,870 MLUPS at 1024²**, 97% of the kernel's own rate (2,950 MLUPS in Nsight
+  Compute), and repeats to 4 digits between rounds. Both engines run at ≈ 245–255 GB/s, 90–94% of the
+  card's bandwidth; which one is a few percent ahead varies between runs (wgpu here 2,740–2,970).
+  CUDA is ahead on the small, cache-resident grids (256², 512²).
 - **Launch overhead:** a CUDA kernel launch costs ≈ 8 µs of CPU time on Windows (WDDM), more than a
   whole step at 256² (≈ 7 µs on the GPU), so with one launch per step the GPU waits for the CPU (6,000
   vs 9,300 MLUPS). Replaying 50 captured steps per CUDA graph launch (the default) brings the CPU cost
