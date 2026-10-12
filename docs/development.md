@@ -6,7 +6,7 @@
 |------|---------|----------|
 | Rust (rustup) | ≥ 1.87 (wgpu 30; tested with 1.99) | `crates/` workspace |
 | Node.js | ≥ 22 (tested with 24) | `apps/web` |
-| CUDA Toolkit | 13.x (tested with 13.4) *(used from Phase 2b)* | `cfd-cuda` backend (NVRTC) |
+| CUDA Toolkit | 13.x (tested with 13.4), only to *run* the CUDA backend | `cfd-cuda` (NVRTC); building needs nothing |
 
 **Author's machine (verified 2026-10-09):** RTX 4060 8 GB (`sm_89`), driver 610.62 (supports CUDA 13.3),
 CUDA Toolkit 13.4, VS Build Tools 2022 (MSVC 14.4x), Rust 1.90 `stable-x86_64-pc-windows-msvc`, Node 24.
@@ -63,16 +63,18 @@ cd apps/web && npm run gen:types
 cargo run -p cfd-cli -- validate scenes/*.json
 
 # Run a scene headless (frames, PNGs, CSV series, meta.json); re-render PNGs with other ranges.
-# --backend auto (default) uses a hardware GPU through wgpu when there is one, else the CPU.
+# --backend auto (default) uses CUDA, else a hardware GPU through wgpu, else the CPU.
 cargo run --release -p cfd-cli -- run scenes/cylinder-re100.json --out out/cyl --end-time 12 --output-interval 0.05
 cargo run --release -p cfd-cli -- render out/cyl --range vorticity=-50:50
 
 # Performance (results go to docs/benchmarks.md) and physics validation (docs/08-validation-guide.md)
 cargo run --release -p cfd-cli -- bench --backend cpu --threads 8
 cargo run --release -p cfd-cli -- bench --backend wgpu --sizes 256,512,1024,2048,4000
+cargo run --release -p cfd-cli -- bench --backend cuda --sizes 256,512,1024,2048,4000
 cargo run --release -p cfd-cli -- verify --quick --backend cpu   # CI subset, ~20 s
 cargo run --release -p cfd-cli -- verify --full --backend cpu    # writes validation/report/ (commit it)
 cargo run --release -p cfd-cli -- verify --full --backend wgpu   # writes validation/report-wgpu/ (commit it)
+cargo run --release -p cfd-cli -- verify --full --backend cuda   # writes validation/report-cuda/ (commit it)
 cargo run --release -p cfd-cli -- verify --cases cavity --no-report
 
 # Web (in apps/web)
@@ -94,7 +96,23 @@ npm run typecheck && npm run lint && npm run format:check && npm run build
   `WGPU_BACKEND=vulkan|dx12`. The chosen adapter is printed by `run`/`bench`/`verify` and stored in `meta.json`
   and the reports.
 - The shaders are in `crates/cfd-gpu/shaders/`; constants shared with the CPU are generated into a WGSL prelude
-  (`crates/cfd-gpu/src/prelude.rs`). naga validates every shader in `cargo test`, with or without a GPU.
+  (`cfd_lbm::abi`). naga validates every shader in `cargo test`, with or without a GPU.
+
+## CUDA backend
+
+- `cfd-cli` is built with the `cuda` feature by default (`--no-default-features` leaves it out). `cudarc` opens
+  the driver and NVRTC at runtime, so building needs no toolkit; running needs an NVIDIA driver supporting
+  CUDA ≥ 13.0 and the CUDA 13 NVRTC (from the toolkit). Errors say which of them is missing.
+- `cargo test --workspace` runs the CPU ↔ CUDA parity tests (`crates/cfd-cuda/tests/parity.rs`, the shared cases
+  of `cfd_verify::parity`) when a device is found and prints `skipping` otherwise; `CFD_REQUIRE_CUDA=1` makes them
+  fail instead. `CFD_REQUIRE_NVRTC=1` requires only NVRTC: the kernels compile and their layout `static_assert`s
+  are checked without a GPU (CI job `cuda-kernels`).
+- `CFD_CUDA_DEVICE=<ordinal>` selects the device. `--backend auto` prefers CUDA, then a hardware wgpu adapter,
+  then the CPU, and prints why each engine was skipped.
+- The kernels are in `crates/cfd-cuda/kernels/` and compiled by NVRTC on first use (≈ 0.3 s per process) with
+  `--fmad=false`, which makes them bit-identical to the CPU backend; `cfd-cli … --fmad` compiles them with fused
+  multiply-adds. All `unsafe` code is in `crates/cfd-cuda/src/raw.rs`.
+- Memory checks: `compute-sanitizer --tool memcheck <test binary>` (in `CUDAv13.4in`) on the parity tests.
 
 ## Conventions
 

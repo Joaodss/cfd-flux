@@ -54,6 +54,8 @@ Given `dx` (= `cellSize`), a characteristic physical velocity `U` and viscosity 
 
 **As implemented (wgpu, Phase 2a):** the same arrays plus one 4-plane buffer for ρ, ux, uy, θ: ≈ 100 B/cell isothermal, ≈ 140 B/cell thermal (4000² thermal ≈ 2.2 GB). An update moves ≈ 86 B (isothermal) / 130 B (thermal); measured 2,850 / 1,850 MLUPS on an RTX 4060, ≈ 90% of its memory bandwidth ([benchmarks](benchmarks.md)).
 
+**As implemented (CUDA, Phase 2b):** the same buffers (the `u16` flags read directly, a 1-value dummy instead of `g` without the thermal lattice), plus one device snapshot of the four macroscopic planes (16 B/cell) per field copy in flight ([ADR-021](07-decisions-and-questions.md)). Throughput: see [benchmarks](benchmarks.md).
+
 ### 3.5 Implementation notes (shared by every backend)
 - SoA populations `f[i·n + cell]`, pull scheme, ping-pong buffers; one fused kernel per step also writes ρ, u (with the `F/2` correction) and θ.
 - **Shifted populations** `f̃ᵢ = fᵢ − wᵢ` in f32, and rest populations computed as the remainder (`f̃₀ = Δρ − Σ`, `g₀ = θ − Σ`), which conserves mass and heat by construction ([ADR-015](07-decisions-and-questions.md)).
@@ -62,7 +64,7 @@ Given `dx` (= `cellSize`), a characteristic physical velocity `U` and viscosity 
 - Forces on elements: momentum exchange over bounce-back links, `F = Σ c_ī (2 f̃*_ī + 6 wᵢ ρ₀ cᵢ·u_w)` with the shifted population `f̃ = f − w`: this removes the reference pressure ρ₀c_s², so forces are gauge like every other output (it cancels on closed bodies anyway).
 - The initial populations, relaxation rates and the list of bounce-back links come from shared code (`cfd_lbm::shared`). The GPU gathers the outgoing population of every link and the CPU sums the forces in f64 in the CPU backend's order; diagnostics are reduced per workgroup on the GPU (Σ(ρ − 1) rather than Σρ, to keep f32 partial sums accurate) and finished in f64.
 - Divergence (NaN/Inf) checks on the GPU test values *loaded* from memory (the populations): compilers may assume arithmetic results are finite and fold a check on them away ([ADR-019](07-decisions-and-questions.md)).
-- Parity with the CPU (§7) is measured on ρ in absolute terms and on u and θ relative to the field maximum; both velocity components share the scale (a component that is zero up to round-off must not set it). Measured on the RTX 4060: ≤ 3e-6.
+- Parity with the CPU (§7) is measured on ρ in absolute terms and on u and θ relative to the field maximum; both velocity components share the scale (a component that is zero up to round-off must not set it). Measured on the RTX 4060: wgpu ≤ 3e-6 (its driver fuses multiply-adds); CUDA, compiled without multiply-add contraction (`--fmad=false`), is **bit-identical** to the CPU on every parity case and in every validation result. The cases live in `cfd_verify::parity` and are shared by both GPU backends.
 
 ## 4. Heat transfer
 

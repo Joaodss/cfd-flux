@@ -94,11 +94,11 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 
 ### 2b — CUDA (`crates/cfd-cuda`, Cargo feature `cuda`)
 
-- [ ] S — `cfd-cuda` crate with `cudarc`; conditional compilation (`--features cuda`) so the workspace builds without the CUDA Toolkit; device and *compute capability* detection.
-- [ ] M — CUDA C kernels (`kernels/*.cu`) compiled at runtime by NVRTC — preferably straight to `sm_89` cubin (see [development.md](development.md)): D2Q9 TRT stream-collide, BCs, D2Q5 thermal — a direct translation of the WGSL kernels, same indexing.
-- [ ] M — Reductions (diagnostics, forces) with warp shuffles; f16 sampling; asynchronous copies with streams and pinned memory.
-- [ ] S — Implement the `Solver` trait (`CudaLbm`, ADR-017) → `BackendKind::Cuda`; `backend: "auto"` prefers CUDA > wgpu > CPU (configurable).
-- [ ] M — CUDA vs CPU parity tests (same tolerance); only run with `--features cuda` and an NVIDIA GPU (self-hosted CI job or manually).
+- [x] S — `cfd-cuda` crate with `cudarc`; conditional compilation (`--features cuda`) so the workspace builds without the CUDA Toolkit; device and *compute capability* detection. *(`CudaDevice`; `cudarc` loaded at runtime, so even `--features cuda` builds without the toolkit; clear errors without a driver, device or NVRTC; ADR-021.)*
+- [x] M — CUDA C kernels (`kernels/*.cu`) compiled at runtime by NVRTC — preferably straight to `sm_89` cubin (see [development.md](development.md)): D2Q9 TRT stream-collide, BCs, D2Q5 thermal — a direct translation of the WGSL kernels, same indexing. *(Constants and layouts generated from Rust by `cfd_lbm::abi`, checked by `static_assert`s; `--fmad=false`.)*
+- [x] M — Reductions (diagnostics, forces) with warp shuffles; f16 sampling; asynchronous copies with streams and pinned memory. *(The f16 sampling kernel moves to Phase 3, as for wgpu; field copies run on a second stream from a device snapshot.)*
+- [x] S — Implement the `Solver` trait (`CudaLbm`, ADR-017) → `BackendKind::Cuda`; `backend: "auto"` prefers CUDA > wgpu > CPU (configurable). *(Fallback tested end to end; `--backend` chooses explicitly.)*
+- [x] M — CUDA vs CPU parity tests (same tolerance); only run with `--features cuda` and an NVIDIA GPU (self-hosted CI job or manually). *(The 12 cases of `cfd_verify::parity`, shared with wgpu: bit-identical to the CPU. CI compiles the kernels with NVRTC only; `verify --full --backend cuda` 13/13.)*
 
 ### 2c — Engine comparison
 
