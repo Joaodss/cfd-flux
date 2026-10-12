@@ -15,6 +15,8 @@ pub const ENABLED: bool = cfg!(feature = "cuda");
 #[cfg(feature = "cuda")]
 mod device;
 #[cfg(feature = "cuda")]
+pub mod kernels;
+#[cfg(feature = "cuda")]
 #[allow(unsafe_code)]
 mod raw;
 

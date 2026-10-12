@@ -24,9 +24,8 @@ use cfd_core::domain::Domain;
 use cfd_core::solver::{
     BackendKind, Diagnostics, ElementForce, LatticeFields, PendingFields, Solver, SolverError,
 };
-use cfd_lbm::shared::{
-    equilibrium_populations, initial_fields, relaxation_rates, wall_forces, wall_links, WallLink,
-};
+use cfd_lbm::abi::{bc_words, KernelParams};
+use cfd_lbm::shared::{equilibrium_populations, initial_fields, wall_forces, wall_links, WallLink};
 use cfd_lbm::LbmConfig;
 use wgpu::util::DeviceExt;
 
@@ -46,36 +45,15 @@ const MAX_REDUCE_GROUPS: u32 = 1024;
 /// Values per workgroup in the diagnostics partials (see `reduce.wgsl`).
 const PARTIALS: usize = 8;
 
-/// The uniform `Params` of the kernels (`shaders/common.wgsl`) as 16 words; `f32` values are
-/// stored by their bits. Layout checked against the WGSL struct by a test.
+/// The uniform `Params` of the kernels (`shaders/common.wgsl`): the words of
+/// [`KernelParams`]. Layout checked against the WGSL struct by a test.
 pub(crate) fn params_words(
     d: &Domain,
     config: LbmConfig,
     body_force: [f32; 2],
     links: usize,
 ) -> [u32; 16] {
-    let (omega, omega_g) = relaxation_rates(d, config);
-    let periodic = d.periodic[0] as u32 | (d.periodic[1] as u32) << 1;
-    let buoyancy = d.physics.buoyancy.map(|v| v as f32);
-    let b = f32::to_bits;
-    [
-        d.width,
-        d.height,
-        d.width * d.height,
-        periodic,
-        b(omega[0]),
-        b(omega[1]),
-        b(omega_g[0]),
-        b(omega_g[1]),
-        b(body_force[0]),
-        b(body_force[1]),
-        b(buoyancy[0]),
-        b(buoyancy[1]),
-        links as u32,
-        0,
-        0,
-        0,
-    ]
+    KernelParams::new(d, config, body_force, links).to_words()
 }
 
 /// `Domain::flags` as uploaded: the same bytes, padded to whole 32-bit words.
@@ -222,14 +200,7 @@ impl WgpuLbm {
         );
         let flags = init("flags", &flag_bytes(&domain.flags), U::STORAGE);
         let slot = init("bc_slot", bytemuck::cast_slice(&domain.bc_slot), U::STORAGE);
-        let bc_words: Vec<f32> = domain
-            .bc_params
-            .iter()
-            .flat_map(|p| {
-                let [ux, uy] = p.velocity;
-                [ux, uy, p.density, p.theta, p.heat_flux, 0.0, 0.0, 0.0]
-            })
-            .collect();
+        let bc_words = bc_words(&domain.bc_params);
         let bc = init("bc_params", bytemuck::cast_slice(&bc_words), U::STORAGE);
 
         let pop = U::STORAGE | U::COPY_DST | U::COPY_SRC;
