@@ -8,8 +8,11 @@ Everything here is **post-MVP** unless stated otherwise. Roughly ordered by bene
 | Technique | Expected gain | Notes |
 |-----------|---------------|-------|
 | Fused stream-collide kernel + SoA | Baseline | Already in the MVP |
-| **AA pattern / Esoteric Pull** | −50% memory, up to +30% speed | A single `f_i` buffer |
-| **f16/"FP16C" storage** (compute in f32) | −50% memory, ~1.5–2× speed | FluidX3D technique; validate accuracy |
+| Macroscopic fields only on output steps | ≈ +15% speed (84 → 72 B per update) | Planned in Phase 3 |
+| **AA pattern / Esoteric Pull** | −50% population memory (94 → 58 B/cell in 2D) | A single `f_i` buffer; no fewer bytes per step on a GPU, so a capacity gain, not a speed gain |
+| **f16/"FP16C" storage** (compute in f32) | −50% population memory, ≈ 1.7× speed (84 → 50 B per update) | FluidX3D technique; validate accuracy |
+
+Measured starting point (RTX 4060, Nsight Compute): the stream-collide kernel runs at 94% of DRAM bandwidth and moves exactly the ideal 84 B per cell, so these storage changes are the remaining levers. Plan, drawbacks and mitigations: [Phase 8a](05-implementation-plan.md#8a--memory-lean-storage-proposed-adr-022) and ADR-022.
 | Compact flags + precomputed solid neighbours | Less divergence | Branch-free kernels |
 | **Block-sparse grid** (only blocks containing fluid) | Large for solid-heavy domains | 16×16/32×32 tiles + active-block table |
 
