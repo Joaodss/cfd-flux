@@ -2,7 +2,7 @@
 
 A computational fluid dynamics (CFD) simulator in the browser. You draw the domain **pixel by pixel**, place walls, fluid inlets and outlets, temperatures and boundary properties, and the simulation runs on a local Rust server on the GPU (CUDA or wgpu), with the CPU as a fallback. Results are streamed back and visualised in the browser.
 
-> Status: **Phase 2a complete** — a validated LBM solver (D2Q9 + D2Q5 thermal, TRT, link-wise boundaries, Boussinesq, forces) on the CPU and on the GPU through wgpu/WGSL, with a headless CLI (`run`, `render`, `bench`, `verify`). It reproduces Ghia (1982), Schäfer & Turek (1996), de Vahl Davis (1983) and the Rayleigh-Bénard onset within 2% on both backends — see the validation reports ([CPU](validation/report/README.md), [wgpu](validation/report-wgpu/README.md)) — at 2,850 MLUPS on an RTX 4060 and 65–180 MLUPS on a desktop CPU ([benchmarks](docs/benchmarks.md)). Next: the CUDA backend (Phase 2b).
+> Status: **Phase 2b complete** — a validated LBM solver (D2Q9 + D2Q5 thermal, TRT, link-wise boundaries, Boussinesq, forces) on three engines: the CPU, wgpu/WGSL and CUDA (bit-identical to the CPU), with a headless CLI (`run`, `render`, `bench`, `verify`). It reproduces Ghia (1982), Schäfer & Turek (1996), de Vahl Davis (1983) and the Rayleigh-Bénard onset within 2% on every backend — see the validation reports ([CPU](validation/report/README.md), [wgpu](validation/report-wgpu/README.md), [CUDA](validation/report-cuda/README.md)) — at ~2,850 MLUPS on an RTX 4060 and 65–180 MLUPS on a desktop CPU ([benchmarks](docs/benchmarks.md)). Next: `cfd-cli compare` (Phase 2c) and the server (Phase 3).
 
 ## The idea in 30 seconds
 
@@ -28,7 +28,7 @@ cargo run -p cfd-cli -- example --list          # example scenes
 cargo run -p cfd-cli -- validate scenes/*.json  # validate scenes
 cargo run --release -p cfd-cli -- run scenes/cylinder-re100.json --out out/cyl --end-time 12   # frames + PNGs
 cargo run --release -p cfd-cli -- verify --quick   # validation suite (CI subset)
-cargo run --release -p cfd-cli -- bench --backend wgpu   # MLUPS on the GPU (or --backend cpu)
+cargo run --release -p cfd-cli -- bench --backend cuda   # MLUPS on the GPU (or --backend wgpu / cpu)
 cd apps/web && npm install && npm run dev       # frontend
 ```
 
@@ -43,7 +43,7 @@ crates/
   cfd-cli/     CLI: schema, example, validate, run, render, bench, verify
   cfd-lbm/     LBM solver on the CPU          (Phase 1)
   cfd-gpu/     wgpu/WGSL backend              (Phase 2a, parity-tested against cfd-lbm)
-  cfd-cuda/    CUDA backend, `cuda` feature   (Phase 2b)
+  cfd-cuda/    CUDA backend, `cuda` feature   (Phase 2b, bit-identical to cfd-lbm)
   cfd-verify/  backend-agnostic validation suite and report
   cfd-server/  HTTP/WebSocket API and jobs    (Phase 3)
 apps/web/      React + TypeScript + Vite frontend

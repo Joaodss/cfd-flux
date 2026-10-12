@@ -3,6 +3,7 @@
 
 use cfd_core::domain::BcParams;
 use cfd_core::DomainOptions;
+use cfd_lbm::abi::{bc_fields, params_fields, KernelParams};
 use cfd_lbm::LbmConfig;
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 
@@ -49,36 +50,20 @@ fn bc_params_layout_matches_the_rust_struct() {
     let m = module(LBM_WGSL);
     let (size, members) = layout(&m, "BcParams");
     assert_eq!(size as usize, std::mem::size_of::<BcParams>());
-    let offset = |name: &str| members.iter().find(|(n, _)| n == name).unwrap().1 as usize;
-    assert_eq!(offset("velocity"), std::mem::offset_of!(BcParams, velocity));
-    assert_eq!(offset("density"), std::mem::offset_of!(BcParams, density));
-    assert_eq!(offset("theta"), std::mem::offset_of!(BcParams, theta));
-    assert_eq!(
-        offset("heat_flux"),
-        std::mem::offset_of!(BcParams, heat_flux)
-    );
+    for (name, offset) in bc_fields() {
+        let off = members.iter().find(|(n, _)| n == name).unwrap().1;
+        assert_eq!(off as usize, offset, "{name}");
+    }
 }
 
 #[test]
-fn params_layout_matches_params_words() {
+fn params_layout_matches_kernel_params() {
     let m = module(LBM_WGSL);
     let (size, members) = layout(&m, "Params");
-    assert_eq!(size, 64);
-    // Word index of each member in `params_words`.
-    let expected = [
-        ("w", 0),
-        ("h", 1),
-        ("n", 2),
-        ("periodic", 3),
-        ("omega", 4),
-        ("omega_g", 6),
-        ("body_force", 8),
-        ("buoyancy", 10),
-        ("links", 12),
-    ];
-    for (name, word) in expected {
+    assert_eq!(size as usize, std::mem::size_of::<KernelParams>());
+    for (name, offset) in params_fields() {
         let off = members.iter().find(|(n, _)| n == name).unwrap().1;
-        assert_eq!(off, 4 * word, "{name}");
+        assert_eq!(off as usize, offset, "{name}");
     }
     let d = cfd_core::Domain::from_scene(&cfd_core::examples::channel(), &DomainOptions::default())
         .unwrap();

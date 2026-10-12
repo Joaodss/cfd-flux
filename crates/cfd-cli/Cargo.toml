@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 cfd-core.workspace = true
+cfd-cuda.workspace = true
 cfd-gpu.workspace = true
 cfd-io.workspace = true
 cfd-lbm.workspace = true
@@ -22,6 +23,12 @@ clap.workspace = true
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[features]
+# The CUDA backend builds without the CUDA Toolkit (its libraries are loaded at runtime), so it
+# is on by default; `--no-default-features` leaves it out.
+default = ["cuda"]
+cuda = ["cfd-cuda/cuda"]
 
 [lints]
 workspace = true

@@ -8,10 +8,12 @@
 //! - [`references`]: published reference data, embedded from `validation/references/`.
 //! - [`harness`]: running solvers to steady state, timing, error norms and convergence orders.
 //! - [`cases`]: the cases themselves and the [`cases::all`] registry.
+//! - [`parity`]: backend ↔ CPU-reference parity checks shared by the GPU backends' tests.
 //! - [`report`]: the Markdown report with SVG plots and PNG snapshots.
 
 pub mod cases;
 pub mod harness;
+pub mod parity;
 mod plot;
 pub mod references;
 pub mod report;

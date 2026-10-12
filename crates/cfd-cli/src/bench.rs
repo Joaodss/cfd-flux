@@ -125,7 +125,7 @@ pub fn bench(args: BenchArgs) -> Result<()> {
         threads: choice.threads,
         backend: choice.backend,
         device: choice.device.clone(),
-        workgroup: choice.device.is_some().then_some(args.solver.workgroup),
+        workgroup: choice.is_gpu().then_some(args.solver.workgroup),
         collision: choice.collision,
         optimised_build: optimised,
         results: Vec::new(),

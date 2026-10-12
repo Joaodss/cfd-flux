@@ -11,6 +11,7 @@ rust-version = "1.87"
 
 [workspace.dependencies]
 cfd-core = { path = "crates/cfd-core" }
+cfd-cuda = { path = "crates/cfd-cuda" }
 cfd-gpu = { path = "crates/cfd-gpu" }
 cfd-io = { path = "crates/cfd-io" }
 cfd-lbm = { path = "crates/cfd-lbm" }
@@ -19,7 +20,17 @@ anyhow = "1"
 base64 = "0.22"
 bytemuck = "1.25"
 clap = { version = "4.5", features = ["derive"] }
+# CUDA backend: dynamic loading (no toolkit needed to build) and the CUDA 13.0 bindings, so any
+# 13.x driver works; the driver and NVRTC libraries are opened at runtime.
+cudarc = { version = "0.19.10", default-features = false, features = [
+    "std",
+    "driver",
+    "nvrtc",
+    "dynamic-loading",
+    "cuda-13000",
+] }
 half = "2.4"
+libloading = "0.9"
 naga = { version = "30", features = ["wgsl-in"] }
 png = "0.18"
 pollster = "1"

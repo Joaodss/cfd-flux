@@ -90,15 +90,15 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 - [x] S — Asynchronous readback with double-buffered staging (the simulation keeps running while a frame is copied). *(`Solver::request_fields`, ADR-020; used by `cfd-cli run`.)*
 - [x] M — GPU vs CPU parity tests (tolerance in [04 §7](04-numerical-methods.md#7-validation)); run when an adapter exists (including software ones such as lavapipe/WARP in CI). *(12 cases, max difference ≤ 3e-6; `CFD_REQUIRE_GPU=1` in CI.)*
 - [x] S — Benchmarks at several resolutions; recorded in `docs/benchmarks.md`. *(2,834 MLUPS isothermal / 1,812 thermal at 1024² on the RTX 4060.)*
-- [ ] M — (Optional) AA pattern / Esoteric Pull to halve memory.
+- [ ] M — (Optional) AA pattern / Esoteric Pull to halve memory. *(Moved to [Phase 8a](#8a--memory-lean-storage-proposed-adr-022), together with f16 storage.)*
 
 ### 2b — CUDA (`crates/cfd-cuda`, Cargo feature `cuda`)
 
-- [ ] S — `cfd-cuda` crate with `cudarc`; conditional compilation (`--features cuda`) so the workspace builds without the CUDA Toolkit; device and *compute capability* detection.
-- [ ] M — CUDA C kernels (`kernels/*.cu`) compiled at runtime by NVRTC — preferably straight to `sm_89` cubin (see [development.md](development.md)): D2Q9 TRT stream-collide, BCs, D2Q5 thermal — a direct translation of the WGSL kernels, same indexing.
-- [ ] M — Reductions (diagnostics, forces) with warp shuffles; f16 sampling; asynchronous copies with streams and pinned memory.
-- [ ] S — Implement the `Solver` trait (`CudaLbm`, ADR-017) → `BackendKind::Cuda`; `backend: "auto"` prefers CUDA > wgpu > CPU (configurable).
-- [ ] M — CUDA vs CPU parity tests (same tolerance); only run with `--features cuda` and an NVIDIA GPU (self-hosted CI job or manually).
+- [x] S — `cfd-cuda` crate with `cudarc`; conditional compilation (`--features cuda`) so the workspace builds without the CUDA Toolkit; device and *compute capability* detection. *(`CudaDevice`; `cudarc` loaded at runtime, so even `--features cuda` builds without the toolkit; clear errors without a driver, device or NVRTC; ADR-021.)*
+- [x] M — CUDA C kernels (`kernels/*.cu`) compiled at runtime by NVRTC — preferably straight to `sm_89` cubin (see [development.md](development.md)): D2Q9 TRT stream-collide, BCs, D2Q5 thermal — a direct translation of the WGSL kernels, same indexing. *(Constants and layouts generated from Rust by `cfd_lbm::abi`, checked by `static_assert`s; `--fmad=false`.)*
+- [x] M — Reductions (diagnostics, forces) with warp shuffles; f16 sampling; asynchronous copies with streams and pinned memory. *(The f16 sampling kernel moves to Phase 3, as for wgpu; field copies run on a second stream from a device snapshot.)*
+- [x] S — Implement the `Solver` trait (`CudaLbm`, ADR-017) → `BackendKind::Cuda`; `backend: "auto"` prefers CUDA > wgpu > CPU (configurable). *(Fallback tested end to end; `--backend` chooses explicitly.)*
+- [x] M — CUDA vs CPU parity tests (same tolerance); only run with `--features cuda` and an NVIDIA GPU (self-hosted CI job or manually). *(The 12 cases of `cfd_verify::parity`, shared with wgpu: bit-identical to the CPU. CI compiles the kernels with NVRTC only; `verify --full --backend cuda` 13/13.)*
 
 ### 2c — Engine comparison
 
@@ -106,7 +106,7 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 - [ ] S — `cfd-cli bench --backends wgpu,cuda`: MLUPS table per resolution (256² → 4096²), f32 and (later) f16; results in `docs/benchmarks.md`.
 - [ ] S — In the API/UI (Phases 3–5): the chosen backend shows up in the job metadata; the same scenario can be launched on two backends and the differences viewed side by side (reusing the comparison UI).
 
-**Acceptance:** CPU↔wgpu↔CUDA parity within tolerance; ≥ 1,000 MLUPS at 1024² on both engines (NFR-01 targets ≥ 2,000 on the RTX 4060); `cfd-cli compare` produces a report for the validation cases; CUDA → wgpu → CPU fallback tested. **wgpu part met (2026-10-10):** CPU↔wgpu parity ≤ 3e-6 on 12 cases, `verify --full --backend wgpu` 13/13 (St and C_D,max identical to the CPU to 4 digits), 2,834 MLUPS at 1024².
+**Acceptance:** CPU↔wgpu↔CUDA parity within tolerance; ≥ 1,000 MLUPS at 1024² on both engines (NFR-01 targets ≥ 2,000 on the RTX 4060); `cfd-cli compare` produces a report for the validation cases; CUDA → wgpu → CPU fallback tested. **wgpu part met (2026-10-10):** CPU↔wgpu parity ≤ 3e-6 on 12 cases, `verify --full --backend wgpu` 13/13 (St and C_D,max identical to the CPU to 4 digits), 2,834 MLUPS at 1024². **CUDA part met (2026-10-12):** CPU↔CUDA bit-identical on the 12 parity cases (`--fmad=false`), `verify --full --backend cuda` 13/13 with every plot byte-identical to the CPU report, 2,870 MLUPS at 1024² on a quiet desktop (kernel at 94% of DRAM bandwidth), CUDA → wgpu → CPU fallback tested end to end. Remaining: `cfd-cli compare` (2c).
 
 ---
 
@@ -120,6 +120,10 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 - [ ] M — Worker loop on a dedicated thread (the solver never blocks the tokio runtime); channel for frames. The loop processes **commands** (`Step`, `Pause`, `Resume`, `Cancel`, `PatchCells`, `SetParam`) between batches of steps — the foundation of interactive mode ([ADR-011](07-decisions-and-questions.md)).
 - [ ] M — WebSocket: progress (JSON) + frames (binary); backpressure (if the client is slow, drop intermediate *streaming* frames but keep all of them on disk).
 - [ ] M — *(moved from Phase 2a)* GPU sampling kernel: physical output fields and f16 conversion on the device before the copy, so streamed frames cross the bus at half size.
+- [ ] M — Macroscopic fields only when needed: the stream-collide kernel writes ρ, ux, uy (and θ) only on steps whose fields are read (frames, probes, diagnostics), through a second kernel variant (`write_macro`), so the other steps move 72 instead of 84 B per cell (≈ +15% MLUPS on every GPU backend; parity stays exact, since only stores are skipped). Issues and solutions:
+  - Pressure outlets read the cell's velocity from the previous step (`mac`) → keep writing u for the cells that have an anti-bounce-back link (a few columns), or recompute it from the cell's own populations.
+  - Diagnostics, probes and `request_fields` must see fresh fields → the solver schedules a `write_macro` step before any read (the `Solver` trait already knows when they happen); CUDA keeps one captured graph per variant.
+  - The CPU backend gains nothing (it is not bandwidth-bound at small sizes) but keeps the same rule, so all three backends stay identical.
 - [ ] M — `ResultStore` on disk; SQLite for job and scene metadata.
 - [ ] S — `/api/capabilities` (backends, GPU, limits).
 - [ ] S — Integration tests: submit scene → receive N frames → `completed`.
@@ -194,6 +198,43 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 
 Detailed in [06](06-optimizations-and-ai.md): f16 storage, sparse grids, quadtree AMR, multi-GPU, adaptive time stepping, LES, CUDA-specific optimizations.
 
+### 8a — Memory-lean storage (proposed, [ADR-022](07-decisions-and-questions.md))
+
+**Why:** LBM is bandwidth-bound — the CUDA kernel already runs at 94% of the RTX 4060's DRAM bandwidth and moves exactly the ideal 84 B per cell (Nsight Compute, [benchmarks](benchmarks.md)) — so the only way to go faster, or to fit larger grids on cards with less memory, is to **store and move fewer bytes per cell**. In 2D this is a nice-to-have (8 GB already holds 4000² cells); in 3D it decides what is usable: D3Q19 with two f32 buffers needs ≈ 175 B/cell (≈ 360³ on 8 GB), a single f16 buffer ≈ 64 B/cell (≈ 510³).
+
+**When:** after the MVP, once 6a (free surface) and 5b (interactive patching) have settled the kernel, and **before Phase 10** (a prerequisite for 3D). Doing it earlier would mean rewriting the same three kernels twice.
+
+| Storage | Bytes stored per cell (2D, isothermal) | Bytes moved per update | Effect |
+|---------|----------------------------------------|------------------------|--------|
+| Today: two f32 buffers (72) + flags (2) + slot (4) + ρ/u/θ planes (16) | 94 | 84 | reference |
+| Macroscopic fields only on output steps (Phase 3) | 94 | 72 | ≈ 1.15× speed |
+| f16/FP16C populations, two buffers | 58 | 50 | ≈ 1.7× speed, 1.6× cells |
+| Esoteric Pull (one buffer), f32 | 58 | 84 | 1.6× cells, same speed |
+| Esoteric Pull + f16 | 40 | 50 | ≈ 1.7× speed, ≈ 2.3× cells |
+
+Tasks:
+- [ ] M — **f16 storage option**: a 16-bit format for the shifted populations (FluidX3D's FP16C, which trades exponent range for mantissa, or IEEE half), converted to f32 on load and back on store; arithmetic stays f32. Scene format change: `run.storage: "f32" | "f16"` (schema, examples and generated types; f32 stays the default). Implemented on **all three backends, the CPU included**, so CPU-f16 ↔ GPU-f16 parity can stay exact (bit-identical on CUDA) while the f32 CPU backend remains the accuracy reference.
+- [ ] M — **f16 validation**: the full suite with f16 storage on every backend, with tolerances fixed per case before looking at results (ADR-018); reports in `validation/report-<backend>-f16/`; `Scene → Domain` warns in regimes where f16 is known to be inaccurate.
+- [ ] L — **Esoteric Pull** (single population buffer, Lehmann 2022; the AA pattern is the alternative) on all three backends: streaming and every boundary rule in both step parities, force gather, readback and `set_equilibrium` aware of the parity. Since only the place where each value is stored changes, the result must be **bit-identical** to the ping-pong kernel — the strongest possible test.
+- [ ] S — Benchmarks: bytes per cell (Nsight Compute), MLUPS, and the largest grid that fits in 8 GB and in 4 GB, per storage mode, on a quiet desktop.
+- [ ] S — Capability-based defaults: `/api/capabilities` reports VRAM and bandwidth; the server suggests a storage mode and resolution that fit the user's GPU.
+
+Drawbacks, issues and possible solutions:
+
+| Drawback / issue | Impact | Possible solution |
+|------------------|--------|-------------------|
+| Every kernel exists three times (CPU, WGSL, CUDA), and these changes touch their core | Large effort; any later kernel change (6a, 5b) would be redone | Schedule after 6a/5b; generate shared index/conversion helpers from Rust (`cfd_lbm::abi`, as for the constants); keep the shared parity harness (`cfd_verify::parity`) as the safety net |
+| f16 storage loses exact parity with the f32 reference | The current "bit-identical" check no longer applies across storage modes | Implement the same format on the CPU: parity compares backends **in the same storage mode** (still exact), and f32 vs f16 is judged by the validation suite, not by parity |
+| f16 accuracy | Poiseuille's "largest L2 error < 1e-5" (exact scheme, at the f32 floor) will fail; low-Mach flows, small temperature differences (Rayleigh-Bénard onset, u ≈ 1e-4) and long runs may drift | f32 stays the default; FP16C (more mantissa than IEEE half) on the already-shifted populations; f16-specific tolerances per case; `Scene → Domain` warns (or refuses f16) below a lattice velocity / θ range; the user can switch any scene back to f32 |
+| WGSL 16-bit support | The `shader-f16` feature is not available on every adapter (nor in every browser) | Pack and unpack two values per `u32` by hand (`pack2x16float`/bit operations) — works everywhere, and a custom FP16C format needs manual conversion anyway |
+| Esoteric Pull changes where each population lives on even and odd steps | Every link-wise boundary rule (bounce-back, anti-bounce-back, zero-gradient copy, the thermal rules) needs two variants — the most likely source of bugs | Derive both variants from one table of rules; bit-identical tests against the ping-pong kernel on the 12 parity cases; `compute-sanitizer` memcheck |
+| Parity-dependent state | Momentum-exchange forces, field readback, `set_equilibrium` and interactive `PatchCells` (5b) must know which slots hold which population | Expose a consistent state only after even steps, or put the slot mapping in shared code (`cfd_lbm::shared`) used by every backend and by the force gather |
+| Interaction with the free surface (6a) | Cell conversion (fluid ↔ interface ↔ gas) and mass exchange read and write populations | Implement after 6a; FluidX3D combines Esoteric Pull, FP16C and free surface, so the approach is proven |
+| Esoteric Pull does not reduce the bytes moved per step | No speed gain from it alone (unlike the AA pattern on CPUs) | Treat it as a capacity feature (larger grids); speed comes from f16 and from skipping macroscopic stores |
+| Measured gains can be smaller than desktop noise | On a GPU that also drives the display, the compositor alone cost up to 20% | Benchmark on a quiet desktop (display at 50 Hz, nothing animating) and report kernel-level numbers from Nsight Compute next to the wall-clock rates |
+| More configurations to test | f32/f16 × CPU/wgpu/CUDA, two step parities | Run the parity suite per storage mode in CI on the CPU and software adapters; full GPU runs locally, as today |
+| Temporal blocking (several steps per tile in shared memory/L2) would beat the bandwidth limit | Growing halos and the boundary rules make it hard to get right | Not planned; only as a research experiment if the rest is done |
+
 ## Phase 9 — AI
 
 Detailed in [06 §3](06-optimizations-and-ai.md#3-ai): dataset generation with the solver itself, surrogate models (U-Net/FNO), warm start, super-resolution, AI-accelerated Poisson solves.
@@ -228,7 +269,7 @@ Only starts once 2D is complete and validated. It is practically a second projec
 - [ ] L — D3Q19/D3Q27 solvers (reusing the dimension-generic indexing prepared in 2D) on all three backends; 3D validation (cubic cavity, sphere, 3D Taylor-Green).
 - [ ] L — 3D editor: extrusion of 2D drawings, slice-by-slice editing, primitives (box, cylinder, sphere), voxelised STL import. Three.js via react-three-fiber.
 - [ ] L — 3D visualisation: slices, isosurfaces, volume rendering, 3D streamlines.
-- [ ] M — Memory: with 8 GB of VRAM, 3D at ~256³–384³ requires f16 storage and the AA pattern (Phase 8) — so Phase 8 is a prerequisite.
+- [ ] M — Memory: with 8 GB of VRAM, D3Q19 with two f32 buffers fits only ≈ 360³ cells (≈ 175 B/cell); a single f16 population buffer (≈ 64 B/cell) reaches ≈ 510³ — so [Phase 8a](#8a--memory-lean-storage-proposed-adr-022) is a prerequisite.
 - [ ] L — Unstructured meshes / cut-cell / immersed boundary for smooth geometry (see [06](06-optimizations-and-ai.md)).
 - [ ] L — SPH as a meshless alternative.
 
@@ -252,4 +293,6 @@ Only starts once 2D is complete and validated. It is practically a second projec
 | Buffer limits in wgpu/WebGPU (e.g. 128 MB–2 GB per binding) | Large domains fail | Split `f_i` across several buffers; query adapter limits |
 | Bandwidth for streaming frames | Sluggish UI | f16 + zstd + downsampling + dropping intermediate frames |
 | GPU/CPU numerical differences | Flaky tests | Relative tolerances, tests on aggregated quantities |
+| Kernel rewrites in three languages (f16 storage, Esoteric Pull, free surface) | Effort multiplied by 3, bugs in one backend | Order the rewrites (Phase 8a after 6a/5b), constants and helpers generated from Rust, shared parity harness, bit-identical tests where the arithmetic does not change |
+| Cards with little memory or bandwidth | Small grids or slow runs for some users | Memory-lean storage (Phase 8a) and capability-based defaults from `/api/capabilities` |
 | Scope too large | The project never reaches MVP | Strict MVP (Phases 0–5 + 6a); everything else is post-MVP |

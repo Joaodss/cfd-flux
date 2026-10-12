@@ -9,11 +9,18 @@ rust-version.workspace = true
 
 [dependencies]
 cfd-core.workspace = true
+cfd-lbm.workspace = true
+cudarc = { workspace = true, optional = true }
+libloading = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+cfd-verify.workspace = true
 
 [features]
-# Enables the CUDA backend. Requires the NVIDIA CUDA Toolkit (NVRTC) at runtime.
-# The cudarc dependency is added in Phase 2b.
-cuda = []
+# Enables the CUDA backend. It builds without the CUDA Toolkit (the libraries are loaded at
+# runtime); running it needs an NVIDIA driver >= 13.0 and the CUDA 13 NVRTC library.
+cuda = ["dep:cudarc", "dep:libloading"]
 
 [lints]
 workspace = true

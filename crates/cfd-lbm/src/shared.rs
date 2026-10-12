@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use cfd_core::domain::{flags, Domain, LINKS, OPPOSITE};
-use cfd_core::solver::{ElementForce, LatticeFields};
+use cfd_core::solver::{Diagnostics, ElementForce, LatticeFields};
 
 use crate::config::{flow_rates, thermal_rates, LbmConfig};
 use crate::kernel::{equilibrium, thermal_equilibrium};
@@ -126,4 +126,37 @@ pub fn relaxation_rates(d: &Domain, config: LbmConfig) -> ([f32; 2], [f32; 2]) {
         .map_or([1.0; 2], |tau| thermal_rates(config.collision, tau))
         .map(|v| v as f32);
     (omega, omega_g)
+}
+
+/// Values per workgroup/block in the GPU diagnostics partials: fluid cells, Σ(ρ − 1), ½Σρ|u|²,
+/// max |u|, Σθ, non-finite flag, 2 × padding.
+pub const DIAGNOSTIC_PARTIALS: usize = 8;
+
+/// Finishes the per-workgroup partials of the GPU diagnostics reductions in f64. `groups` is the
+/// number of records expected; a short read (device lost) reports non-finite diagnostics.
+pub fn diagnostics_from_partials(
+    step: u64,
+    partials: &[f32],
+    groups: usize,
+    thermal: bool,
+) -> Diagnostics {
+    let (mut cells, mut dmass, mut energy, mut umax, mut heat) = (0.0, 0.0, 0.0, 0.0f64, 0.0);
+    let mut finite = partials.len() >= groups * DIAGNOSTIC_PARTIALS;
+    for w in partials.chunks_exact(DIAGNOSTIC_PARTIALS).take(groups) {
+        cells += w[0] as f64;
+        dmass += w[1] as f64;
+        energy += w[2] as f64;
+        umax = umax.max(w[3] as f64);
+        heat += w[4] as f64;
+        finite &= w[5] == 0.0;
+    }
+    Diagnostics {
+        step,
+        fluid_cells: cells as usize,
+        mass: cells + dmass,
+        kinetic_energy: energy,
+        max_velocity: umax,
+        thermal_energy: thermal.then_some(heat),
+        finite: finite && umax.is_finite() && energy.is_finite(),
+    }
 }
