@@ -21,6 +21,8 @@ mod lbm;
 #[cfg(feature = "cuda")]
 #[allow(unsafe_code)]
 mod raw;
+#[cfg(feature = "cuda")]
+mod readback;
 
 #[cfg(feature = "cuda")]
 pub use device::{

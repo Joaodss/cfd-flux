@@ -16,7 +16,7 @@ use cfd_lbm::abi::KernelParams;
 use cudarc::driver::sys as driver_sys;
 use cudarc::driver::{
     CudaContext, CudaFunction, CudaModule, CudaSlice, CudaStream, CudaViewMut, DeviceRepr,
-    DriverError, LaunchConfig, PushKernelArg,
+    DriverError, LaunchConfig, PinnedHostSlice, PushKernelArg,
 };
 use cudarc::nvrtc::{result as nvrtc, sys as nvrtc_sys};
 
@@ -207,6 +207,28 @@ struct ParamsArg(KernelParams);
 // SAFETY: `KernelParams` is `#[repr(C)]`, made only of `u32`/`f32` fields with explicit padding
 // and no pointers, so its bytes are a valid `Params` (checked by the generated `static_assert`s).
 unsafe impl DeviceRepr for ParamsArg {}
+
+/// `len` zeroed values of page-locked ("pinned") host memory, for downloads.
+///
+/// The OS may move or swap out ordinary (pageable) memory, so the GPU cannot write into it
+/// directly: the driver copies through its own pinned buffer and the call returns only when the
+/// copy is done. Pinned memory stays put — like a `GCHandle.Alloc(.., Pinned)` enforced by the OS —
+/// so a copy engine can DMA into it while the CPU and the compute stream carry on. `cudarc`'s
+/// `alloc_pinned` makes the memory *write-combined*, which is fast for uploads but uncached for
+/// CPU reads (several times slower to read back), so downloads use the default flags.
+pub(crate) fn pinned_zeroed(
+    ctx: &Arc<CudaContext>,
+    len: usize,
+) -> Result<PinnedHostSlice<f32>, DriverError> {
+    // SAFETY: the memory is uninitialised after the allocation; it is zeroed below, through a raw
+    // pointer, before any reference to it exists.
+    let mut pinned = unsafe { ctx.alloc_pinned_with_flags::<f32>(len, 0) }?;
+    let ptr = pinned.as_mut_ptr()?;
+    // SAFETY: `ptr` points to `len` `f32`s owned by `pinned` (allocated above, nothing queued
+    // on it yet), and writing zero bytes produces valid `f32` values.
+    unsafe { std::ptr::write_bytes(ptr, 0, len) };
+    Ok(pinned)
+}
 
 /// Turns off `cudarc`'s per-buffer event tracking for buffers allocated afterwards.
 ///
