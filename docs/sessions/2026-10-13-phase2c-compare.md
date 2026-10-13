@@ -12,7 +12,7 @@ Stop after step 3 or 4 if the session gets long, with everything tested and comm
 | 4 | `cfd-cli bench --backends`: interleaved runs, one table with a column per backend, `--json`; quiet-desktop run in `docs/benchmarks.md` | ✅ |
 | 5 | Tests: compare end to end (CPU vs CPU bit-identical; GPU backends when available), report and exit code; `bench --backends` parsing | ✅ |
 | 6 | Docs: plan checkboxes (2c), `docs/development.md`, README, 04 §7 / 08 notes, ADR-023, Phase 2 acceptance, final check | ✅ |
-| 7 | (If there is time) Phase 3 design proposal, no code — to be approved in the next session | ⬜ |
+| 7 | (If there is time) Phase 3 design proposal, no code — to be approved in the next session | ✅ [proposal](phase3-design-proposal.md), [prompt](prompt-phase3.md); awaiting the author's OK |
 
 ## Decisions taken with the author
 
@@ -67,5 +67,10 @@ Stop after step 3 or 4 if the session gets long, with everything tested and comm
 - `cfd-cli bench --backends cuda,wgpu` on a quiet desktop: section in `docs/benchmarks.md`.
 - Plan: both 2c CLI items ticked; Phase 2 acceptance marked fully met. The third 2c item (backend in the job
   metadata, side-by-side comparison in the UI) belongs to Phases 3–5 and stays open.
-- Not done / follow-ups: the Phase 3 design (step 7) — see below if written; CI has not run on this branch
-  (not pushed).
+- Phase 3 design proposal written (no code): crates `cfd-engines`/`cfd-job` shared with the CLI, axum routes,
+  job states, per-physical-device semaphores, worker command loop with ≤ 50 ms batches, output thread,
+  WebSocket with `watch` (latest frame) / `broadcast` (events), on-device sampling/f16, `skip_macro`
+  (the pressure outlet is the only in-kernel reader of the macroscopic planes), capabilities, ResultStore and
+  SQLite, tests, order, and eight open questions.
+- Not done / follow-ups: the author's review of the Phase 3 proposal; CI has not run on this branch (not
+  pushed).
