@@ -4,11 +4,15 @@
 //! - [`EngineKind`]: the three backends (CPU reference, wgpu, CUDA).
 //! - [`open`] / [`open_auto`]: open one engine (a device handle shared by every solver made on it),
 //!   or the best available one in the order CUDA > wgpu (hardware only) > CPU.
+//! - [`Inventory`]: every engine opened once (for the server), keyed by physical device, with
+//!   memory checks.
 //! - [`SolverChoice`]: an opened engine plus the solver options; [`SolverChoice::make`] builds a
 //!   solver for a domain.
 //!
 //! Shared by `cfd-cli` (`run`, `bench`, `verify`, `compare`), `cfd-job` and `cfd-server`, so every
 //! entry point opens engines the same way. (In C# terms: a small class library with a factory.)
+
+mod inventory;
 
 use std::sync::Arc;
 
@@ -18,6 +22,8 @@ use cfd_core::{Domain, Solver};
 use cfd_gpu::{GpuContext, GpuOptions, WgpuLbm};
 use cfd_lbm::{Collision, CpuLbm, LbmConfig};
 use serde::{Deserialize, Serialize};
+
+pub use inventory::{bytes_per_cell, ChooseError, EngineInfo, Inventory};
 
 /// Steps replayed per CUDA graph launch by default (see `cfd_cuda::CudaLbmOptions`).
 pub const DEFAULT_GRAPH_STEPS: u32 = 50;

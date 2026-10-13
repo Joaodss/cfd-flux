@@ -7,9 +7,40 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[[bin]]
+name = "cfd-server"
+path = "src/main.rs"
+
 [dependencies]
+anyhow.workspace = true
+axum.workspace = true
 cfd-core.workspace = true
+cfd-engines.workspace = true
 cfd-io.workspace = true
+cfd-job.workspace = true
+cfd-lbm.workspace = true
+clap.workspace = true
+serde.workspace = true
+# `raw_value`: the scene inside a request is kept exactly as sent (it is stored as scene.json).
+serde_json = { workspace = true, features = ["raw_value"] }
+sha2.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tower-http.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+tokio-tungstenite = "0.29"
+
+[features]
+# As cfd-cli: the CUDA backend builds without the toolkit, so it is on by default.
+default = ["cuda"]
+cuda = ["cfd-engines/cuda"]
 
 [lints]
 workspace = true

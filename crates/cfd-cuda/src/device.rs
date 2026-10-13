@@ -209,6 +209,16 @@ pub fn compile(
         })
 }
 
+/// The device's PCI location in wgpu's format, if the driver reports it.
+fn pci_location(ctx: &CudaContext) -> Option<String> {
+    use cudarc::driver::sys::CUdevice_attribute as A;
+    let get = |a: A| ctx.attribute(a).ok().and_then(|v| u32::try_from(v).ok());
+    let domain = get(A::CU_DEVICE_ATTRIBUTE_PCI_DOMAIN_ID)?;
+    let bus = get(A::CU_DEVICE_ATTRIBUTE_PCI_BUS_ID)?;
+    let device = get(A::CU_DEVICE_ATTRIBUTE_PCI_DEVICE_ID)?;
+    Some(format!("{domain:04x}:{bus:02x}:{device:02x}.0"))
+}
+
 /// A CUDA device ready to run solvers. Meant to be shared (`Arc`) by every solver of a process:
 /// kernels are compiled once per device and options.
 pub struct CudaDevice {
@@ -217,6 +227,8 @@ pub struct CudaDevice {
     /// Compute capability as `10 * major + minor`.
     compute: u32,
     total_memory: usize,
+    /// "domain:bus:device.function", as wgpu reports it on Vulkan (to recognise the same GPU).
+    pci_bus_id: Option<String>,
     driver_version: i32,
     nvrtc_version: i32,
     target: Target,
@@ -264,12 +276,13 @@ impl CudaDevice {
             CudaContext::new(ordinal).map_err(|e| e.to_string())
         })?;
         raw::disable_event_tracking(&ctx);
-        let (name, (major, minor), total_memory) = guarded("querying the device", || {
+        let (name, (major, minor), total_memory, pci) = guarded("querying the device", || {
             let s = |e: cudarc::driver::DriverError| e.to_string();
             Ok((
                 ctx.name().map_err(s)?,
                 ctx.compute_capability().map_err(s)?,
                 ctx.total_mem().map_err(s)?,
+                pci_location(&ctx),
             ))
         })?;
         let compute = (10 * major + minor) as u32;
@@ -289,6 +302,7 @@ impl CudaDevice {
             name,
             compute,
             total_memory,
+            pci_bus_id: pci,
             driver_version,
             nvrtc_version,
             target,
@@ -311,6 +325,17 @@ impl CudaDevice {
 
     pub fn target(&self) -> Target {
         self.target
+    }
+
+    /// Total device memory in bytes.
+    pub fn total_memory(&self) -> u64 {
+        self.total_memory as u64
+    }
+
+    /// PCI location "domain:bus:device.function" (hexadecimal, as wgpu's `device_pci_bus_id` on
+    /// Vulkan), to recognise the same GPU opened through another API.
+    pub fn pci_bus_id(&self) -> Option<&str> {
+        self.pci_bus_id.as_deref()
     }
 
     /// e.g. "NVIDIA GeForce RTX 4060 (CUDA, sm_89, 8.0 GiB, driver 13.3, NVRTC 13.4)".

@@ -16,6 +16,7 @@ cfd-lbm.workspace = true
 clap = { workspace = true, optional = true }
 rayon.workspace = true
 serde.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
