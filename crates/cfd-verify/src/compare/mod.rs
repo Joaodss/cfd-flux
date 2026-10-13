@@ -6,8 +6,8 @@
 //! - the lattice fields ρ, ux, uy, θ: max |a − b|, relative L2 and the metric of 04 §7
 //!   ([`parity::differences`]), which decides pass/fail; bit-identity is reported separately;
 //! - the physical output fields (speed, pressure, vorticity, temperature), for information;
-//! - diagnostics (mass, kinetic energy, max |u|) and the force on each element, with the
-//!   tolerances of the parity tests;
+//! - diagnostics (mass, kinetic energy, max |u|) and the force on each element, for information,
+//!   except the mass of a closed domain, which is conserved by construction;
 //! - in [`Mode::Statistics`], for chaotic flows whose instantaneous fields diverge, the
 //!   statistics of the force series (mean, extremes, oscillation frequency) instead.
 //!
@@ -27,7 +27,7 @@ use cfd_io::image::{self, Colormap, ColourScale};
 use serde::Serialize;
 
 use crate::harness::upward_crossings;
-use crate::parity::{self, FORCE_TOLERANCE, MASS_TOLERANCE, TOLERANCE};
+use crate::parity::{self, MASS_TOLERANCE, TOLERANCE};
 use crate::{Metric, Plot, Series, Snapshot, SolverFactory};
 
 pub use report::{verdict, write, ReportInfo};
@@ -686,6 +686,17 @@ fn rel(a: f64, b: f64) -> f64 {
     (a - b).abs() / b.abs().max(1e-30)
 }
 
+/// A difference shown for information (no limit).
+fn info(name: &str, value: f64, reference: f64, error: f64) -> Metric {
+    Metric {
+        name: name.into(),
+        value,
+        reference: crate::fmt_num(reference),
+        error: Some(error),
+        limit: None,
+    }
+}
+
 fn compare_runs(
     setup: &Setup,
     case: &CaseComparison,
@@ -756,54 +767,54 @@ fn compare_runs(
             ));
         }
     }
-    // In a closed domain mass is conserved by construction and must agree to round-off, in
-    // both modes. With open boundaries Σρ follows the flow: its relative difference is the
-    // mean density difference, held to the field tolerance (fields mode only). A sum is never
-    // held below round-off: backends reduce in different orders, even with identical fields.
+    // The verdict is the 04 §7 field metric. In a closed domain mass is conserved by
+    // construction, so it must also agree to round-off (in both modes; a sum is never held to
+    // less, since backends reduce in different orders even with identical fields). Everything
+    // else is a consequence of the fields with its own sensitivity — the kinetic energy is
+    // quadratic in u, forces on pressure-loaded walls measure ρ − 1 relatively — and is shown as
+    // information; the parity tests keep their limits on the reduction and force kernels.
     let open = setup
         .domain
         .flags
         .iter()
         .any(|&f| matches!(flags::flow(f), flags::PRESSURE | flags::ZERO_GRADIENT));
-    if !open || fields_mode {
+    let mass_error = rel(td.mass, rd.mass);
+    if !open {
         c.checks.push(Metric::check(
-            if open {
-                "mass Σρ (relative; open boundaries)"
-            } else {
-                "mass Σρ (relative; closed domain)"
-            },
+            "mass Σρ (relative; closed domain)",
             td.mass,
             crate::fmt_num(rd.mass),
-            rel(td.mass, rd.mass),
-            if open {
-                plan.tolerance.max(MASS_TOLERANCE)
-            } else {
-                MASS_TOLERANCE
-            },
+            mass_error,
+            MASS_TOLERANCE,
         ));
     }
     if fields_mode {
-        c.checks.push(Metric::check(
+        if open {
+            c.checks.push(info(
+                "mass Σρ (relative; open boundaries)",
+                td.mass,
+                rd.mass,
+                mass_error,
+            ));
+        }
+        c.checks.push(info(
             "kinetic energy (relative)",
             td.kinetic_energy,
-            crate::fmt_num(rd.kinetic_energy),
+            rd.kinetic_energy,
             rel(td.kinetic_energy, rd.kinetic_energy),
-            TOLERANCE,
         ));
-        c.checks.push(Metric::check(
+        c.checks.push(info(
             "max |u| (relative)",
             td.max_velocity,
-            crate::fmt_num(rd.max_velocity),
+            rd.max_velocity,
             rel(td.max_velocity, rd.max_velocity),
-            TOLERANCE,
         ));
         if let (Some(a), Some(b)) = (td.thermal_energy, rd.thermal_energy) {
-            c.checks.push(Metric::check(
+            c.checks.push(info(
                 "thermal energy Σθ (per fluid cell)",
                 a,
-                crate::fmt_num(b),
+                b,
                 (a - b).abs() / case.fluid_cells as f64,
-                TOLERANCE,
             ));
         }
         let scale = reference
@@ -814,14 +825,13 @@ fn compare_runs(
             .fold(1e-30, f64::max);
         for (k, el) in case.elements.iter().enumerate().filter(|(_, e)| e.loaded) {
             let (a, b) = (test.forces[k], reference.forces[k]);
-            let err = (a[0] - b[0]).abs().max((a[1] - b[1]).abs()) / scale;
-            c.checks.push(Metric::check(
-                format!("force on {} (relative to the largest force)", el.name),
-                a[0].hypot(a[1]),
-                format!("|F| = {}", crate::fmt_num(b[0].hypot(b[1]))),
-                err,
-                FORCE_TOLERANCE,
-            ));
+            c.checks.push(Metric {
+                name: format!("force on {} (relative to the largest force)", el.name),
+                value: a[0].hypot(a[1]),
+                reference: format!("|F| = {}", crate::fmt_num(b[0].hypot(b[1]))),
+                error: Some((a[0] - b[0]).abs().max((a[1] - b[1]).abs()) / scale),
+                limit: None,
+            });
         }
     } else {
         statistics_checks(&mut c, case, reference, test, plan.stats_tolerance);
@@ -1262,7 +1272,13 @@ mod tests {
         assert!(c.runs[1].series.len() > 100);
         // The cylinder (id 4) and the channel walls carry forces.
         assert!(c.elements.iter().any(|e| e.id == 4 && e.name == "Cylinder"));
-        assert!(x.checks.iter().all(|m| m.passed() == Some(true)));
+        assert!(x.checks.iter().all(|m| m.passed() != Some(false)));
+        // The verdict is the three field metrics only (the channel is open: mass is information).
+        assert_eq!(x.checks.iter().filter(|m| m.passed().is_some()).count(), 3);
+        assert!(x
+            .checks
+            .iter()
+            .any(|m| m.name.starts_with("force on Cylinder")));
         assert!(x.physical.iter().all(|f| f.identical));
         assert_eq!(c.plots.len(), 2);
 

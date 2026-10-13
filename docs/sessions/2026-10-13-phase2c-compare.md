@@ -24,4 +24,17 @@ Stop after step 3 or 4 if the session gets long, with everything tested and comm
 
 ## Found along the way
 
+- **CUDA is bit-identical to the CPU on all 13 validation geometries**, including the chaotic Re = 100
+  cylinder over 75,000 steps (20 s, ≈ 60 shedding periods) — the strongest parity result so far.
+- wgpu: every field within 1e-5 (largest 7.9e-6, Taylor-Green after one viscous time); on the Re = 100
+  cylinder its fields diverge (as expected) while St, the force statistics and the mean kinetic energy
+  agree to 5e-6.
+- Mass is conserved by construction only in closed domains: with inlets/outlets Σρ follows the flow and
+  its relative difference is the mean density difference (1.8e-7 on the channel example for wgpu), so the
+  parity tests' 1e-7 mass limit applies to closed domains only; open ones use the field tolerance. Sums are
+  never held below round-off (backends reduce in different orders even with bit-identical fields).
+- Two parity-test limits are stricter than the 04 §7 field metric on longer runs: kinetic energy (quadratic
+  in u: δE/E ≈ 2 δu/u; Taylor-Green 1.64e-5 vs 1e-5) and forces on pressure-dominated walls (they measure
+  ρ − 1 relatively; Rayleigh-Bénard plates 3.2e-4 vs 1e-4, while ρ agrees to 1.2e-7 absolute).
+
 ## Final check

@@ -488,12 +488,13 @@ fn notes(md: &mut String, info: &ReportInfo) {
         md,
         "- **Fields mode:** pass when the 04 §7 metric of every lattice field is within the \
          tolerance — ρ in absolute terms, ux and uy relative to the largest velocity component of \
-         the reference, θ relative to its maximum — and the kinetic energy, max |u| (1e-5, \
-         relative) and the force on each loaded element (1e-4 of the largest force) agree, as in \
-         the parity tests. Mass is conserved by construction in a closed domain and must agree to \
-         1e-7; with inlets or outlets Σρ follows the flow, and its relative difference (the mean \
-         density difference) is held to the field tolerance. *Bit-identical* means every value \
-         has the same bits; CUDA (compiled without fused multiply-adds) is expected to be \
+         the reference, θ relative to its maximum — and, in a closed domain, the mass (conserved \
+         by construction) agrees to 1e-7. The kinetic energy, max |u|, thermal energy, the mass \
+         of an open domain and the forces follow from the fields with their own sensitivities \
+         (the energy is quadratic in u; forces on pressure-loaded walls measure ρ − 1 \
+         relatively), so their differences are shown for information; the parity tests hold the \
+         reduction and force kernels to their own limits. *Bit-identical* means every value has \
+         the same bits; CUDA (compiled without fused multiply-adds) is expected to be \
          bit-identical to the CPU, wgpu to differ by round-off (its driver contracts \
          multiply-adds)."
     );
