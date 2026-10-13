@@ -11,9 +11,11 @@
 //! (`cfd-cli run` adds `png/`, rendered from the frames afterwards.)
 //!
 //! - [`prepare`]: `Scene → Domain` with the run's overrides (end time, intervals, lattice velocity).
-//! - [`run`]: the loop, reporting to a [`JobObserver`].
+//! - [`run`]: the command loop (pause, resume, cancel between batches of at most ~50 ms), with
+//!   frames converted and written on an output thread, reporting to a [`JobObserver`].
 
 mod meta;
+mod output;
 mod runner;
 mod series;
 pub mod store;
@@ -26,7 +28,10 @@ use cfd_core::{DomainOptions, Scene};
 use cfd_io::frame::Dtype;
 
 pub use meta::TimingsMeta as Timings;
-pub use runner::{run, JobContext, JobObserver, NoObserver, Outcome, Progress, Started, Status};
+pub use runner::{
+    run, CellPatch, Command, FrameEvent, JobContext, JobObserver, NoObserver, Outcome, ParamChange,
+    Progress, Started, Status, DEFAULT_BATCH_TIME,
+};
 pub use store::ResultDir;
 
 /// The name of an output field in frames and `meta.json`.

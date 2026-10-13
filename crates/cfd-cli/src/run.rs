@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Mutex;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -180,11 +180,14 @@ pub fn run(args: RunArgs) -> Result<ExitCode> {
             .map_or_else(|| "run".into(), |s| s.to_string_lossy().into_owned()),
         generator: format!("cfd-cli {}", env!("CARGO_PKG_VERSION")),
         wall_start,
+        batch_time: cfd_job::DEFAULT_BATCH_TIME,
     };
-    let console = Console {
+    let console = Arc::new(Console {
         last_report: Mutex::new(Instant::now()),
-    };
-    let outcome = cfd_job::run(prepared, &choice, &dir, &job, &console)?;
+    });
+    // No commands from the command line: the sender is dropped at once, and the loop just runs.
+    let (_, commands) = mpsc::channel();
+    let outcome = cfd_job::run(prepared, &choice, &dir, &job, console, &commands)?;
 
     if !png_fields.is_empty() && outcome.frames > 0 {
         let opts = RenderOpts {
@@ -196,5 +199,7 @@ pub fn run(args: RunArgs) -> Result<ExitCode> {
     Ok(match outcome.status {
         Status::Completed => ExitCode::SUCCESS,
         Status::Diverged => ExitCode::from(2),
+        // Only a command can cancel, and `run` sends none.
+        Status::Cancelled => ExitCode::FAILURE,
     })
 }

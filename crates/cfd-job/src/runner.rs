@@ -1,20 +1,40 @@
-//! The run loop: steps the solver, samples the time series, writes frames and `meta.json`.
+//! The run loop (ADR-011): a **command loop** that steps the solver in batches of bounded
+//! duration, samples the time series, hands frames to the output thread and writes `meta.json`.
+//!
+//! ```text
+//! loop {
+//!     1. drain commands without blocking; while paused, block until Resume/Cancel
+//!     2. due work: diagnostics + CSV rows every sample interval, a frame every output interval
+//!     3. step one batch: up to the next due event, and at most ~50 ms of measured work
+//! }
+//! ```
+//!
+//! The batch cap bounds how long a Pause or Cancel waits. The loop runs on whatever thread calls
+//! [`run`] (the CLI's main thread, a dedicated worker thread in the server) and owns the solver:
+//! GPU contexts stay on that thread, and only messages cross threads.
 
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use cfd_core::domain::Domain;
-use cfd_core::solver::{FieldSet, PendingFields, SampleRequest, SolverError};
+use cfd_core::solver::{Diagnostics, FieldSet, PendingFields, SampleRequest, Solver, SolverError};
+use cfd_core::Scene;
 use cfd_engines::SolverChoice;
-use cfd_io::frame::{Dtype, Field, FieldDesc, Frame};
+use cfd_io::frame::Dtype;
 
 use crate::meta::*;
+use crate::output::{OutputConfig, OutputJob, OutputThread};
 use crate::series::Series;
 use crate::store::ResultDir;
-use crate::{output_field_name, Prepared};
+use crate::{output_field_name, Prepared, RunOptions};
 
-/// Who runs the job and since when.
+/// Default upper bound on the measured duration of one batch of steps.
+pub const DEFAULT_BATCH_TIME: Duration = Duration::from_millis(50);
+
+/// Who runs the job and how.
 #[derive(Debug, Clone)]
 pub struct JobContext {
     /// Written into every frame header (the CLI uses the output directory's name).
@@ -23,6 +43,50 @@ pub struct JobContext {
     pub generator: String,
     /// Start of the wall-clock time reported in `meta.json`.
     pub wall_start: Instant,
+    /// Upper bound on the duration of one batch of steps (the latency of commands).
+    pub batch_time: Duration,
+}
+
+impl JobContext {
+    pub fn new(id: impl Into<String>, generator: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            generator: generator.into(),
+            wall_start: Instant::now(),
+            batch_time: DEFAULT_BATCH_TIME,
+        }
+    }
+}
+
+/// A rectangle of cells to change while the simulation runs (interactive mode, Phase 5b).
+#[derive(Debug, Clone, PartialEq)]
+pub struct CellPatch {
+    /// `[x, y, width, height]` in cells.
+    pub rect: [u32; 4],
+    /// New cell types, row-major inside the rectangle.
+    pub cell_type: Vec<u8>,
+}
+
+/// A parameter to change while the simulation runs (interactive mode, Phase 5b).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParamChange {
+    pub name: String,
+    pub value: f64,
+}
+
+/// Messages to a running job, applied between batches (ADR-011).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Command {
+    Pause,
+    Resume,
+    /// Stop as soon as possible; the results written so far stay valid.
+    Cancel,
+    /// Sample a frame now for the observers (e.g. a viewer that joined while paused). Not stored.
+    Snapshot,
+    /// Phase 5b; answered with a log message until then.
+    PatchCells(CellPatch),
+    /// Phase 5b; answered with a log message until then.
+    SetParam(ParamChange),
 }
 
 /// The run has set everything up and is about to step.
@@ -33,7 +97,7 @@ pub struct Started<'a> {
 }
 
 /// Where the run is, after a batch of steps.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Progress {
     pub step: u64,
     pub total: u64,
@@ -41,8 +105,19 @@ pub struct Progress {
     pub sim_time: f64,
     /// Lattice Mach number of the last sample.
     pub max_mach: f64,
+    /// `(mass − mass₀) / mass₀` at the last sample.
+    pub mass_drift: f64,
     /// Million fluid-lattice updates per second of solver time so far.
     pub mlups: f64,
+}
+
+/// A frame in physical units, as stored (or, for snapshots, only streamed).
+pub struct FrameEvent<'a> {
+    /// Output index; `None` for a snapshot.
+    pub index: Option<u32>,
+    /// Whether it was written to `frames/` (before this event).
+    pub stored: bool,
+    pub fields: &'a FieldSet,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +125,8 @@ pub enum Status {
     Completed,
     /// The solution stopped being finite; the frames written before stay valid.
     Diverged,
+    /// Stopped by a `Cancel` command (or by the controller going away while paused).
+    Cancelled,
 }
 
 impl Status {
@@ -57,6 +134,7 @@ impl Status {
         match self {
             Status::Completed => "completed",
             Status::Diverged => "diverged",
+            Status::Cancelled => "cancelled",
         }
     }
 }
@@ -75,10 +153,22 @@ pub struct Outcome {
 
 /// Receives the events of a run. Every method has an empty default, so an observer implements
 /// only what it needs (in C# terms, an interface with default methods, or a set of events).
-/// `Send + Sync` so one observer can be shared by the threads of a job.
+///
+/// `Send + Sync` because one observer is shared (`Arc`) by the job's threads: [`frame`] is called
+/// from the output thread, everything else from the thread running the loop.
+///
+/// [`frame`]: JobObserver::frame
 pub trait JobObserver: Send + Sync {
     fn started(&self, _info: &Started) {}
     fn progress(&self, _progress: &Progress) {}
+    fn paused(&self, _paused: bool) {}
+    /// Whether frames should be sampled even when they are not stored (`--no-frames`).
+    fn wants_frames(&self) -> bool {
+        false
+    }
+    fn frame(&self, _frame: &FrameEvent) {}
+    /// Something worth telling a user (e.g. an unsupported command).
+    fn log(&self, _message: &str) {}
     fn finished(&self, _outcome: &Outcome) {}
 }
 
@@ -87,88 +177,167 @@ pub struct NoObserver;
 
 impl JobObserver for NoObserver {}
 
-/// Converts copied lattice fields into a frame file.
-struct FrameWriter {
-    dir: ResultDir,
-    job_id: String,
-    req: SampleRequest,
-    dtype: Dtype,
+/// Chooses the number of steps of each batch from the measured step rate, so a batch takes at most
+/// about `target` (the latency of commands).
+#[derive(Debug, Clone)]
+pub(crate) struct Batcher {
+    target: Duration,
+    /// Steps per second, smoothed; `None` before the first measurement.
+    rate: Option<f64>,
 }
 
-impl FrameWriter {
-    fn write(&self, domain: &Domain, index: u32, pending: Box<dyn PendingFields>) -> Result<()> {
-        let step = pending.step();
-        let fs = FieldSet::from_lattice(domain, &pending.wait(), step, &self.req);
-        let frame = Frame {
-            job_id: self.job_id.clone(),
-            frame_index: index,
-            step: fs.step,
-            sim_time: fs.time,
-            width: fs.width,
-            height: fs.height,
-            fields: fs
-                .fields
-                .into_iter()
-                .map(|f| Field {
-                    desc: FieldDesc {
-                        name: output_field_name(f.field).into(),
-                        components: f.components,
-                        dtype: self.dtype,
-                    },
-                    values: f.values,
-                })
-                .collect(),
+impl Batcher {
+    pub fn new(target: Duration) -> Self {
+        Self { target, rate: None }
+    }
+
+    /// Steps for the next batch, at most `remaining` (the distance to the next due event).
+    pub fn next(&self, remaining: u64) -> u32 {
+        let want = match self.rate {
+            // The first batch is one step: its duration is unknown (and includes warm-up).
+            None => 1.0,
+            Some(rate) => (rate * self.target.as_secs_f64()).floor().max(1.0),
         };
-        let path = self.dir.frame_path(index);
-        std::fs::write(&path, frame.encode()?)
-            .with_context(|| format!("cannot write {}", path.display()))
+        (want as u64).min(remaining).min(u32::MAX as u64) as u32
+    }
+
+    /// Records that `steps` took `elapsed`.
+    pub fn record(&mut self, steps: u32, elapsed: Duration) {
+        let secs = elapsed.as_secs_f64().max(1e-6);
+        let measured = steps as f64 / secs;
+        // Halfway between the old estimate and the new measurement: quick to follow, not jumpy.
+        self.rate = Some(match self.rate {
+            None => measured,
+            Some(r) => 0.5 * (r + measured),
+        });
     }
 }
 
-/// Runs a prepared scene on `choice` into `dir` (created with [`ResultDir::create`]).
-///
-/// A divergence is an [`Outcome`] (status `diverged`), not an error; errors are I/O and backend
-/// failures.
-pub fn run(
-    prepared: Prepared,
-    choice: &SolverChoice,
-    dir: &ResultDir,
-    job: &JobContext,
-    observer: &dyn JobObserver,
-) -> Result<Outcome> {
-    let Prepared {
-        scene,
-        scene_json,
-        domain,
-        sample_every,
-        frame_fields,
-        options,
-    } = prepared;
-    let units = domain.units;
-    let total = domain.run.total;
-    let output_every = domain.run.output_every;
-    let thermal = domain.physics.thermal();
-    let dtype = options.frame_dtype;
+/// What a frame request is for.
+#[derive(Debug, Clone, Copy)]
+struct FrameRequest {
+    index: Option<u32>,
+    store: bool,
+}
 
-    dir.write("scene.json", &scene_json)?;
-    if options.write_frames {
-        std::fs::create_dir_all(dir.frames_dir())?;
+/// Whether the loop goes on after the commands were handled.
+enum Flow {
+    Continue,
+    Cancel,
+}
+
+/// The mutable state of one run, so the command handling and the loop body can share it.
+struct Runner<'a> {
+    solver: Box<dyn Solver>,
+    series: Series,
+    output: OutputThread,
+    observer: Arc<dyn JobObserver>,
+    commands: &'a Receiver<Command>,
+    /// A snapshot was asked for and is still to be taken.
+    snapshot: bool,
+    solver_time: Duration,
+    output_time: Duration,
+}
+
+impl Runner<'_> {
+    /// Handles the commands received since the last batch; while paused, blocks for the next one.
+    fn poll_commands(&mut self) -> Result<Flow> {
+        loop {
+            match self.commands.try_recv() {
+                Ok(cmd) => {
+                    if let Flow::Cancel = self.apply(cmd)? {
+                        return Ok(Flow::Cancel);
+                    }
+                }
+                // Nobody can send commands any more (e.g. the CLI): keep running.
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(Flow::Continue),
+            }
+        }
     }
 
-    let mut series = Series::create(dir, &scene, &domain)?;
-    // From here on the solver owns the domain (`make` takes it by value: a move, not a copy);
-    // `solver.domain()` lends it back read-only.
-    let mut solver = choice.make(domain)?;
-    let initial = solver.diagnostics();
-    let domain = solver.domain();
-    let n = domain.numbers;
-    observer.started(&Started {
-        scene: &scene.name,
-        domain,
-        choice,
-    });
+    fn apply(&mut self, cmd: Command) -> Result<Flow> {
+        match cmd {
+            Command::Pause => self.pause(),
+            // Already running; a Resume that arrives late is harmless.
+            Command::Resume => Ok(Flow::Continue),
+            Command::Cancel => Ok(Flow::Cancel),
+            Command::Snapshot => {
+                self.snapshot = true;
+                Ok(Flow::Continue)
+            }
+            Command::PatchCells(_) | Command::SetParam(_) => {
+                self.observer
+                    .log("changing the scene while it runs is not supported yet (Phase 5b)");
+                Ok(Flow::Continue)
+            }
+        }
+    }
 
-    let mut meta = Meta {
+    /// Blocks until Resume or Cancel. Snapshots are taken at once (the solver is idle).
+    fn pause(&mut self) -> Result<Flow> {
+        self.observer.paused(true);
+        loop {
+            // `recv` blocks this thread (not an async task): it is the job's own thread.
+            let cmd = match self.commands.recv() {
+                Ok(c) => c,
+                // The controller is gone: nobody can resume, so stop.
+                Err(_) => return Ok(Flow::Cancel),
+            };
+            match cmd {
+                Command::Resume => break,
+                Command::Cancel => return Ok(Flow::Cancel),
+                Command::Pause => {}
+                Command::Snapshot => {
+                    let pending = self.solver.request_fields();
+                    self.collect(
+                        FrameRequest {
+                            index: None,
+                            store: false,
+                        },
+                        pending,
+                    )?;
+                }
+                other => {
+                    self.apply(other)?;
+                }
+            }
+        }
+        self.observer.paused(false);
+        Ok(Flow::Continue)
+    }
+
+    /// Waits for a requested copy and queues it for the output thread.
+    fn collect(&mut self, req: FrameRequest, pending: Box<dyn PendingFields>) -> Result<()> {
+        let t = Instant::now();
+        let step = pending.step();
+        let fields = pending.wait();
+        self.output.send(OutputJob {
+            index: req.index,
+            store: req.store,
+            step,
+            fields,
+        })?;
+        self.output_time += t.elapsed();
+        Ok(())
+    }
+}
+
+/// Builds the initial `meta.json` (status `running`).
+#[allow(clippy::too_many_arguments)]
+fn initial_meta(
+    scene: &Scene,
+    domain: &Domain,
+    choice: &SolverChoice,
+    job: &JobContext,
+    options: &RunOptions,
+    sample_every: u64,
+    frame_fields: &[cfd_core::scene::OutputField],
+    initial: &Diagnostics,
+) -> Meta {
+    let (units, n) = (domain.units, domain.numbers);
+    let thermal = domain.physics.thermal();
+    let total = domain.run.total;
+    Meta {
         generator: job.generator.clone(),
         scene: scene.name.clone(),
         solver: SolverMeta {
@@ -229,10 +398,10 @@ pub fn run(
             steps_done: 0,
             end_time: units.steps_to_time(total),
             sim_time: 0.0,
-            output_every_steps: output_every,
+            output_every_steps: domain.run.output_every,
             sample_every_steps: sample_every,
             frames: 0,
-            frame_dtype: match dtype {
+            frame_dtype: match options.frame_dtype {
                 Dtype::F32 => "f32",
                 Dtype::F16 => "f16",
             },
@@ -240,40 +409,113 @@ pub fn run(
         },
         timings: TimingsMeta::default(),
         diagnostics: DiagnosticsMeta {
-            initial: DiagMeta::new(&initial, domain),
-            last: DiagMeta::new(&initial, domain),
+            initial: DiagMeta::new(initial, domain),
+            last: DiagMeta::new(initial, domain),
             relative_mass_drift: 0.0,
             peak_mach: 0.0,
         },
-    };
+    }
+}
+
+/// Runs a prepared scene on `choice` into `dir` (created with [`ResultDir::create`]), applying
+/// the commands received on `commands` between batches. The solver is made here, so it lives on
+/// the calling thread.
+///
+/// A divergence or a cancellation is an [`Outcome`], not an error; errors are I/O and backend
+/// failures.
+pub fn run(
+    prepared: Prepared,
+    choice: &SolverChoice,
+    dir: &ResultDir,
+    job: &JobContext,
+    observer: Arc<dyn JobObserver>,
+    commands: &Receiver<Command>,
+) -> Result<Outcome> {
+    let Prepared {
+        scene,
+        scene_json,
+        domain,
+        sample_every,
+        frame_fields,
+        options,
+    } = prepared;
+    let total = domain.run.total;
+    let output_every = domain.run.output_every;
+    let sample_frames = options.write_frames || observer.wants_frames();
+
+    dir.write("scene.json", &scene_json)?;
+    if options.write_frames {
+        std::fs::create_dir_all(dir.frames_dir())?;
+    }
+    let series = Series::create(dir, &scene, &domain)?;
+    // From here on the solver owns the domain (`make` takes it by value: a move, not a copy);
+    // `solver.domain()` lends it back read-only.
+    let mut solver = choice.make(domain)?;
+    let initial = solver.diagnostics();
+    let mut meta = initial_meta(
+        &scene,
+        solver.domain(),
+        choice,
+        job,
+        &options,
+        sample_every,
+        &frame_fields,
+        &initial,
+    );
     let write_meta = |meta: &Meta| -> Result<()> {
         dir.write("meta.json", serde_json::to_string_pretty(meta)? + "\n")
     };
     write_meta(&meta)?;
+    let output = OutputThread::spawn(
+        solver.domain(),
+        OutputConfig {
+            dir: dir.clone(),
+            job_id: job.id.clone(),
+            req: SampleRequest {
+                fields: frame_fields,
+            },
+            dtype: options.frame_dtype,
+        },
+        observer.clone(),
+    )?;
+    observer.started(&Started {
+        scene: &scene.name,
+        domain: solver.domain(),
+        choice,
+    });
 
-    let req = SampleRequest {
-        fields: frame_fields,
+    let mut r = Runner {
+        solver,
+        series,
+        output,
+        observer,
+        commands,
+        snapshot: false,
+        solver_time: Duration::ZERO,
+        output_time: Duration::ZERO,
     };
-
+    let mut batcher = Batcher::new(job.batch_time);
     let mut last = initial;
     let mut peak_mach: f64 = initial.max_mach();
     let (mut next_sample, mut next_output) = (0u64, 0u64);
     let mut frame_index = 0u32;
-    let (mut solver_time, mut output_time) = (Duration::ZERO, Duration::ZERO);
     let mut failure: Option<String> = None;
-    let writer = FrameWriter {
-        dir: dir.clone(),
-        job_id: job.id.clone(),
-        req,
-        dtype,
-    };
-    let mut pending: Option<(u32, Box<dyn PendingFields>)> = None;
+    let mut cancelled = false;
+    let fluid = r.solver.domain().fluid_cell_count() as f64;
+    let mass_drift = |d: &Diagnostics| (d.mass - initial.mass) / initial.mass;
 
     loop {
-        let step = solver.steps_done();
+        // 1. Commands.
+        if let Flow::Cancel = r.poll_commands()? {
+            cancelled = true;
+            break;
+        }
+
+        // 2. Due work: samples, frames.
+        let step = r.solver.steps_done();
         let t0 = Instant::now();
         if step >= next_sample || step >= next_output {
-            last = solver.diagnostics();
+            last = r.solver.diagnostics();
             peak_mach = peak_mach.max(last.max_mach());
             if !last.finite {
                 failure = Some(format!("the solution diverged (NaN/Inf) by step {step}"));
@@ -281,40 +523,53 @@ pub fn run(
             }
         }
         if step >= next_sample {
-            series.sample(solver.as_mut(), &last)?;
+            r.series.sample(r.solver.as_mut(), &last)?;
             next_sample += sample_every;
         }
+        let mut request = None;
         if step >= next_output {
-            if options.write_frames {
-                // Only start the copy here: the frame is converted and written while the next
-                // steps run (on asynchronous backends; the CPU backend copies immediately).
-                pending = Some((frame_index, solver.request_fields()));
+            if sample_frames {
+                request = Some(FrameRequest {
+                    index: Some(frame_index),
+                    store: options.write_frames,
+                });
             }
             frame_index += 1;
             next_output += output_every;
         }
-        output_time += t0.elapsed();
+        if r.snapshot {
+            r.snapshot = false;
+            request.get_or_insert(FrameRequest {
+                index: None,
+                store: false,
+            });
+        }
+        // Only start the copy here: it is collected after the next batch has been queued, so on
+        // asynchronous backends the copy overlaps with the steps (the CPU copies immediately).
+        let pending = request.map(|req| (req, r.solver.request_fields()));
+        r.output_time += t0.elapsed();
         if step >= total {
-            if let Some((index, p)) = pending.take() {
-                writer.write(solver.domain(), index, p)?;
+            if let Some((req, p)) = pending {
+                r.collect(req, p)?;
             }
             break;
         }
 
+        // 3. One batch: up to the next due event, and at most `batch_time` of measured work.
         let target = next_sample.min(next_output).min(total);
-        let chunk = (target - step).min(u32::MAX as u64) as u32;
+        let n = batcher.next(target - step);
         let t1 = Instant::now();
-        let mut result = solver.step(chunk);
-        solver_time += t1.elapsed();
-        if let Some((index, p)) = pending.take() {
-            let t = Instant::now();
-            writer.write(solver.domain(), index, p)?;
-            output_time += t.elapsed();
+        let mut result = r.solver.step(n);
+        let queued = t1.elapsed();
+        if let Some((req, p)) = pending {
+            r.collect(req, p)?;
         }
-        // GPU time hidden behind the frame output above is not counted as solver time.
+        // GPU time hidden behind collecting the frame above is not counted as solver time.
         let t2 = Instant::now();
-        result = result.and_then(|_| solver.finish());
-        solver_time += t2.elapsed();
+        result = result.and_then(|_| r.solver.finish());
+        let stepped = queued + t2.elapsed();
+        r.solver_time += stepped;
+        batcher.record(n, stepped);
         match result {
             Ok(()) => {}
             Err(SolverError::NonFinite { step }) => {
@@ -323,27 +578,35 @@ pub fn run(
             }
             Err(e) => return Err(e.into()),
         }
-        let done = solver.steps_done();
-        observer.progress(&Progress {
+        let done = r.solver.steps_done();
+        r.observer.progress(&Progress {
             step: done,
             total,
-            sim_time: solver.domain().units.steps_to_time(done),
+            sim_time: r.solver.domain().units.steps_to_time(done),
             max_mach: last.max_mach(),
-            mlups: solver.domain().fluid_cell_count() as f64 * done as f64
-                / solver_time.as_secs_f64()
-                / 1e6,
+            mass_drift: mass_drift(&last),
+            mlups: fluid * done as f64 / r.solver_time.as_secs_f64() / 1e6,
         });
     }
-    series.flush()?;
+    r.series.flush()?;
+    let Runner {
+        solver,
+        output,
+        observer,
+        solver_time,
+        output_time,
+        ..
+    } = r;
+    // Every queued frame is on disk before `meta.json` says the run is over.
+    output.finish()?;
 
     let domain = solver.domain();
     let done = solver.steps_done();
-    let fluid = domain.fluid_cell_count() as f64;
     meta.run.steps_done = done;
     meta.run.sim_time = domain.units.steps_to_time(done);
     meta.run.frames = frame_index;
     meta.diagnostics.last = DiagMeta::new(&last, domain);
-    meta.diagnostics.relative_mass_drift = (last.mass - initial.mass) / initial.mass;
+    meta.diagnostics.relative_mass_drift = mass_drift(&last);
     meta.diagnostics.peak_mach = peak_mach;
     let solver_s = solver_time.as_secs_f64();
     meta.timings = TimingsMeta {
@@ -356,9 +619,8 @@ pub fn run(
             0.0
         },
     };
-    let status = match &failure {
-        None => Status::Completed,
-        Some(msg) => {
+    let status = match (&failure, cancelled) {
+        (Some(msg), _) => {
             let hints: Vec<&str> = meta.warnings.iter().map(|w| w.code).collect();
             let hint = if hints.is_empty() {
                 "lower the lattice velocity (--lattice-velocity) or refine the grid".to_string()
@@ -368,6 +630,11 @@ pub fn run(
             meta.run.message = Some(format!("{msg}; {hint}"));
             Status::Diverged
         }
+        (None, true) => {
+            meta.run.message = Some(format!("cancelled at step {done}"));
+            Status::Cancelled
+        }
+        (None, false) => Status::Completed,
     };
     meta.run.status = status.name();
     write_meta(&meta)?;
@@ -381,4 +648,36 @@ pub fn run(
     };
     observer.finished(&outcome);
     Ok(outcome)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_first_batch_is_one_step_then_the_rate_sets_the_size() {
+        let mut b = Batcher::new(Duration::from_millis(50));
+        assert_eq!(b.next(1000), 1);
+        // 1 step in 1 ms → 1000 steps/s → 50 steps per 50 ms.
+        b.record(1, Duration::from_millis(1));
+        assert_eq!(b.next(1000), 50);
+        // Never past the next due event.
+        assert_eq!(b.next(7), 7);
+        // 50 steps in 10 ms → 5000 steps/s; smoothed with 1000 → 3000 → 150 steps.
+        b.record(50, Duration::from_millis(10));
+        assert_eq!(b.next(1000), 150);
+    }
+
+    #[test]
+    fn a_slow_engine_still_steps() {
+        let mut b = Batcher::new(Duration::from_millis(50));
+        b.record(1, Duration::from_secs(2));
+        assert_eq!(b.next(u64::MAX), 1);
+        // A zero duration counts as 1 µs; batches never exceed what `step(u32)` takes.
+        let mut fast = Batcher::new(Duration::from_secs(10));
+        fast.record(1, Duration::ZERO);
+        assert_eq!(fast.next(u64::MAX), 10_000_000);
+        fast.record(u32::MAX, Duration::from_millis(1));
+        assert_eq!(fast.next(u64::MAX), u32::MAX);
+    }
 }
