@@ -23,3 +23,6 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# cfd-server default data directory (database and results)
+/data/

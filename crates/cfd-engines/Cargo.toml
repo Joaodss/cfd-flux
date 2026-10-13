@@ -1,0 +1,31 @@
+[package]
+name = "cfd-engines"
+description = "Engine selection for live-fluids: which backends exist, opening them, and making solvers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+cfd-core.workspace = true
+cfd-cuda.workspace = true
+cfd-gpu.workspace = true
+cfd-lbm.workspace = true
+clap = { workspace = true, optional = true }
+rayon.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[features]
+# The CUDA backend (see cfd-cuda); without it, CUDA is reported as "not built".
+cuda = ["cfd-cuda/cuda"]
+# `clap::ValueEnum` on `EngineKind`, for command-line tools.
+clap = ["dep:clap"]
+
+[lints]
+workspace = true

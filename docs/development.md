@@ -90,12 +90,36 @@ cargo run --release -p cfd-cli -- compare scenes/channel.json --out out/cmp --fo
 cargo run --release -p cfd-cli -- compare scenes/cylinder-re100.json --out out/cmp-cyl --end-time 12 --statistics --stats-from 6 --ref-length 0.1 --ref-velocity 1
 cargo run --release -p cfd-cli -- compare --validation   # writes validation/compare/ (commit it), ~1 min
 
+# Server (Phase 3): API on http://127.0.0.1:7878, data (SQLite + results/) in ./data
+cargo run --release -p cfd-server
+cargo run --release -p cfd-server -- --listen 127.0.0.1:8080 --data /tmp/lf --cpu-jobs 2
+# Its test client: submit a scene, follow the stream, optionally cancel (prints the latency)
+cargo run --release -p cfd-cli -- submit scenes/cylinder-re100.json --backend cuda --cancel-after 3
+cargo run --release -p cfd-cli -- submit scenes/channel.json --end-time 2 --fields velocity --max-size 256
+curl -s http://127.0.0.1:7878/api/capabilities
+
 # Web (in apps/web)
 npm install
 npm run dev          # development server
 npm test             # Vitest (checks scenes/ against the JSON Schema)
 npm run typecheck && npm run lint && npm run format:check && npm run build
 ```
+
+## Server
+
+- `cfd-server` opens every engine once at start-up (CUDA, a hardware wgpu adapter, the CPU) and logs what it
+  found; `--allow-software` lets jobs that ask for wgpu use WARP/lavapipe. `RUST_LOG=cfd_server=debug,tower_http=debug`
+  shows every request. No authentication: keep the default loopback address unless the network is trusted.
+- Data: `<data>/live-fluids.db` (SQLite: jobs and saved scenes) and `<data>/results/<job id>/` (the
+  [03 §6.2](03-data-model.md#62-storage) layout; `cfd-cli render <dir>` makes PNGs from it). Jobs active when the
+  server stops become `failed/interrupted`.
+- The API and the WebSocket messages are in [03 §7](03-data-model.md#7-api). Quick checks with `curl`:
+  `POST /api/scenes/validate` with a scene file as the body; `POST /api/simulations` with `{"scene": …}`.
+- Tests: `crates/cfd-server/tests/` start the server in-process on an ephemeral port with an in-memory database
+  (`api.rs`: capabilities, validation, limits, CORS; `jobs.rs`: lifecycle, cancel, pause, queueing, purge,
+  restart; `stream.rs`: WebSocket, backpressure, and the acceptance scenario on every available engine, skipped
+  like the parity tests unless `CFD_REQUIRE_GPU`/`CFD_REQUIRE_CUDA` is set). `crates/cfd-cli/tests/submit.rs`
+  runs `cfd-cli submit` against an in-process server.
 
 ## GPU (wgpu) backend
 

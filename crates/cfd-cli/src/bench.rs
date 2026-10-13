@@ -12,11 +12,12 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use cfd_core::{Domain, DomainOptions, Scene, Solver};
+use cfd_engines::{EngineKind, SolverChoice};
 use cfd_verify::scenes;
 use clap::{Args, ValueEnum};
 use serde::Serialize;
 
-use crate::backend::{EngineArg, SolverArgs, SolverChoice};
+use crate::backend::SolverArgs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -56,7 +57,7 @@ pub struct BenchArgs {
     /// Several backends in one interleaved run (one table, a column per backend), instead of
     /// --backend. The same backend may appear twice (labelled `cuda-2`, …).
     #[arg(long, value_enum, value_delimiter = ',', conflicts_with = "backend")]
-    pub backends: Option<Vec<EngineArg>>,
+    pub backends: Option<Vec<EngineKind>>,
     #[command(flatten)]
     pub solver: SolverArgs,
 }
@@ -509,7 +510,7 @@ mod tests {
     #[test]
     fn backends_parse_as_a_list_of_engines() {
         let a = parse(&["--backends", "wgpu,cuda", "--sizes", "1024"]).unwrap();
-        assert_eq!(a.backends, Some(vec![EngineArg::Wgpu, EngineArg::Cuda]));
+        assert_eq!(a.backends, Some(vec![EngineKind::Wgpu, EngineKind::Cuda]));
         assert_eq!(a.sizes, [1024]);
         assert!(a.solver.backend.is_none());
         // Engine options still apply to every backend.

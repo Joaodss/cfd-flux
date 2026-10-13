@@ -26,7 +26,26 @@
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
-Initially **server and worker run in the same process** (tokio tasks + a dedicated solver thread). Splitting into separate processes/machines only happens when needed (several GPUs, several users).
+**Server and worker run in the same process** (ADR-006; implemented in Phase 3): axum on the tokio runtime handles I/O, and each running job has two dedicated OS threads, one for the solver (its command loop) and one for its output. Splitting into separate processes/machines only happens when needed (several GPUs, several users).
+
+```
+                         ┌──────────────── cfd-server process ─────────────────────────────────┐
+ browser / test client   │ tokio runtime (async)                       dedicated threads       │
+ ─────────────────────   │ ┌──────────────────────┐                   ┌──────────────────────┐ │
+ REST (JSON) ───────────▶│ │ axum routes          │  Command (mpsc)   │ job thread           │ │
+                         │ │  /api/simulations …  │──────────────────▶│  Box<dyn Solver>     │ │
+ WS /stream ◀───────────▶│ │ JobManager (State)   │                   │  cfd_job::run        │ │
+   text: events (JSON)   │ │  slot per device     │  Event (broadcast)│  command loop        │ │
+   binary: LFFR frames   │ │  (tokio Semaphore)   │◀──────────────────│                      │ │
+                         │ │ one task per viewer  │  latest frame     ├──────────────────────┤ │
+                         │ │                      │◀───── (watch) ────│ output thread        │ │
+                         │ └──────────┬───────────┘                   │  convert, encode,    │ │
+                         │            │ sqlx                          │  write frames/       │ │
+                         │       SQLite (jobs, scenes)        results/{id}/ (cfd-job layout) │ │
+                         └─────────────────────────────────────────────────────────────────────┘
+```
+
+`cfd-cli run` and a server job share the same code (`cfd-engines` to open engines, `cfd-job` for the run loop and the result layout; ADR-024), so they write the same result directories.
 
 ## 2. Components
 
@@ -39,14 +58,15 @@ Initially **server and worker run in the same process** (tokio tasks + a dedicat
 - **Optional, later:** the solver core compiled to WASM/WebGPU for low-resolution local previews.
 
 ### 2.2 API — `crates/cfd-server`
-- **Stack:** Rust, `axum`, `tokio`, `serde`, `tower-http` (CORS, compression, limits), `tracing`.
-- **Responsibilities:** authentication (later), request validation, job management, streaming, serving results.
-- **Persistence:** `sqlx` with SQLite at first, Postgres if ever hosted. Results stored as files (`ResultStore` abstraction → local disk / S3).
+- **Stack:** Rust, `axum` 0.8 (with WebSockets), `tokio`, `serde`, `tower-http` (CORS for the Vite dev origin, gzip for JSON/CSV, tracing), `DefaultBodyLimit` (64 MB), `tracing`. Binds `127.0.0.1:7878` by default (`--listen`); no authentication (ADR-010).
+- **Responsibilities:** request validation (format, consistency, stability, the server's limits, an engine that fits — stable issue codes), job management, streaming, serving results. Routes and messages in [03 §7](03-data-model.md#7-api).
+- **Errors:** one `ApiError` enum mapped to a status code and `{ "error": { code, message, issues? } }` by `IntoResponse`; an `ApiJson` extractor turns body-limit rejections into a `413` that names the `zstd+base64` layer encoding.
+- **Persistence:** `sqlx` with SQLite (runtime-checked queries, migrations embedded with `sqlx::migrate!`, bundled SQLite) — tables `jobs` and `scenes`; Postgres if ever hosted. Jobs still active when the server stopped are marked `failed/interrupted` on start-up (no checkpoints yet). Results are files under `<data>/results/{job id}/` (`cfd_job::LocalStore`, the 03 §6.2 layout); an object store would turn it into a trait.
 
 ### 2.3 Queue and workers
-- **MVP:** in-memory queue (`tokio::sync::mpsc`) + one semaphore per device (1 job per GPU at a time, N CPU jobs).
-- **Scaling:** Redis Streams or NATS JetStream; stateless workers advertise their capabilities (GPU, memory, supported backends).
-- **Scheduling:** backend chosen from the estimated memory requirement (`cells × bytes per cell`) and availability.
+- **Now:** jobs wait on **one `tokio::sync::Semaphore` per physical device** (FIFO): one permit per GPU — CUDA and wgpu on the same card share it, matched by PCI location — and `--cpu-jobs` (default 1) for the CPU, whose rayon pool is shared. A job's task acquires the permit, starts the job's thread and moves the permit into it, so the device is released when the thread ends, whatever the outcome. At most `maxQueuedJobs` (16) wait; more are refused with `429`.
+- **Engine choice:** `cfd_engines::Inventory` opens every engine once at start-up; `auto` takes the first available hardware engine (CUDA > wgpu > CPU) whose device holds the domain (`cells × bytes per cell` against 90% of the GPU's memory and the largest buffer); a domain no engine can hold is refused at submission (`422`), never queued.
+- **Scaling (later):** Redis Streams or NATS JetStream; stateless workers advertise their capabilities (GPU, memory, supported backends).
 
 ### 2.4 Simulation core — `cfd-core` and solvers
 - `cfd-core`: shared types (Scene, `Domain`, units and physical ↔ lattice conversion, the `Solver` trait, sampling to physical fields).
@@ -75,17 +95,25 @@ pub trait Solver: Send {
 Construction is backend-specific (`CpuLbm::new(domain, config)`, `WgpuLbm::new(gpu_context, domain, config)`, `CudaLbm::new(cuda_device, domain, config)`); code that picks a backend at runtime holds a `Box<dyn Solver>`. Interactive updates (`update_boundaries`, ADR-011) are added in Phase 5b.
 
 ### 2.5 CLI — `crates/cfd-cli`
-Runs scenes from files without a server: essential for development, benchmarks and validation tests (`cfd-cli run scene.json --backend cuda --out out/`).
+Runs scenes from files without a server: essential for development, benchmarks and validation tests (`cfd-cli run scene.json --backend cuda --out out/`). `run` is a thin wrapper over `cfd-job` (a console observer, then PNG rendering); `cfd-cli submit scene.json --server URL [--cancel-after S]` is the server's test client (time to the first frame, frames/s, skipped frames, cancel latency).
+
+Shared by the CLI and the server (ADR-024):
+- `cfd-engines`: the engine kinds, opening engines (`auto` = CUDA > hardware wgpu > CPU), `SolverChoice::make` (the only code that names the concrete solver types), and the `Inventory` the server opens once (devices, memory, physical-device keys).
+- `cfd-job`: `prepare` (`Scene → Domain` with the run's overrides), `run` (the command loop and output thread of §2.6), `meta.json`, the CSV series and the result directory (`ResultDir`, `LocalStore`).
+
+### 2.6 Jobs and streaming
+- **Command loop** (`cfd_job::run`, ADR-011, ADR-025): between batches the loop drains commands (`Pause`, `Resume`, `Cancel`, `Snapshot`; `PatchCells`/`SetParam` are answered "not supported" until Phase 5b); while paused it blocks on the channel. Each batch runs up to the next sample/output event and at most ≈ 50 ms of measured work (the batch size follows the measured step rate), which bounds the latency of every command; batching never changes results (tested byte for byte).
+- **Output thread:** frames are converted to physical fields, encoded and written on a second thread fed by a bounded channel (2 frames): stored frames are never dropped — if the disk or the encoder is slower, the solver waits. A cancel drops the frames still queued. Every frame also goes to the job's observer (the server's stream hub).
+- **Streaming** (ADR-026): per job, a `tokio::sync::broadcast` channel carries events (`status`, `progress` at most 10 Hz, `log`, `done`) and, for every stream format a viewer asked for (fields, maximum size), a `tokio::sync::watch` channel holds the **latest** encoded frame (f16, box-downsampled). Each viewer's task sends the latest frame and waits for the socket: a slow viewer skips frames, the job never waits for viewers, and the final frame is always delivered before `done`.
 
 ## 3. Request flow
 
 1. The user draws and configures → the frontend serialises the `Scene` (see [03](03-data-model.md)).
-2. `POST /api/simulations` → the server validates schema, limits and physical consistency; estimates memory and cost.
-3. Job created (`queued`) → returns `{ id }`.
-4. The client opens `WS /api/simulations/{id}/stream`.
-5. Worker: `Scene → Domain` (rasterisation, lattice units, stability check) → `Solver::init` → `step` / `sample` / `encode` / `publish` loop.
-6. Every frame is sent over the WebSocket and written to the `ResultStore`.
-7. End (`completed` / `failed` / `cancelled`) → summary with diagnostics.
+2. `POST /api/simulations` → the server validates the format, consistency and stability (`Scene → Domain` on tokio's blocking pool), its limits and an engine that can hold the domain; estimates memory, stored bytes and time (from the throughput of earlier jobs).
+3. Job created (`queued`, a row in SQLite, `results/{id}/`) → `201` with the job; a task waits for the engine's device slot.
+4. The client opens `WS /api/simulations/{id}/stream` → `hello` (job, grid, stream format, field ranges so far).
+5. Slot acquired → the job's thread makes the solver and runs the command loop: samples (diagnostics, forces, probes → CSV, `progress` events), frames (→ output thread: stored f32 frame, then f16 stream frames), commands between batches.
+6. End (`completed` / `failed` with `diverged`, `error` or `interrupted` / `cancelled`) → `meta.json`, the SQLite row, a `done` event; the device slot passes to the next job.
 
 ## 4. Technology stack
 
@@ -115,9 +143,11 @@ live-fluids/
 │   ├── cfd-gpu/               # wgpu infrastructure + WGSL shaders
 │   ├── cfd-cuda/              # CUDA backend (cudarc + .cu kernels), `cuda` feature
 │   ├── cfd-io/                # result formats, frame encoding
-│   ├── cfd-server/            # axum API + jobs + streaming
+│   ├── cfd-engines/           # engine selection (shared by the CLI and the server)
+│   ├── cfd-job/               # job runner: run loop, result layout (shared by the CLI and the server)
+│   ├── cfd-server/            # axum API + jobs + streaming + SQLite
 │   ├── cfd-verify/            # backend-agnostic validation cases + report (uses `Box<dyn Solver>`)
-│   └── cfd-cli/               # run/render/bench/verify CLI
+│   └── cfd-cli/               # run/render/bench/verify/compare/submit CLI
 ├── apps/
 │   └── web/                   # TS frontend
 ├── schema/                    # Scene JSON Schema (generated)

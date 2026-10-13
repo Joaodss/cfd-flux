@@ -3,6 +3,7 @@ mod bench;
 mod compare;
 mod render;
 mod run;
+mod submit;
 mod verify;
 
 use std::path::{Path, PathBuf};
@@ -56,6 +57,9 @@ enum Command {
     /// Run the same scene on several backends and report their differences (fields, maps,
     /// diagnostics, forces, MLUPS) against the first one.
     Compare(compare::CompareArgs),
+    /// Submit a scene to a running cfd-server and follow its stream (frames/s, time to the first
+    /// frame, progress); `--cancel-after` measures how fast a cancel takes effect.
+    Submit(submit::SubmitArgs),
     /// Render the frames of a run directory as PNG sequences.
     Render {
         /// Directory written by `cfd-cli run`.
@@ -113,6 +117,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             }
         }
         Command::Run(args) => return run::run(args),
+        Command::Submit(args) => return submit::submit(args),
         Command::Bench(args) => bench::bench(args)?,
         // As `diff` and `cmp`: 1 = outside the tolerance, 2 = could not compare.
         Command::Compare(args) => {

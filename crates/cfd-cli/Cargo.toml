@@ -15,20 +15,30 @@ path = "src/main.rs"
 anyhow.workspace = true
 cfd-core.workspace = true
 cfd-cuda.workspace = true
+cfd-engines = { workspace = true, features = ["clap"] }
 cfd-gpu.workspace = true
 cfd-io.workspace = true
+cfd-job.workspace = true
 cfd-lbm.workspace = true
 cfd-verify.workspace = true
 clap.workspace = true
+futures-util.workspace = true
 rayon.workspace = true
+reqwest.workspace = true
 serde.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+tokio.workspace = true
+tokio-tungstenite.workspace = true
+
+[dev-dependencies]
+# `submit` is tested against a server started in-process.
+cfd-server = { workspace = true }
 
 [features]
 # The CUDA backend builds without the CUDA Toolkit (its libraries are loaded at runtime), so it
 # is on by default; `--no-default-features` leaves it out.
 default = ["cuda"]
-cuda = ["cfd-cuda/cuda"]
+cuda = ["cfd-cuda/cuda", "cfd-engines/cuda"]
 
 [lints]
 workspace = true
