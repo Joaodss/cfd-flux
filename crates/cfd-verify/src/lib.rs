@@ -12,6 +12,7 @@
 //! - [`report`]: the Markdown report with SVG plots and PNG snapshots.
 
 pub mod cases;
+pub mod compare;
 pub mod harness;
 pub mod parity;
 mod plot;

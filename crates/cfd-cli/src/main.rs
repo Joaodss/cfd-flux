@@ -1,5 +1,6 @@
 mod backend;
 mod bench;
+mod compare;
 mod render;
 mod run;
 mod verify;
@@ -52,6 +53,9 @@ enum Command {
     Verify(verify::VerifyArgs),
     /// Measure solver throughput (MLUPS) at several resolutions.
     Bench(bench::BenchArgs),
+    /// Run the same scene on several backends and report their differences (fields, maps,
+    /// diagnostics, forces, MLUPS) against the first one.
+    Compare(compare::CompareArgs),
     /// Render the frames of a run directory as PNG sequences.
     Render {
         /// Directory written by `cfd-cli run`.
@@ -110,6 +114,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Run(args) => return run::run(args),
         Command::Bench(args) => bench::bench(args)?,
+        // As `diff` and `cmp`: 1 = outside the tolerance, 2 = could not compare.
+        Command::Compare(args) => {
+            return Ok(compare::compare(args).unwrap_or_else(|e| {
+                eprintln!("error: {e:#}");
+                ExitCode::from(2)
+            }))
+        }
         Command::Verify(args) => return verify::verify(args),
         Command::Render { dir, opts } => {
             render::render_dir(&dir, &opts)?;

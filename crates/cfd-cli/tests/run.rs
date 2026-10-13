@@ -1,63 +1,12 @@
 //! End-to-end tests of `cfd-cli run` on small scenes (the binary is built by cargo for tests).
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::Path;
 use std::process::Command;
 
-use cfd_core::examples::{self, Canvas};
-use cfd_core::scene::CellType;
 use cfd_core::Scene;
-
-/// A 64 × 18 channel (walls, uniform inlet, pressure outlet) with a probe, in the units of the
-/// `channel` example (dx = 1 mm, dt = 1 ms at the default lattice velocity).
-fn small_channel() -> Scene {
-    let (w, h) = (64, 18);
-    let mut c = Canvas::new(w, h, CellType::Fluid);
-    c.rect(0, 0, w, 1, CellType::Solid, 1);
-    c.rect(0, h - 1, w, h, CellType::Solid, 1);
-    c.rect(0, 1, 1, h - 1, CellType::Inlet, 2);
-    c.rect(w - 1, 1, w, h - 1, CellType::Outlet, 3);
-    let mut scene = examples::channel();
-    scene.grid.width = w;
-    scene.grid.height = h;
-    scene.layers = c.layers();
-    scene.probes[0].position = [32, 9];
-    scene
-}
-
-fn temp_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("cfd-cli-test-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&d);
-    std::fs::create_dir_all(&d).unwrap();
-    d
-}
-
-/// Backend arguments; `None` for wgpu when the machine has no adapter (the test is skipped
-/// unless `CFD_REQUIRE_GPU` is set).
-fn backend_args(backend: &str) -> Option<Vec<&'static str>> {
-    match backend {
-        "cpu" => Some(vec!["--backend", "cpu"]),
-        "cuda" => match cuda_available() {
-            Ok(()) => Some(vec!["--backend", "cuda"]),
-            Err(e) => {
-                assert!(
-                    std::env::var_os("CFD_REQUIRE_CUDA").is_none(),
-                    "CFD_REQUIRE_CUDA is set but CUDA is unavailable: {e}"
-                );
-                eprintln!("skipping: {e}");
-                None
-            }
-        },
-        _ if cfd_gpu::adapters().is_empty() => {
-            assert!(
-                std::env::var_os("CFD_REQUIRE_GPU").is_none(),
-                "CFD_REQUIRE_GPU is set but there is no wgpu adapter"
-            );
-            eprintln!("skipping: no wgpu adapter");
-            None
-        }
-        _ => Some(vec!["--backend", "wgpu", "--allow-software"]),
-    }
-}
+use common::{backend_args, cuda_available, small_channel, temp_dir};
 
 fn run(scene: &Scene, dir: &Path, extra: &[&str]) -> std::process::Output {
     run_env(scene, dir, extra, &[])
@@ -244,16 +193,6 @@ fn aborts_on_divergence(backend: &str) {
             .all(|f| f.values.iter().all(|v| v.is_finite())));
     }
     let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// Whether this build has the CUDA backend and the machine can run it.
-fn cuda_available() -> Result<(), String> {
-    #[cfg(feature = "cuda")]
-    return cfd_cuda::CudaDevice::new(&cfd_cuda::CudaOptions::default())
-        .map(|_| ())
-        .map_err(|e| e.to_string());
-    #[cfg(not(feature = "cuda"))]
-    Err(cfd_cuda::CudaError::NotBuilt.to_string())
 }
 
 /// `--backend auto` takes CUDA, else a hardware wgpu adapter, else the CPU. Each engine is made

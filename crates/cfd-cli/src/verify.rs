@@ -127,7 +127,7 @@ pub fn verify(args: VerifyArgs) -> Result<ExitCode> {
 }
 
 /// Short hash of the checked-out commit (plus `-dirty` with local changes), if git is available.
-fn git_commit() -> Option<String> {
+pub(crate) fn git_commit() -> Option<String> {
     let git = |args: &[&str]| -> Option<String> {
         let out = std::process::Command::new("git").args(args).output().ok()?;
         out.status

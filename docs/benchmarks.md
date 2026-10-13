@@ -10,6 +10,7 @@ cargo run --release -p cfd-cli -- bench --backend wgpu --sizes 256,512,1024,2048
 cargo run --release -p cfd-cli -- bench --backend wgpu --workgroup 256   # other workgroup sizes
 cargo run --release -p cfd-cli -- bench --backend cuda --sizes 256,512,1024,2048,4000
 cargo run --release -p cfd-cli -- bench --json out.json          # machine-readable results
+cargo run --release -p cfd-cli -- bench --backends cuda,wgpu     # interleaved, one column per backend
 ```
 
 - **Scenes:** lid-driven cavity at Re = 100 (isothermal, D2Q9) and differentially heated cavity at
@@ -19,7 +20,48 @@ cargo run --release -p cfd-cli -- bench --json out.json          # machine-reada
   repeated 3 times; the median is reported, with min and max. Results are reproducible within a few
   percent on an idle machine (the 8-thread 256² case is the noisiest). GPU runs are timed until the
   queued steps have finished (`Solver::finish`).
+- `--backends a,b` builds one solver per backend for each case, warms each up, then alternates the
+  timed repetitions (a, b, a, b, …), so whatever else the machine does affects every column alike.
 - Add a new section per machine/backend; keep old ones for comparison.
+
+## CUDA vs wgpu, interleaved — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-13
+
+Windows 11, driver 617.42 (CUDA 13.4), NVRTC 13.4 (`sm_89` cubin), wgpu 30 on Vulkan, block/workgroup
+128, TRT collision, Phase 2c code (commit `ef53348`). **Quiet desktop:** display at 50 Hz, nothing
+animating. One run, the two engines interleaved, 5 repetitions of ≥ 2 s each per case; median
+(min–max), MLUPS. 3 min 12 s in total.
+
+```bash
+cargo run --release -p cfd-cli -- bench --backends cuda,wgpu --sizes 256,512,1024,2048,4000 --repeat 5
+```
+
+| Model | Grid (fluid) | cuda MLUPS (min–max) | wgpu MLUPS (min–max) | wgpu / cuda |
+|-------|--------------|---:|---:|---:|
+| isothermal (D2Q9) | 256² | 9941 (9912–9984) | 9854 (9825–9876) | 0.991 |
+| isothermal (D2Q9) | 512² | 8507 (8405–8508) | 7318 (7289–7330) | 0.860 |
+| isothermal (D2Q9) | 1024² | 2873 (2873–2873) | 2877 (2876–2877) | 1.001 |
+| isothermal (D2Q9) | 2048² | 2875 (2874–2875) | 2867 (2866–2868) | 0.997 |
+| isothermal (D2Q9) | 4000² | 2881 (2881–2882) | 2879 (2862–2879) | 0.999 |
+| thermal (D2Q9 + D2Q5) | 256² | 6471 (6339–6486) | 5489 (5344–5518) | 0.848 |
+| thermal (D2Q9 + D2Q5) | 512² | 1979 (1976–1979) | 1933 (1928–1934) | 0.977 |
+| thermal (D2Q9 + D2Q5) | 1024² | 1880 (1880–1880) | 1884 (1883–1884) | 1.002 |
+| thermal (D2Q9 + D2Q5) | 2048² | 1863 (1863–1863) | 1869 (1869–1869) | 1.003 |
+| thermal (D2Q9 + D2Q5) | 4000² | 1897 (1897–1898) | 1899 (1899–1899) | 1.001 |
+
+**Reading the numbers**
+
+- **From 1024² on, the two engines are the same speed** (within ±0.3%): both kernels are
+  DRAM-bound at ≈ 245 GB/s, 90% of the card's 272 GB/s (the CUDA kernel moves exactly the ideal
+  84 B per isothermal update, see below). On a quiet desktop the repetitions of a case agree to
+  within 0.6% at these sizes; the few-percent differences between the engines in the earlier,
+  non-interleaved tables were desktop noise.
+- **CUDA is ahead only while the working set sits in the 24 MB L2 cache:** +16% at 512² isothermal
+  and +18% at 256² thermal, where the kernel is no longer bandwidth-bound and launch/dispatch costs
+  and code generation matter (CUDA replays 50 steps per graph launch; wgpu records up to 1000
+  dispatches per command buffer). At 512² thermal (≈ 34 MB, out of cache) the gap closes again.
+- The **cost of portability** for this solver is therefore nil at production sizes: wgpu/WGSL runs
+  on any GPU at the CUDA rate, while CUDA keeps the bit-identity with the CPU reference (ADR-021) and
+  a lead on small, cache-resident grids.
 
 ## CUDA vs wgpu — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-12
 

@@ -12,7 +12,7 @@ use cfd_core::DomainOptions;
 use cfd_io::image::Colormap;
 
 use super::{within, Case, Outcome};
-use crate::harness::{snapshot, Ctx, Run};
+use crate::harness::{oscillation_frequency, snapshot, Ctx, Run};
 use crate::plot::{Plot, Series};
 use crate::references::{self, SCHAFER_TUREK_CITATION};
 use crate::scenes::{self, ids, ST_DIAMETER};
@@ -199,18 +199,6 @@ fn steady_re20(ctx: &Ctx) -> Result<Outcome> {
     Ok(out)
 }
 
-/// Upward zero crossings of `y − mean(y)`, linearly interpolated in time.
-fn upward_crossings(t: &[f64], y: &[f64]) -> Vec<f64> {
-    let mean = y.iter().sum::<f64>() / y.len() as f64;
-    (1..y.len())
-        .filter(|&i| y[i - 1] - mean < 0.0 && y[i] - mean >= 0.0)
-        .map(|i| {
-            let (a, b) = (y[i - 1] - mean, y[i] - mean);
-            t[i - 1] + (t[i] - t[i - 1]) * (-a / (b - a))
-        })
-        .collect()
-}
-
 /// Force history of a window: `(t, C_D, C_L)`.
 type History = Vec<(f64, f64, f64)>;
 
@@ -280,12 +268,7 @@ fn periodic_re100(ctx: &Ctx) -> Result<Outcome> {
         let h = record(&mut run, 3.0, every, u_mean)?;
         let t: Vec<f64> = h.iter().map(|s| s.0).collect();
         let cl: Vec<f64> = h.iter().map(|s| s.2).collect();
-        let crossings = upward_crossings(&t, &cl);
-        let f = if crossings.len() >= 2 {
-            (crossings.len() - 1) as f64 / (crossings[crossings.len() - 1] - crossings[0])
-        } else {
-            f64::NAN
-        };
+        let f = oscillation_frequency(&t, &cl).unwrap_or(f64::NAN);
         let st = f * ST_DIAMETER / u_mean;
         let cd_max = h.iter().map(|s| s.1).fold(f64::NEG_INFINITY, f64::max);
         let cl_max = h.iter().map(|s| s.2).fold(f64::NEG_INFINITY, f64::max);
@@ -364,22 +347,4 @@ fn periodic_re100(ctx: &Ctx) -> Result<Outcome> {
             .push(within("periodic state reached (1 = yes)", 0.0, 1.0, 1.0));
     }
     Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn zero_crossings_give_the_frequency() {
-        let f = 3.0;
-        let t: Vec<f64> = (0..3000).map(|i| i as f64 * 1e-3).collect();
-        let y: Vec<f64> = t
-            .iter()
-            .map(|t| 0.2 + (2.0 * std::f64::consts::PI * f * t + 0.3).sin())
-            .collect();
-        let c = upward_crossings(&t, &y);
-        let measured = (c.len() - 1) as f64 / (c[c.len() - 1] - c[0]);
-        assert!((measured / f - 1.0).abs() < 1e-3, "{measured}");
-    }
 }

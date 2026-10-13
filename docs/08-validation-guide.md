@@ -112,9 +112,13 @@ crates/cfd-verify/
 - `cfd-cli verify --full` → all resolutions; run locally before releases and commit
   `validation/report/` (CPU) and `validation/report-wgpu/` (GPU). The GPU runs the full suite in
   about 80 s on an RTX 4060 (the CPU needs about 23 min).
-- Instantaneous fields of the two backends agree to < 1e-5 for a few thousand steps (parity tests);
+- Instantaneous fields of the backends agree to < 1e-5 for a few thousand steps (parity tests);
   for the chaotic cylinder wake the statistics are compared instead (St and C_D,max are identical to
   4 digits, 04 §7).
+- `cfd-cli compare --validation` runs every validation geometry on every available backend and
+  writes the comparison report [`validation/compare/`](../validation/compare/README.md) (field
+  differences, bit-identity, difference maps, force statistics; ADR-023). `cfd-cli compare
+  scene.json --out DIR` does the same for any scene (`--statistics` for chaotic flows).
 - `cfd-cli verify --list`, `--cases cavity,cylinder-re20`, `--collision bgk` (BGK shows a genuine
   order 2 for Poiseuille, where TRT is exact).
 - (`cfd-cli validate` is the existing command that checks scene *files* for format/consistency errors.)

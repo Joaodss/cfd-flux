@@ -3,16 +3,20 @@
 //! Scenes: lid-driven cavity (isothermal, D2Q9) and differentially heated cavity (thermal,
 //! D2Q9 + D2Q5), N² fluid cells, so walls and boundary links are included. Each measurement
 //! runs a fixed number of steps after a warm-up; the median of the repeats is reported.
+//!
+//! `--backends a,b` measures several backends in one interleaved run (a, b, a, b, …), so that
+//! anything else happening on the machine affects every column alike.
 
+use std::fmt::Write as _;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use cfd_core::{Domain, DomainOptions, Scene};
+use cfd_core::{Domain, DomainOptions, Scene, Solver};
 use cfd_verify::scenes;
 use clap::{Args, ValueEnum};
 use serde::Serialize;
 
-use crate::backend::SolverArgs;
+use crate::backend::{EngineArg, SolverArgs, SolverChoice};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -21,6 +25,15 @@ pub enum Model {
     Iso,
     /// Heated cavity, Ra = 1e5, Pr = 0.71.
     Thermal,
+}
+
+impl Model {
+    fn title(self) -> &'static str {
+        match self {
+            Model::Iso => "isothermal (D2Q9)",
+            Model::Thermal => "thermal (D2Q9 + D2Q5)",
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -40,10 +53,34 @@ pub struct BenchArgs {
     /// Also write the results as JSON.
     #[arg(long, value_name = "FILE")]
     pub json: Option<std::path::PathBuf>,
+    /// Several backends in one interleaved run (one table, a column per backend), instead of
+    /// --backend. The same backend may appear twice (labelled `cuda-2`, …).
+    #[arg(long, value_enum, value_delimiter = ',', conflicts_with = "backend")]
+    pub backends: Option<Vec<EngineArg>>,
     #[command(flatten)]
     pub solver: SolverArgs,
 }
 
+/// One backend's measurement of one case.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Timing {
+    steps: u64,
+    mlups_median: f64,
+    mlups_min: f64,
+    mlups_max: f64,
+}
+
+/// One case, with a timing per backend.
+#[derive(Debug, Clone, PartialEq)]
+struct Row {
+    model: Model,
+    size: u32,
+    fluid_cells: usize,
+    timings: Vec<Timing>,
+}
+
+/// JSON of a single-backend run (format unchanged since Phase 1).
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BenchResult {
@@ -70,6 +107,48 @@ struct BenchReport {
     collision: &'static str,
     optimised_build: bool,
     results: Vec<BenchResult>,
+}
+
+/// JSON of a `--backends` run.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MultiReport {
+    generator: String,
+    cpu: String,
+    logical_cores: usize,
+    threads: usize,
+    collision: &'static str,
+    optimised_build: bool,
+    backends: Vec<BackendInfo>,
+    results: Vec<MultiResult>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackendInfo {
+    label: String,
+    backend: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    device: Option<String>,
+    workgroup: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MultiResult {
+    model: Model,
+    size: u32,
+    fluid_cells: usize,
+    /// In the order of `backends`.
+    timings: Vec<LabelledTiming>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LabelledTiming {
+    backend: String,
+    #[serde(flatten)]
+    timing: Timing,
 }
 
 /// CPU model name, best effort (no extra dependencies).
@@ -112,33 +191,181 @@ fn scene(model: Model, n: u32) -> Scene {
     }
 }
 
+/// Steps until the warm-up has lasted 0.3 s (caches, page faults, thread start-up, GPU clocks),
+/// then the number of steps one timed repetition needs to last `min_seconds`.
+fn warm_up(solver: &mut dyn Solver, min_seconds: f64) -> Result<u64> {
+    let t = Instant::now();
+    let mut warm = 0u64;
+    while t.elapsed().as_secs_f64() < 0.3 || warm < 5 {
+        solver.step(5).context("benchmark diverged")?;
+        warm += 5;
+    }
+    solver.finish().context("benchmark diverged")?;
+    let rate = warm as f64 / t.elapsed().as_secs_f64();
+    Ok(((rate * min_seconds).ceil() as u64).max(10))
+}
+
+/// One timed repetition, in MLUPS.
+fn timed(solver: &mut dyn Solver, steps: u64, fluid: usize) -> Result<f64> {
+    let t = Instant::now();
+    let mut left = steps;
+    while left > 0 {
+        let chunk = left.min(1000);
+        solver.step(chunk as u32).context("benchmark diverged")?;
+        left -= chunk;
+    }
+    // Asynchronous backends: wait for the queued steps before reading the clock.
+    solver.finish().context("benchmark diverged")?;
+    Ok(fluid as f64 * steps as f64 / t.elapsed().as_secs_f64() / 1e6)
+}
+
+fn summary(steps: u64, mut mlups: Vec<f64>) -> Timing {
+    mlups.sort_by(f64::total_cmp);
+    Timing {
+        steps,
+        mlups_median: mlups[mlups.len() / 2],
+        mlups_min: mlups[0],
+        mlups_max: mlups[mlups.len() - 1],
+    }
+}
+
+/// Measures one case on every backend. The solvers all exist at once; after each one's warm-up,
+/// the repetitions are interleaved: backend 1, backend 2, …, then again.
+fn measure(
+    backends: &[(String, SolverChoice)],
+    domain: &Domain,
+    args: &BenchArgs,
+) -> Result<Vec<Timing>> {
+    let fluid = domain.fluid_cell_count();
+    let mut solvers = backends
+        .iter()
+        .map(|(_, c)| c.make(domain.clone()))
+        .collect::<Result<Vec<_>>>()?;
+    let steps = solvers
+        .iter_mut()
+        .map(|s| warm_up(s.as_mut(), args.min_seconds))
+        .collect::<Result<Vec<_>>>()?;
+    let mut mlups = vec![Vec::new(); solvers.len()];
+    for _ in 0..args.repeat.max(1) {
+        for (k, s) in solvers.iter_mut().enumerate() {
+            mlups[k].push(timed(s.as_mut(), steps[k], fluid)?);
+        }
+    }
+    Ok(steps
+        .into_iter()
+        .zip(mlups)
+        .map(|(s, m)| summary(s, m))
+        .collect())
+}
+
+/// The table of a single-backend run (format unchanged since Phase 1).
+fn single_table(rows: &[Row]) -> String {
+    let mut md = String::new();
+    let _ = writeln!(
+        md,
+        "| Model | Grid (fluid) | Steps per run | MLUPS (median) | min | max |"
+    );
+    let _ = writeln!(
+        md,
+        "|-------|--------------|---------------|----------------|-----|-----|"
+    );
+    for r in rows {
+        let t = r.timings[0];
+        let _ = writeln!(
+            md,
+            "| {} | {}² | {} | {:.1} | {:.1} | {:.1} |",
+            r.model.title(),
+            r.size,
+            t.steps,
+            t.mlups_median,
+            t.mlups_min,
+            t.mlups_max
+        );
+    }
+    md
+}
+
+/// One column per backend (median, with min–max); with exactly two backends, their ratio.
+fn multi_table(labels: &[String], rows: &[Row]) -> String {
+    let mut md = String::new();
+    let ratio = labels.len() == 2;
+    let cols: Vec<String> = labels
+        .iter()
+        .map(|l| format!("{l} MLUPS (min–max)"))
+        .collect();
+    let _ = write!(md, "| Model | Grid (fluid) | {} |", cols.join(" | "));
+    if ratio {
+        let _ = write!(md, " {} / {} |", labels[1], labels[0]);
+    }
+    let _ = writeln!(md);
+    let _ = write!(
+        md,
+        "|-------|--------------|{}",
+        "---:|".repeat(labels.len())
+    );
+    if ratio {
+        md.push_str("---:|");
+    }
+    let _ = writeln!(md);
+    for r in rows {
+        let cells: Vec<String> = r
+            .timings
+            .iter()
+            .map(|t| {
+                format!(
+                    "{:.0} ({:.0}–{:.0})",
+                    t.mlups_median, t.mlups_min, t.mlups_max
+                )
+            })
+            .collect();
+        let _ = write!(
+            md,
+            "| {} | {}² | {} |",
+            r.model.title(),
+            r.size,
+            cells.join(" | ")
+        );
+        if ratio {
+            let _ = write!(
+                md,
+                " {:.3} |",
+                r.timings[1].mlups_median / r.timings[0].mlups_median
+            );
+        }
+        let _ = writeln!(md);
+    }
+    md
+}
+
 pub fn bench(args: BenchArgs) -> Result<()> {
-    let choice = args.solver.resolve(None)?;
+    let backends: Vec<(String, SolverChoice)> = match &args.backends {
+        Some(list) => {
+            args.solver.engine.configure_threads()?;
+            args.solver.engine.open_all(list)?
+        }
+        None => {
+            let choice = args.solver.resolve(None)?;
+            vec![(choice.backend.to_string(), choice)]
+        }
+    };
     let optimised = !cfg!(debug_assertions);
     if !optimised {
         eprintln!("warning: unoptimised build; run `cargo run --release -p cfd-cli -- bench`");
     }
-    let mut report = BenchReport {
-        generator: format!("cfd-cli {}", env!("CARGO_PKG_VERSION")),
-        cpu: cpu_name(),
-        logical_cores: std::thread::available_parallelism().map_or(0, |n| n.get()),
-        threads: choice.threads,
-        backend: choice.backend,
-        device: choice.device.clone(),
-        workgroup: choice.is_gpu().then_some(args.solver.workgroup),
-        collision: choice.collision,
-        optimised_build: optimised,
-        results: Vec::new(),
-    };
-    eprintln!(
-        "{} ({} logical cores), {} threads, {} backend, {}",
-        report.cpu,
-        report.logical_cores,
-        report.threads,
-        choice.describe(),
-        report.collision
+    let first = &backends[0].1;
+    let (cpu, cores) = (
+        cpu_name(),
+        std::thread::available_parallelism().map_or(0, |n| n.get()),
     );
+    eprintln!(
+        "{cpu} ({cores} logical cores), {} threads, {}",
+        first.threads, first.collision
+    );
+    for (label, c) in &backends {
+        eprintln!("  {label}: {}", c.describe());
+    }
 
+    let mut rows = Vec::new();
     for &model in &args.model {
         for &n in &args.sizes {
             let opts = DomainOptions {
@@ -148,87 +375,185 @@ pub fn bench(args: BenchArgs) -> Result<()> {
             let domain = Domain::from_scene(&scene(model, n), &opts).map_err(|r| {
                 anyhow::anyhow!("{model:?} {n}²: {:?}", r.errors().collect::<Vec<_>>())
             })?;
-            let fluid = domain.fluid_cell_count();
-            let mut solver = choice.make(domain)?;
-
-            // Warm-up (caches, page faults, thread start-up), and a first rate estimate.
-            let t = Instant::now();
-            let mut warm = 0u64;
-            while t.elapsed().as_secs_f64() < 0.3 || warm < 5 {
-                solver.step(5).context("benchmark diverged")?;
-                warm += 5;
+            let timings = measure(&backends, &domain, &args)?;
+            for ((label, _), t) in backends.iter().zip(&timings) {
+                eprintln!(
+                    "  {model:?} {n}² {label}: {:.1} MLUPS (min {:.1}, max {:.1}, {} steps × {})",
+                    t.mlups_median,
+                    t.mlups_min,
+                    t.mlups_max,
+                    t.steps,
+                    args.repeat.max(1)
+                );
             }
-            solver.finish().context("benchmark diverged")?;
-            let rate = warm as f64 / t.elapsed().as_secs_f64();
-            let steps = ((rate * args.min_seconds).ceil() as u64).max(10);
-
-            let mut mlups: Vec<f64> = (0..args.repeat.max(1))
-                .map(|_| -> Result<f64> {
-                    let t = Instant::now();
-                    let mut left = steps;
-                    while left > 0 {
-                        let chunk = left.min(1000);
-                        solver.step(chunk as u32).context("benchmark diverged")?;
-                        left -= chunk;
-                    }
-                    // Asynchronous backends: wait for the queued steps before reading the clock.
-                    solver.finish().context("benchmark diverged")?;
-                    Ok(fluid as f64 * steps as f64 / t.elapsed().as_secs_f64() / 1e6)
-                })
-                .collect::<Result<_>>()?;
-            mlups.sort_by(f64::total_cmp);
-            let r = BenchResult {
+            rows.push(Row {
                 model,
                 size: n,
-                fluid_cells: fluid,
-                steps,
-                mlups_median: mlups[mlups.len() / 2],
-                mlups_min: mlups[0],
-                mlups_max: mlups[mlups.len() - 1],
-            };
-            eprintln!(
-                "  {model:?} {n}²: {:.1} MLUPS (min {:.1}, max {:.1}, {} steps × {})",
-                r.mlups_median,
-                r.mlups_min,
-                r.mlups_max,
-                steps,
-                mlups.len()
-            );
-            report.results.push(r);
+                fluid_cells: domain.fluid_cell_count(),
+                timings,
+            });
         }
     }
 
-    println!(
-        "CPU: {} ({} logical cores), {} threads, backend {}{}, collision {}, {}\n",
-        report.cpu,
-        report.logical_cores,
-        report.threads,
-        choice.describe(),
-        report
-            .workgroup
-            .map_or(String::new(), |w| format!(", workgroup {w}")),
-        report.collision,
-        report.generator
-    );
-    println!("| Model | Grid (fluid) | Steps per run | MLUPS (median) | min | max |");
-    println!("|-------|--------------|---------------|----------------|-----|-----|");
-    for r in &report.results {
-        let model = match r.model {
-            Model::Iso => "isothermal (D2Q9)",
-            Model::Thermal => "thermal (D2Q9 + D2Q5)",
-        };
+    let generator = format!("cfd-cli {}", env!("CARGO_PKG_VERSION"));
+    let json = if backends.len() == 1 {
         println!(
-            "| {model} | {n}² | {} | {:.1} | {:.1} | {:.1} |",
-            r.steps,
-            r.mlups_median,
-            r.mlups_min,
-            r.mlups_max,
-            n = r.size
+            "CPU: {cpu} ({cores} logical cores), {} threads, backend {}{}, collision {}, {generator}\n",
+            first.threads,
+            first.describe(),
+            first
+                .workgroup()
+                .map_or(String::new(), |w| format!(", workgroup {w}")),
+            first.collision,
         );
-    }
+        print!("{}", single_table(&rows));
+        serde_json::to_string_pretty(&BenchReport {
+            generator,
+            cpu,
+            logical_cores: cores,
+            threads: first.threads,
+            backend: first.backend,
+            device: first.device.clone(),
+            workgroup: first.workgroup(),
+            collision: first.collision,
+            optimised_build: optimised,
+            results: rows
+                .iter()
+                .map(|r| BenchResult {
+                    model: r.model,
+                    size: r.size,
+                    fluid_cells: r.fluid_cells,
+                    steps: r.timings[0].steps,
+                    mlups_median: r.timings[0].mlups_median,
+                    mlups_min: r.timings[0].mlups_min,
+                    mlups_max: r.timings[0].mlups_max,
+                })
+                .collect(),
+        })?
+    } else {
+        println!(
+            "CPU: {cpu} ({cores} logical cores), {} threads, collision {}, {generator}; \
+             interleaved runs, {} repetitions of ≥ {} s each",
+            first.threads,
+            first.collision,
+            args.repeat.max(1),
+            args.min_seconds
+        );
+        for (label, c) in &backends {
+            println!(
+                "- {label}: {}{}",
+                c.describe(),
+                c.workgroup()
+                    .map_or(String::new(), |w| format!(", workgroup/block {w}"))
+            );
+        }
+        println!();
+        let labels: Vec<String> = backends.iter().map(|(l, _)| l.clone()).collect();
+        print!("{}", multi_table(&labels, &rows));
+        serde_json::to_string_pretty(&MultiReport {
+            generator,
+            cpu,
+            logical_cores: cores,
+            threads: first.threads,
+            collision: first.collision,
+            optimised_build: optimised,
+            backends: backends
+                .iter()
+                .map(|(label, c)| BackendInfo {
+                    label: label.clone(),
+                    backend: c.backend,
+                    device: c.device.clone(),
+                    workgroup: c.workgroup(),
+                })
+                .collect(),
+            results: rows
+                .iter()
+                .map(|r| MultiResult {
+                    model: r.model,
+                    size: r.size,
+                    fluid_cells: r.fluid_cells,
+                    timings: labels
+                        .iter()
+                        .zip(&r.timings)
+                        .map(|(l, t)| LabelledTiming {
+                            backend: l.clone(),
+                            timing: *t,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })?
+    };
     if let Some(path) = &args.json {
-        std::fs::write(path, serde_json::to_string_pretty(&report)? + "\n")
+        std::fs::write(path, json + "\n")
             .with_context(|| format!("cannot write {}", path.display()))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser)]
+    struct Cli {
+        #[command(flatten)]
+        bench: BenchArgs,
+    }
+
+    fn parse(args: &[&str]) -> Result<BenchArgs, clap::Error> {
+        Cli::try_parse_from(std::iter::once("bench").chain(args.iter().copied())).map(|c| c.bench)
+    }
+
+    #[test]
+    fn backends_parse_as_a_list_of_engines() {
+        let a = parse(&["--backends", "wgpu,cuda", "--sizes", "1024"]).unwrap();
+        assert_eq!(a.backends, Some(vec![EngineArg::Wgpu, EngineArg::Cuda]));
+        assert_eq!(a.sizes, [1024]);
+        assert!(a.solver.backend.is_none());
+        // Engine options still apply to every backend.
+        let a = parse(&["--backends", "cuda,cuda", "--workgroup", "256"]).unwrap();
+        assert_eq!(a.solver.engine.workgroup, 256);
+        // A single backend keeps working as before.
+        assert!(parse(&["--backend", "cpu"]).unwrap().backends.is_none());
+    }
+
+    #[test]
+    fn backends_reject_auto_and_conflict_with_backend() {
+        assert!(parse(&["--backends", "cpu,auto"]).is_err());
+        let e = parse(&["--backends", "wgpu,cuda", "--backend", "cpu"]).unwrap_err();
+        assert_eq!(e.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn tables() {
+        let t = |m: f64| Timing {
+            steps: 100,
+            mlups_median: m,
+            mlups_min: m - 10.0,
+            mlups_max: m + 10.0,
+        };
+        let rows = [Row {
+            model: Model::Iso,
+            size: 1024,
+            fluid_cells: 1 << 20,
+            timings: vec![t(2873.0), t(2969.0)],
+        }];
+        let md = multi_table(&["cuda".into(), "wgpu".into()], &rows);
+        let lines: Vec<&str> = md.lines().collect();
+        assert_eq!(
+            lines[0],
+            "| Model | Grid (fluid) | cuda MLUPS (min–max) | wgpu MLUPS (min–max) | wgpu / cuda |"
+        );
+        assert_eq!(lines[1], "|-------|--------------|---:|---:|---:|");
+        assert_eq!(
+            lines[2],
+            "| isothermal (D2Q9) | 1024² | 2873 (2863–2883) | 2969 (2959–2979) | 1.033 |"
+        );
+        // Three backends: no ratio column.
+        let three = multi_table(&["a".into(), "b".into(), "c".into()], &[]);
+        assert!(!three.contains(" / "));
+        assert!(single_table(&rows).contains("| isothermal (D2Q9) | 1024² | 100 | 2873.0 |"));
+    }
 }
