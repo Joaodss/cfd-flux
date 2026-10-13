@@ -7,7 +7,8 @@
 //! never dropped. (In C# terms: a consumer `Thread` reading a `BlockingCollection` with a bounded
 //! capacity.)
 
-use std::sync::mpsc::{sync_channel, SyncSender};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 
@@ -60,6 +61,15 @@ pub(crate) struct Stored {
 pub(crate) struct OutputThread {
     tx: Option<SyncSender<OutputJob>>,
     handle: Option<JoinHandle<Result<Stored>>>,
+    /// Set on cancel: frames still queued are dropped instead of written.
+    abandon: Arc<AtomicBool>,
+}
+
+/// Why a frame could not be queued without waiting.
+pub(crate) enum TrySend {
+    Queued,
+    /// The queue is full; the frame is handed back.
+    Full(OutputJob),
 }
 
 pub(crate) struct OutputConfig {
@@ -79,6 +89,8 @@ impl OutputThread {
     ) -> Result<Self> {
         let domain = sampling_domain(domain);
         let (tx, rx) = sync_channel::<OutputJob>(QUEUE);
+        let abandon = Arc::new(AtomicBool::new(false));
+        let abandoned = abandon.clone();
         // `move` hands ownership of everything the closure uses to the new thread (the domain
         // copy, the receiver, the observer's `Arc`): nothing is shared but the observer.
         let handle = std::thread::Builder::new()
@@ -87,6 +99,9 @@ impl OutputThread {
                 let mut stored = Stored::default();
                 // The loop ends when every sender is dropped (the run is over).
                 for job in rx {
+                    if abandoned.load(Ordering::Relaxed) {
+                        continue; // cancelled: drain the queue without writing
+                    }
                     let fs = FieldSet::from_lattice(&domain, &job.fields, job.step, &config.req);
                     let mut written = false;
                     if let (true, Some(index), false) = (job.store, job.index, stored.limit_reached)
@@ -124,21 +139,28 @@ impl OutputThread {
         Ok(Self {
             tx: Some(tx),
             handle: Some(handle),
+            abandon,
         })
     }
 
-    /// Queues a frame, waiting while the queue is full. Fails with the output thread's error if it
-    /// stopped (e.g. the disk is full).
-    pub fn send(&mut self, job: OutputJob) -> Result<()> {
+    /// Queues a frame if there is room. Fails with the output thread's error if it stopped (e.g.
+    /// the disk is full).
+    pub fn try_send(&mut self, job: OutputJob) -> Result<TrySend> {
         let tx = self.tx.as_ref().expect("output thread running");
-        if tx.send(job).is_err() {
+        match tx.try_send(job) {
+            Ok(()) => Ok(TrySend::Queued),
+            Err(TrySendError::Full(job)) => Ok(TrySend::Full(job)),
             // The receiver is gone: the thread returned early with an error.
-            return Err(self
+            Err(TrySendError::Disconnected(_)) => Err(self
                 .join()
                 .err()
-                .unwrap_or_else(|| anyhow!("the output thread stopped")));
+                .unwrap_or_else(|| anyhow!("the output thread stopped"))),
         }
-        Ok(())
+    }
+
+    /// Drops the frames still queued (the run was cancelled); the frame being written finishes.
+    pub fn abandon(&self) {
+        self.abandon.store(true, Ordering::Relaxed);
     }
 
     /// Waits for every queued frame to be written.

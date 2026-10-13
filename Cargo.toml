@@ -17,6 +17,7 @@ cfd-gpu = { path = "crates/cfd-gpu" }
 cfd-io = { path = "crates/cfd-io" }
 cfd-job = { path = "crates/cfd-job" }
 cfd-lbm = { path = "crates/cfd-lbm" }
+cfd-server = { path = "crates/cfd-server", default-features = false }
 cfd-verify = { path = "crates/cfd-verify" }
 anyhow = "1"
 # Server (cfd-server): HTTP/WebSocket on tokio, SQLite through sqlx (bundled SQLite, queries checked
@@ -25,6 +26,10 @@ axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 bytemuck = "1.25"
 clap = { version = "4.5", features = ["derive"] }
+# HTTP and WebSocket clients (`cfd-cli submit`, the server tests); no TLS: the server is local.
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+tokio-tungstenite = "0.29"
 # CUDA backend: dynamic loading (no toolkit needed to build) and the CUDA 13.0 bindings, so any
 # 13.x driver works; the driver and NVRTC libraries are opened at runtime.
 cudarc = { version = "0.19.10", default-features = false, features = [

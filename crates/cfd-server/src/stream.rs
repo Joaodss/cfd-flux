@@ -11,14 +11,24 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use axum::body::Bytes;
+
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::{Path, Query, State};
+use axum::response::Response;
 use cfd_core::solver::FieldSet;
 use cfd_io::frame::{Dtype, Field, FieldDesc, Frame};
-use cfd_job::FrameEvent;
-use serde::Serialize;
-use tokio::sync::watch;
+use cfd_job::{Command, FrameEvent};
+use serde::{Deserialize, Serialize};
+use tokio::sync::{broadcast, watch};
 
-/// An encoded stream frame (LFFR, f16), shared by every viewer of its format.
-pub type Encoded = Arc<Vec<u8>>;
+use crate::error::ApiError;
+use crate::jobs::{Event, GridInfo, Job, JobStatus, JobView};
+use crate::AppState;
+
+/// An encoded stream frame (LFFR, f16), shared by every viewer of its format (`Bytes` is
+/// reference-counted: sending it to many sockets copies nothing).
+pub type Encoded = Bytes;
 
 /// What a viewer receives: some fields, downsampled to fit a size.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -108,7 +118,7 @@ impl Hub {
             match encode(job_id, index, f.fields, &fmt) {
                 // `send_replace` stores the value even if every viewer left meanwhile.
                 Ok(bytes) => {
-                    tx.send_replace(Some(Arc::new(bytes)));
+                    tx.send_replace(Some(Bytes::from(bytes)));
                 }
                 Err(e) => tracing::warn!("job {job_id}: cannot encode a stream frame: {e}"),
             }
@@ -233,6 +243,178 @@ pub fn encode(
         fields,
     }
     .encode()
+}
+
+// ---- the WebSocket ------------------------------------------------------------------------
+
+/// `?fields=velocity,vorticity&maxSize=1024`
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StreamQuery {
+    fields: Option<String>,
+    max_size: Option<u32>,
+}
+
+/// The first message of every stream.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Hello<'a> {
+    r#type: &'static str,
+    job: &'a JobView,
+    /// `null` until the job has started.
+    grid: Option<&'a GridInfo>,
+    format: Option<FormatInfo>,
+    /// Min/max of each field over the frames so far (velocity: of its magnitude).
+    ranges: Ranges,
+}
+
+/// `GET /api/simulations/{id}/stream` (WebSocket): `hello`, then JSON events (`status`,
+/// `progress` at most 10 Hz, `log`, `done`) as text messages and stream frames (LFFR, f16) as
+/// binary messages. Unknown jobs are a `404` before the upgrade.
+pub async fn stream(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<StreamQuery>,
+    ws: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    let view = state.inner.jobs.view(&id).await?;
+    let job = state.inner.jobs.get(&id);
+    let format = StreamFormat {
+        fields: q.fields.map(|f| {
+            f.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        }),
+        max_size: q
+            .max_size
+            .unwrap_or(state.inner.config.stream.stream_max_size)
+            .clamp(16, 16384),
+    };
+    // `on_upgrade` answers `101 Switching Protocols` and runs the closure on the upgraded
+    // connection, as its own task.
+    Ok(ws.on_upgrade(move |socket| async move {
+        if let Err(e) = viewer(socket, view, job, format).await {
+            tracing::debug!("job {id}: viewer left: {e}");
+        }
+    }))
+}
+
+fn text<T: Serialize>(value: &T) -> Message {
+    Message::Text(serde_json::to_string(value).unwrap_or_default().into())
+}
+
+/// The end of a stream: the last frame if this viewer has not had it (every frame is published
+/// before `done`), then `done`.
+async fn finish(
+    socket: &mut WebSocket,
+    rx: &watch::Receiver<Option<Encoded>>,
+    last_sent: Option<&Encoded>,
+    done: &Event,
+) -> Result<(), axum::Error> {
+    let latest = rx.borrow().clone();
+    if let Some(f) = latest.filter(|f| last_sent != Some(f)) {
+        socket.send(Message::Binary(f)).await?;
+    }
+    socket.send(text(done)).await
+}
+
+/// One viewer: forwards events and the latest frame of its format until the job is done or the
+/// viewer leaves. Each `socket.send(..).await` waits for the socket: while it waits, newer frames
+/// replace older ones in the `watch` channel, so a slow viewer skips frames instead of slowing
+/// the job.
+async fn viewer(
+    mut socket: WebSocket,
+    view: JobView,
+    job: Option<Arc<Job>>,
+    format: StreamFormat,
+) -> Result<(), axum::Error> {
+    let Some(job) = job else {
+        // A job of an earlier server run: it is over.
+        let hello = Hello {
+            r#type: "hello",
+            job: &view,
+            grid: None,
+            format: None,
+            ranges: Ranges::new(),
+        };
+        socket.send(text(&hello)).await?;
+        socket.send(text(&view.done_event())).await?;
+        return socket.send(Message::Close(None)).await;
+    };
+    // Subscribe before taking the view, so no event falls between them.
+    let mut events = job.subscribe();
+    let mut frames = job.hub.subscribe(&format);
+    let view = job.view();
+    let grid = job.grid.get();
+    let hello = Hello {
+        r#type: "hello",
+        job: &view,
+        grid,
+        format: grid.map(|g| FormatInfo::new(&format, g.width, g.height)),
+        ranges: job.hub.ranges(),
+    };
+    socket.send(text(&hello)).await?;
+    let Some(rx) = frames.as_mut().filter(|_| view.status.is_active()) else {
+        socket.send(text(&view.done_event())).await?;
+        return socket.send(Message::Close(None)).await;
+    };
+    // A new format (or a paused job) has no frame yet: ask the job for one now.
+    if rx.borrow().is_none() && view.status != JobStatus::Queued {
+        job.send(Command::Snapshot);
+    }
+
+    let mut last_sent: Option<Encoded> = None;
+    let mut frames_open = true;
+    loop {
+        // `select!` waits for whichever comes first (like `Task.WhenAny`); the branches not
+        // taken are dropped, which is safe for all three futures.
+        tokio::select! {
+            event = events.recv() => match event {
+                Ok(done @ Event::Done { .. }) => {
+                    finish(&mut socket, rx, last_sent.as_ref(), &done).await?;
+                    break;
+                }
+                Ok(e) => socket.send(text(&e)).await?,
+                // Fell more than the channel's capacity behind: resynchronise from the view.
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    let v = job.view();
+                    socket
+                        .send(text(&Event::Status {
+                            status: v.status,
+                            reason: v.reason,
+                            message: v.message.clone(),
+                        }))
+                        .await?;
+                    if let Some(p) = v.progress {
+                        socket.send(text(&Event::Progress(p))).await?;
+                    }
+                    if !v.status.is_active() {
+                        finish(&mut socket, rx, last_sent.as_ref(), &v.done_event()).await?;
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            changed = rx.changed(), if frames_open => match changed {
+                Ok(()) => {
+                    let latest = rx.borrow_and_update().clone();
+                    if let Some(f) = latest {
+                        socket.send(Message::Binary(f.clone())).await?;
+                        last_sent = Some(f);
+                    }
+                }
+                // The hub closed: `done` follows on the event channel.
+                Err(_) => frames_open = false,
+            },
+            msg = socket.recv() => match msg {
+                // Client messages are reserved for interactive mode (Phase 5b).
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => return Ok(()),
+                Some(Ok(_)) => {}
+            },
+        }
+    }
+    socket.send(Message::Close(None)).await
 }
 
 #[cfg(test)]

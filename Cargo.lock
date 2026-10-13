@@ -311,11 +311,16 @@ dependencies = [
  "cfd-io",
  "cfd-job",
  "cfd-lbm",
+ "cfd-server",
  "cfd-verify",
  "clap",
+ "futures-util",
  "rayon",
+ "reqwest",
  "serde",
  "serde_json",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

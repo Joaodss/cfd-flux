@@ -33,9 +33,9 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-futures-util = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
-tokio-tungstenite = "0.29"
+futures-util.workspace = true
+reqwest.workspace = true
+tokio-tungstenite.workspace = true
 
 [features]
 # As cfd-cli: the CUDA backend builds without the toolkit, so it is on by default.

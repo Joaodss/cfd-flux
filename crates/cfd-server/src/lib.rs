@@ -128,6 +128,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/simulations/{id}/resume", post(api::resume))
         .route("/api/simulations/{id}/frames/{n}", get(api::frame))
         .route("/api/simulations/{id}/files/{name}", get(api::file))
+        .route("/api/simulations/{id}/stream", get(stream::stream))
         .fallback(api::not_found)
         // Layers wrap the routes above, like ASP.NET middleware: the last one added runs first.
         .layer(DefaultBodyLimit::max(config.limits.max_body_bytes))

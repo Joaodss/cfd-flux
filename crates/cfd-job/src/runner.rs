@@ -13,6 +13,7 @@
 //! [`run`] (the CLI's main thread, a dedicated worker thread in the server) and owns the solver:
 //! GPU contexts stay on that thread, and only messages cross threads.
 
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
@@ -26,7 +27,7 @@ use cfd_engines::SolverChoice;
 use cfd_io::frame::Dtype;
 
 use crate::meta::*;
-use crate::output::{OutputConfig, OutputJob, OutputThread};
+use crate::output::{OutputConfig, OutputJob, OutputThread, TrySend};
 use crate::series::Series;
 use crate::store::ResultDir;
 use crate::{output_field_name, Prepared, RunOptions};
@@ -236,6 +237,9 @@ struct Runner<'a> {
     output: OutputThread,
     observer: Arc<dyn JobObserver>,
     commands: &'a Receiver<Command>,
+    /// Commands received while waiting for the output queue, to apply at the next poll.
+    deferred: VecDeque<Command>,
+    cancelled: bool,
     /// A snapshot was asked for and is still to be taken.
     snapshot: bool,
     solver_time: Duration,
@@ -246,14 +250,21 @@ impl Runner<'_> {
     /// Handles the commands received since the last batch; while paused, blocks for the next one.
     fn poll_commands(&mut self) -> Result<Flow> {
         loop {
-            match self.commands.try_recv() {
-                Ok(cmd) => {
-                    if let Flow::Cancel = self.apply(cmd)? {
-                        return Ok(Flow::Cancel);
+            if self.cancelled {
+                return Ok(Flow::Cancel);
+            }
+            let cmd = match self.deferred.pop_front() {
+                Some(c) => c,
+                None => match self.commands.try_recv() {
+                    Ok(c) => c,
+                    // Nobody can send commands any more (e.g. the CLI): keep running.
+                    Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
+                        return Ok(Flow::Continue)
                     }
-                }
-                // Nobody can send commands any more (e.g. the CLI): keep running.
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return Ok(Flow::Continue),
+                },
+            };
+            if let Flow::Cancel = self.apply(cmd)? {
+                return Ok(Flow::Cancel);
             }
         }
     }
@@ -263,7 +274,7 @@ impl Runner<'_> {
             Command::Pause => self.pause(),
             // Already running; a Resume that arrives late is harmless.
             Command::Resume => Ok(Flow::Continue),
-            Command::Cancel => Ok(Flow::Cancel),
+            Command::Cancel => Ok(self.cancel()),
             Command::Snapshot => {
                 self.snapshot = true;
                 Ok(Flow::Continue)
@@ -276,19 +287,29 @@ impl Runner<'_> {
         }
     }
 
+    /// Stops as soon as possible: frames still waiting for the output thread are dropped.
+    fn cancel(&mut self) -> Flow {
+        self.cancelled = true;
+        self.output.abandon();
+        Flow::Cancel
+    }
+
     /// Blocks until Resume or Cancel. Snapshots are taken at once (the solver is idle).
     fn pause(&mut self) -> Result<Flow> {
         self.observer.paused(true);
         loop {
-            // `recv` blocks this thread (not an async task): it is the job's own thread.
-            let cmd = match self.commands.recv() {
-                Ok(c) => c,
-                // The controller is gone: nobody can resume, so stop.
-                Err(_) => return Ok(Flow::Cancel),
+            let cmd = match self.deferred.pop_front() {
+                Some(c) => c,
+                // `recv` blocks this thread (not an async task): it is the job's own thread.
+                None => match self.commands.recv() {
+                    Ok(c) => c,
+                    // The controller is gone: nobody can resume, so stop.
+                    Err(_) => return Ok(self.cancel()),
+                },
             };
             match cmd {
                 Command::Resume => break,
-                Command::Cancel => return Ok(Flow::Cancel),
+                Command::Cancel => return Ok(self.cancel()),
                 Command::Pause => {}
                 Command::Snapshot => {
                     let pending = self.solver.request_fields();
@@ -299,6 +320,9 @@ impl Runner<'_> {
                         },
                         pending,
                     )?;
+                    if self.cancelled {
+                        return Ok(Flow::Cancel);
+                    }
                 }
                 other => {
                     self.apply(other)?;
@@ -309,17 +333,33 @@ impl Runner<'_> {
         Ok(Flow::Continue)
     }
 
-    /// Waits for a requested copy and queues it for the output thread.
+    /// Waits for a requested copy and queues it for the output thread. While the queue is full
+    /// (the disk or the encoder is slower than the solver), commands are still read: a Cancel
+    /// drops the frame and returns at once, other commands are kept for the next poll.
     fn collect(&mut self, req: FrameRequest, pending: Box<dyn PendingFields>) -> Result<()> {
         let t = Instant::now();
         let step = pending.step();
-        let fields = pending.wait();
-        self.output.send(OutputJob {
+        let mut job = OutputJob {
             index: req.index,
             store: req.store,
             step,
-            fields,
-        })?;
+            fields: pending.wait(),
+        };
+        loop {
+            match self.output.try_send(job)? {
+                TrySend::Queued => break,
+                TrySend::Full(back) => job = back,
+            }
+            while let Ok(cmd) = self.commands.try_recv() {
+                if cmd == Command::Cancel {
+                    self.cancel();
+                    self.output_time += t.elapsed();
+                    return Ok(());
+                }
+                self.deferred.push_back(cmd);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
         self.output_time += t.elapsed();
         Ok(())
     }
@@ -495,6 +535,8 @@ pub fn run(
         output,
         observer,
         commands,
+        deferred: VecDeque::new(),
+        cancelled: false,
         snapshot: false,
         solver_time: Duration::ZERO,
         output_time: Duration::ZERO,

@@ -240,7 +240,7 @@ impl JobView {
         }
     }
 
-    fn done_event(&self) -> Event {
+    pub(crate) fn done_event(&self) -> Event {
         Event::Done {
             status: self.status,
             reason: self.reason,
