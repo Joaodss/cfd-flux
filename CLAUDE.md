@@ -13,3 +13,8 @@ live-fluids — web CFD simulator: pixel editor in the browser → local Rust se
   - Every new solver must pass the validation cases in `docs/04-numerical-methods.md` §7 (method in `docs/08-validation-guide.md`).
   - Physical units in the scene; conversion to lattice units only in the solver.
 - When finishing plan tasks, tick their checkboxes in `docs/05-implementation-plan.md`.
+
+<!-- claude-reflect: learned rules (saved from the band; edit freely) -->
+## Learned rules
+- After merging PRs, check for and delete obsolete debug and test result files to keep disk usage down.
+<!-- end claude-reflect -->

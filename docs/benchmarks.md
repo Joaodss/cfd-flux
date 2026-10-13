@@ -49,6 +49,31 @@ output thread). Release builds, normal desktop (not quiet).
   6 steps, and each sample (a reduction, the forces and a copy of the fields for the probes) costs ≈ 0.26 ms
   on this grid.
 
+## Frame encoding (open question Q13) — AMD Ryzen 7 3700X, 2026-10-13
+
+One thread, release build, a throwaway benchmark on two real frames (velocity, pressure, vorticity = 4 values
+per cell): the cylinder at t = 0.5 s (442 × 84) and the Re = 100 lid-driven cavity at 1024 × 1025. Size is the
+compressed payload as a share of the raw bytes; "shuffle" is the HDF5/Blosc byte shuffle (all first bytes of
+every value, then all second bytes, …), a plain scalar loop here (0.33 ms / 13 ms for the f32 frames).
+
+| Codec | Cylinder f32 | Cylinder f16 | 1024² f32 | 1024² f16 | Decode 1024² f32 |
+|-------|--------------|--------------|-----------|-----------|------------------|
+| `ruzstd` fastest (now) | 96.7%, 12.1 ms | 96.3%, 7.0 ms | 88.3%, 305 ms | 81.7%, 142 ms | 30 ms |
+| shuffle + `ruzstd` fastest | 79.4%, 11.2 ms | 74.2%, 6.4 ms | 63.8%, 247 ms | 53.6%, 115 ms | — |
+| C `zstd` level 1 | 90.1%, 1.2 ms | 90.6%, 0.7 ms | 79.9%, 29 ms | 72.0%, 18 ms | 21 ms |
+| shuffle + C `zstd` level 1 | 73.6%, 1.4 ms | 66.3%, 1.0 ms | 59.7%, 34 ms | 46.7%, 17 ms | 21 ms |
+| shuffle + C `zstd` level 3 | 73.0%, 2.4 ms | 64.2%, 1.3 ms | 57.6%, 57 ms | 43.2%, 25 ms | — |
+| `lz4_flex` | 97.0%, 0.27 ms | 97.0%, 0.15 ms | 92.0%, 9.8 ms | 83.1%, 8.3 ms | 4 ms |
+| shuffle + `lz4_flex` | 76.4%, 0.74 ms | 71.2%, 0.55 ms | 64.0%, 25 ms | 51.1%, 13 ms | 17 ms |
+| none | 100%, 0 | 100%, 0 | 100%, 0 | 100%, 0 | 0 |
+
+Building the raw bytes adds 0.1–0.3 ms (cylinder) and 4 ms (f32) / 8 ms (f16 conversion) at 1024².
+
+- The byte shuffle is what makes these fields compress (the high bytes of neighbouring floats are similar; the
+  low mantissa bytes are noise): 25–35% smaller with every codec.
+- `ruzstd` is ≈ 10× slower than C `zstd` for the same ratio; shuffle + pure-Rust `lz4_flex` is within 3–5
+  points of shuffle + C `zstd` level 1 and as fast or faster (the shuffle loop dominates; it can be vectorised).
+
 ## CUDA vs wgpu, interleaved — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-13
 
 Windows 11, driver 617.42 (CUDA 13.4), NVRTC 13.4 (`sm_89` cubin), wgpu 30 on Vulkan, block/workgroup
