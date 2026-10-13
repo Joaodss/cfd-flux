@@ -27,6 +27,16 @@ pub enum EngineArg {
     Cuda,
 }
 
+impl EngineArg {
+    pub fn name(self) -> &'static str {
+        match self {
+            EngineArg::Cpu => "cpu",
+            EngineArg::Wgpu => "wgpu",
+            EngineArg::Cuda => "cuda",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum CollisionArg {
     /// Two relaxation times with Λ = 3/16 (default).
