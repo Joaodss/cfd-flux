@@ -61,8 +61,8 @@ with everything tested and committed.
 - `cargo fmt --check`; `cargo clippy --workspace --all-targets -D warnings` (with CUDA, the default) and
   `cargo clippy -p cfd-cli -p cfd-cuda -p cfd-engines -p cfd-job -p cfd-server --all-targets --no-default-features
   -D warnings`: clean.
-- `CFD_REQUIRE_GPU=1 CFD_REQUIRE_CUDA=1 cargo test --workspace`: **180 tests pass** (was 136; new: 8 `cfd-engines`
-  (auto choice, inventory with fake devices, memory checks, software adapters), 3 + 7 `cfd-job` (batch sizing,
+- `CFD_REQUIRE_GPU=1 CFD_REQUIRE_CUDA=1 cargo test --workspace`: **180 tests pass** (was 136; now 8 `cfd-engines`, 3 of them moved from the CLI
+  (auto choice, inventory with fake devices, memory checks, software adapters), 3 + 6 `cfd-job` (batch sizing,
   job ids, cancel latency, pause/resume/snapshot/unsupported commands, orphaned pause, frames to observers,
   batch-size independence, storage limit), 4 + 23 `cfd-server` (downsampling, stream frames, hub; API, jobs,
   WebSocket, acceptance on CPU, wgpu and CUDA), 3 `cfd-cli submit`). Without the `cuda` feature the CLI and
