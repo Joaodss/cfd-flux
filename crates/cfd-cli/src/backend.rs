@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use cfd_core::scene::BackendPreference;
 use cfd_core::{Domain, Solver};
 use cfd_gpu::{GpuContext, GpuOptions, WgpuLbm};
@@ -143,6 +143,23 @@ fn open_cuda() -> Result<std::convert::Infallible, String> {
     Err(cfd_cuda::CudaError::NotBuilt.to_string())
 }
 
+/// Unique labels for engines opened side by side: the engine name, then `cpu-2`, `cpu-3`, … for
+/// repeats (usable in file names and Markdown links).
+pub fn label<T>(opened: Vec<(EngineArg, T)>) -> Vec<(String, T)> {
+    let mut seen: Vec<EngineArg> = Vec::new();
+    opened
+        .into_iter()
+        .map(|(e, v)| {
+            seen.push(e);
+            let label = match seen.iter().filter(|&&s| s == e).count() {
+                1 => e.name().to_string(),
+                n => format!("{}-{n}", e.name()),
+            };
+            (label, v)
+        })
+        .collect()
+}
+
 fn open_wgpu(allow_software: bool) -> Result<Arc<GpuContext>> {
     Ok(GpuContext::new(&GpuOptions {
         allow_software,
@@ -220,6 +237,20 @@ impl EngineArgs {
             EngineArg::Wgpu => Engine::Wgpu(open_wgpu(self.allow_software)?),
         };
         Ok(self.choice(engine))
+    }
+
+    /// Opens every engine of `list` (an unavailable one is an error), labelled as in [`label`].
+    pub fn open_all(&self, list: &[EngineArg]) -> Result<Vec<(String, SolverChoice)>> {
+        let opened = list
+            .iter()
+            .map(|&e| {
+                let choice = self
+                    .open(e)
+                    .with_context(|| format!("cannot open the {} backend", e.name()))?;
+                Ok((e, choice))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(label(opened))
     }
 
     fn choice(&self, engine: Engine) -> SolverChoice {
@@ -338,5 +369,15 @@ mod tests {
         let mut notes = Vec::new();
         let wgpu = || -> Result<u8, String> { panic!("wgpu must not be opened") };
         assert_eq!(pick_auto(ok(1), wgpu, &mut notes), Auto::Cuda(1));
+    }
+
+    #[test]
+    fn repeated_engines_get_numbered_labels() {
+        use EngineArg::*;
+        let labels: Vec<String> = label(vec![(Cpu, ()), (Cuda, ()), (Cpu, ()), (Cpu, ())])
+            .into_iter()
+            .map(|(l, _)| l)
+            .collect();
+        assert_eq!(labels, ["cpu", "cuda", "cpu-2", "cpu-3"]);
     }
 }

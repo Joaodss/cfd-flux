@@ -27,7 +27,7 @@ use cfd_verify::compare::{self, Engine, Maps, Mode, Plan, ReportInfo, Setup};
 use cfd_verify::parity;
 use clap::{Args, ValueEnum};
 
-use crate::backend::{EngineArg, EngineArgs, SolverChoice};
+use crate::backend::{self, EngineArg, EngineArgs, SolverChoice};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum MapsArg {
@@ -102,49 +102,25 @@ pub struct CompareArgs {
 
 /// Opens the requested backends (an unavailable one is an error), or every available one.
 fn open_backends(args: &CompareArgs) -> Result<Vec<(String, SolverChoice)>> {
+    if let Some(list) = &args.backends {
+        if list.len() < 2 {
+            bail!("--backends needs at least two backends (the same one twice is allowed)");
+        }
+        return args.engine.open_all(list);
+    }
     let mut opened = Vec::new();
-    match &args.backends {
-        Some(list) => {
-            if list.len() < 2 {
-                bail!("--backends needs at least two backends (the same one twice is allowed)");
-            }
-            for &b in list {
-                let choice = args
-                    .engine
-                    .open(b)
-                    .with_context(|| format!("cannot open the {} backend", b.name()))?;
-                opened.push((b, choice));
-            }
-        }
-        None => {
-            for b in [EngineArg::Cpu, EngineArg::Cuda, EngineArg::Wgpu] {
-                match args.engine.open(b) {
-                    Ok(choice) => opened.push((b, choice)),
-                    Err(e) => eprintln!("note: {} unavailable, not compared: {e:#}", b.name()),
-                }
-            }
-            if opened.len() < 2 {
-                bail!(
-                    "only the CPU backend is available; compare it with itself with \
-                     `--backends cpu,cpu`"
-                );
-            }
+    for b in [EngineArg::Cpu, EngineArg::Cuda, EngineArg::Wgpu] {
+        match args.engine.open(b) {
+            Ok(choice) => opened.push((b, choice)),
+            Err(e) => eprintln!("note: {} unavailable, not compared: {e:#}", b.name()),
         }
     }
-    // Unique labels: cpu, cpu-2, …
-    let mut labelled: Vec<(String, SolverChoice)> = Vec::new();
-    for (b, choice) in opened {
-        let before = labelled
-            .iter()
-            .filter(|(_, c)| c.backend == b.name())
-            .count();
-        let label = match before {
-            0 => b.name().to_string(),
-            n => format!("{}-{}", b.name(), n + 1),
-        };
-        labelled.push((label, choice));
+    if opened.len() < 2 {
+        bail!(
+            "only the CPU backend is available; compare it with itself with `--backends cpu,cpu`"
+        );
     }
-    Ok(labelled)
+    Ok(backend::label(opened))
 }
 
 /// Refuses a non-empty directory without `--force`; with it, removes what a report writes.

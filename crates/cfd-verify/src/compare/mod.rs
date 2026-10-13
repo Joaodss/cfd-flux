@@ -1051,6 +1051,8 @@ fn difference_maps(
     out
 }
 
+const MAX_PLOT_POINTS: usize = 1000;
+
 /// Kinetic energy and the force on the most loaded element against time, one line per backend.
 fn series_plots(case: &CaseComparison) -> Vec<Plot> {
     let runs: Vec<&BackendRun> = case.runs.iter().filter(|r| r.series.len() > 1).collect();
@@ -1078,8 +1080,10 @@ fn series_plots(case: &CaseComparison) -> Vec<Plot> {
                 line(
                     k,
                     r.label.clone(),
+                    // At most ~1000 points per line (the SVG stays small).
                     r.series
                         .iter()
+                        .step_by(r.series.len().div_ceil(MAX_PLOT_POINTS))
                         .map(|s| (s.time, s.kinetic_energy))
                         .collect(),
                 )
@@ -1098,19 +1102,32 @@ fn series_plots(case: &CaseComparison) -> Vec<Plot> {
         .filter(|&k| case.elements[k].id != 0 || case.elements.len() == 1)
         .max_by(|&a, &b| peak(a).total_cmp(&peak(b)));
     if let Some(k) = main.filter(|&k| peak(k) > 0.0) {
+        // The last samples at full resolution, so oscillations stay visible in long runs.
+        let tail = |r: &BackendRun| r.series.len().saturating_sub(MAX_PLOT_POINTS);
         let mut series = Vec::new();
         for (j, r) in runs.iter().enumerate() {
             for (c, comp) in ["Fx", "Fy"].iter().enumerate() {
                 series.push(line(
                     j,
                     format!("{comp} {}", r.label),
-                    r.series.iter().map(|s| (s.time, s.forces[k][c])).collect(),
+                    r.series[tail(r)..]
+                        .iter()
+                        .map(|s| (s.time, s.forces[k][c]))
+                        .collect(),
                 ));
             }
         }
+        let partial = if tail(runs[0]) > 0 {
+            ", last samples"
+        } else {
+            ""
+        };
         plots.push(Plot {
             file: "forces.svg".into(),
-            title: format!("{}: force on {}", case.title, case.elements[k].name),
+            title: format!(
+                "{}: force on {}{partial}",
+                case.title, case.elements[k].name
+            ),
             x_label: "t (s)".into(),
             y_label: "F (N/m)".into(),
             log_x: false,
