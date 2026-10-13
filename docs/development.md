@@ -74,11 +74,21 @@ cargo run --release -p cfd-cli -- render out/cyl --range vorticity=-50:50
 cargo run --release -p cfd-cli -- bench --backend cpu --threads 8
 cargo run --release -p cfd-cli -- bench --backend wgpu --sizes 256,512,1024,2048,4000
 cargo run --release -p cfd-cli -- bench --backend cuda --sizes 256,512,1024,2048,4000
+cargo run --release -p cfd-cli -- bench --backends cuda,wgpu --sizes 256,512,1024,2048,4000 --repeat 5  # interleaved, one column per engine
 cargo run --release -p cfd-cli -- verify --quick --backend cpu   # CI subset, ~20 s
 cargo run --release -p cfd-cli -- verify --full --backend cpu    # writes validation/report/ (commit it)
 cargo run --release -p cfd-cli -- verify --full --backend wgpu   # writes validation/report-wgpu/ (commit it)
 cargo run --release -p cfd-cli -- verify --full --backend cuda   # writes validation/report-cuda/ (commit it)
 cargo run --release -p cfd-cli -- verify --cases cavity --no-report
+
+# Engine comparison (ADR-023): the same scene on several backends, against the first one.
+# Default: every available backend (cpu, cuda, wgpu); exit code 1 outside the tolerance.
+# Its end-to-end tests (crates/cfd-cli/tests/compare.rs) skip GPU backends like the parity tests
+# (CFD_REQUIRE_GPU / CFD_REQUIRE_CUDA make them fail instead).
+cargo run --release -p cfd-cli -- compare scenes/channel.json --out out/cmp --steps 2000
+cargo run --release -p cfd-cli -- compare scenes/channel.json --out out/cmp --force --backends cpu,cuda --tolerance 0  # must be bit-identical
+cargo run --release -p cfd-cli -- compare scenes/cylinder-re100.json --out out/cmp-cyl --end-time 12 --statistics --stats-from 6 --ref-length 0.1 --ref-velocity 1
+cargo run --release -p cfd-cli -- compare --validation   # writes validation/compare/ (commit it), ~1 min
 
 # Web (in apps/web)
 npm install
