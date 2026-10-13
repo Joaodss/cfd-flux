@@ -55,3 +55,20 @@ with everything tested and committed.
 - Sampling diagnostics, forces and probes every 6 steps (the default) halves the solver's throughput on
   the cylinder (batches end every 6 steps; ≈ 0.26 ms per sample, the probes copying every field).
   On-device probe sampling would help; not planned yet.
+
+## Final check
+
+- `cargo fmt --check`; `cargo clippy --workspace --all-targets -D warnings` (with CUDA, the default) and
+  `cargo clippy -p cfd-cli -p cfd-cuda -p cfd-engines -p cfd-job -p cfd-server --all-targets --no-default-features
+  -D warnings`: clean.
+- `CFD_REQUIRE_GPU=1 CFD_REQUIRE_CUDA=1 cargo test --workspace`: **180 tests pass** (was 136; new: 8 `cfd-engines`
+  (auto choice, inventory with fake devices, memory checks, software adapters), 3 + 7 `cfd-job` (batch sizing,
+  job ids, cancel latency, pause/resume/snapshot/unsupported commands, orphaned pause, frames to observers,
+  batch-size independence, storage limit), 4 + 23 `cfd-server` (downsampling, stream frames, hub; API, jobs,
+  WebSocket, acceptance on CPU, wgpu and CUDA), 3 `cfd-cli submit`). Without the `cuda` feature the CLI and
+  server tests pass with CUDA reported unavailable (44 tests).
+- Acceptance with release builds: `cfd-cli submit scenes/cylinder-re100.json --cancel-after 3` on CUDA, wgpu and
+  the CPU — frames in real time, cancel in 30–46 ms (table in [benchmarks](../benchmarks.md)).
+- Not done / follow-ups: steps 6–7 (on-device sampling/f16, `skip_macro`) — prompt for the next session in
+  [prompt-phase3-kernels.md](prompt-phase3-kernels.md); open question Q13 (frame encoding); CI has not run on
+  this branch (not pushed).
