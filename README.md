@@ -2,7 +2,7 @@
 
 A computational fluid dynamics (CFD) simulator in the browser. You draw the domain **pixel by pixel**, place walls, fluid inlets and outlets, temperatures and boundary properties, and the simulation runs on a local Rust server on the GPU (CUDA or wgpu), with the CPU as a fallback. Results are streamed back and visualised in the browser.
 
-> Status: **Phase 2 complete** — a validated LBM solver (D2Q9 + D2Q5 thermal, TRT, link-wise boundaries, Boussinesq, forces) on three engines: the CPU, wgpu/WGSL and CUDA, with a headless CLI (`run`, `render`, `bench`, `verify`, `compare`). It reproduces Ghia (1982), Schäfer & Turek (1996), de Vahl Davis (1983) and the Rayleigh-Bénard onset within 2% on every backend — see the validation reports ([CPU](validation/report/README.md), [wgpu](validation/report-wgpu/README.md), [CUDA](validation/report-cuda/README.md)) — and the [engine comparison](validation/compare/README.md) shows CUDA bit-identical to the CPU on every validation geometry and wgpu within 1e-5. ~2,870 MLUPS on an RTX 4060 for both GPU engines and 65–180 MLUPS on a desktop CPU ([benchmarks](docs/benchmarks.md)). Next: the server (Phase 3).
+> Status: **Phase 2 complete** — a validated LBM solver (D2Q9 + D2Q5 thermal, TRT, link-wise boundaries, Boussinesq, forces) on three engines: the CPU, wgpu/WGSL and CUDA, with a headless CLI (`run`, `render`, `bench`, `verify`, `compare`). It reproduces Ghia (1982), Schäfer & Turek (1996), de Vahl Davis (1983) and the Rayleigh-Bénard onset within 2% on every backend — see the validation reports ([CPU](validation/report/README.md), [wgpu](validation/report-wgpu/README.md), [CUDA](validation/report-cuda/README.md)) — and the [engine comparison](validation/compare/README.md) shows CUDA bit-identical to the CPU on every validation geometry and wgpu within 1e-5. ~2,870 MLUPS on an RTX 4060 for both GPU engines and 65–180 MLUPS on a desktop CPU ([benchmarks](docs/benchmarks.md)). **Phase 3 (server and jobs): acceptance met** — `cfd-server` (axum + SQLite) queues jobs on one slot per GPU, streams frames over WebSocket with backpressure, and pauses or cancels between batches of at most 50 ms (a cancel takes effect in 30–46 ms); `cfd-cli submit` is its test client. Still open in Phase 3: on-device sampling and the skip-macro kernel variant.
 
 ## The idea in 30 seconds
 
@@ -41,12 +41,14 @@ Requirements and known issues (Windows, CUDA): [docs/development.md](docs/develo
 crates/
   cfd-core/    Scene format, layer encoding, validation, examples
   cfd-io/      binary format of result frames, colour maps and PNG
-  cfd-cli/     CLI: schema, example, validate, run, render, bench, verify, compare
+  cfd-cli/     CLI: schema, example, validate, run, render, bench, verify, compare, submit
   cfd-lbm/     LBM solver on the CPU          (Phase 1)
   cfd-gpu/     wgpu/WGSL backend              (Phase 2a, parity-tested against cfd-lbm)
   cfd-cuda/    CUDA backend, `cuda` feature   (Phase 2b, bit-identical to cfd-lbm)
   cfd-verify/  backend-agnostic validation suite, parity cases and engine comparison
-  cfd-server/  HTTP/WebSocket API and jobs    (Phase 3)
+  cfd-engines/ engine selection: auto (CUDA > wgpu > CPU), device inventory, making solvers
+  cfd-job/     job runner: command loop, output thread, result layout (shared by CLI and server)
+  cfd-server/  HTTP/WebSocket API, jobs, streaming, SQLite (Phase 3)
 apps/web/      React + TypeScript + Vite frontend
 schema/        JSON Schema of the scene (generated from Rust)
 scenes/        example scenes (generated)

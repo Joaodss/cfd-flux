@@ -24,6 +24,31 @@ cargo run --release -p cfd-cli -- bench --backends cuda,wgpu     # interleaved, 
   timed repetitions (a, b, a, b, …), so whatever else the machine does affects every column alike.
 - Add a new section per machine/backend; keep old ones for comparison.
 
+## Run loop and server — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-13
+
+Phase 3 code (`cfd_job::run`: batches of at most ≈ 50 ms, each followed by `finish`, frames on an
+output thread). Release builds, normal desktop (not quiet).
+
+- **Cost of the command loop:** a 1024² lid-driven cavity through `cfd-cli run --backend cuda --no-frames`
+  runs at **2,878 MLUPS**, against 2,885 for `bench` at the same size (≈ 0.2%).
+- **Streaming the cylinder** (442 × 84, `outputInterval` = 0.01 s = 60 steps, frames stored as f32 and
+  streamed as f16; `cfd-cli submit scenes/cylinder-re100.json --cancel-after 3` against `cfd-server`):
+
+  | Engine | First frame after submitting | Frames/s received | Skipped by backpressure | Cancel took effect after |
+  |--------|------------------------------|-------------------|-------------------------|--------------------------|
+  | CUDA | 0.18 s | 37.5 | 2 of 113 | 46 ms |
+  | wgpu | 0.38 s | 38.6 | 2 of 106 | 40 ms |
+  | CPU (16 threads) | 0.04 s | 29.4 | 2 of 91 | 30 ms |
+
+  At this output interval the **output thread** sets the pace, not the solver: encoding a frame with the
+  pure-Rust `ruzstd` takes 12.6 ms (f32, stored) + 7.2 ms (f16, streamed) and compresses these fields by only
+  3–4%; the solver waits rather than drop a stored frame (open question Q13 in
+  [07](07-decisions-and-questions.md)). Without frames, 6,000 steps of the same CUDA loop take 0.38 s of
+  wall time (5,180 MLUPS of solver time) with diagnostics, forces and probes sampled every 60 steps, and
+  0.70 s (2,080 MLUPS) with the default sampling every 6 steps (output interval / 10): batches then end every
+  6 steps, and each sample (a reduction, the forces and a copy of the fields for the probes) costs ≈ 0.26 ms
+  on this grid.
+
 ## CUDA vs wgpu, interleaved — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-13
 
 Windows 11, driver 617.42 (CUDA 13.4), NVRTC 13.4 (`sm_89` cubin), wgpu 30 on Vulkan, block/workgroup

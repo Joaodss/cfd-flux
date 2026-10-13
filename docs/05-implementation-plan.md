@@ -114,21 +114,21 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 
 **Goal:** simulation requests over HTTP with streamed results.
 
-- [ ] M — `cfd-server` with axum: routes from [03 §7](03-data-model.md#7-api-draft), body size limits, CORS, tracing.
-- [ ] M — Server-side scene validation (schema + consistency rules + stability) with localisable messages (stable issue codes).
-- [ ] M — Job manager: in-memory queue, states (`queued/running/paused/completed/failed/cancelled`), per-device semaphore, cooperative cancellation.
-- [ ] M — Worker loop on a dedicated thread (the solver never blocks the tokio runtime); channel for frames. The loop processes **commands** (`Step`, `Pause`, `Resume`, `Cancel`, `PatchCells`, `SetParam`) between batches of steps — the foundation of interactive mode ([ADR-011](07-decisions-and-questions.md)).
-- [ ] M — WebSocket: progress (JSON) + frames (binary); backpressure (if the client is slow, drop intermediate *streaming* frames but keep all of them on disk).
+- [x] M — `cfd-server` with axum: routes from [03 §7](03-data-model.md#7-api), body size limits, CORS, tracing. *(Engine selection and the run loop moved to the shared crates `cfd-engines` and `cfd-job`, ADR-024.)*
+- [x] M — Server-side scene validation (schema + consistency rules + stability) with localisable messages (stable issue codes). *(Plus the server's limits and an engine that fits, with an estimate; issue `params` for localised numbers come with the editor, ADR-027.)*
+- [x] M — Job manager: in-memory queue, states (`queued/running/paused/completed/failed/cancelled`), per-device semaphore, cooperative cancellation. *(One semaphore per physical device; `interrupted` on restart; ADR-025.)*
+- [x] M — Worker loop on a dedicated thread (the solver never blocks the tokio runtime); channel for frames. The loop processes **commands** (`Step`, `Pause`, `Resume`, `Cancel`, `PatchCells`, `SetParam`) between batches of steps — the foundation of interactive mode ([ADR-011](07-decisions-and-questions.md)). *(`cfd_job::run`: batches of at most ≈ 50 ms, an output thread for frames, `Snapshot` for viewers; stepping is the loop itself rather than a `Step` command; `PatchCells`/`SetParam` answer "not supported" until 5b; ADR-025.)*
+- [x] M — WebSocket: progress (JSON) + frames (binary); backpressure (if the client is slow, drop intermediate *streaming* frames but keep all of them on disk).
 - [ ] M — *(moved from Phase 2a)* GPU sampling kernel: physical output fields and f16 conversion on the device before the copy, so streamed frames cross the bus at half size.
 - [ ] M — Macroscopic fields only when needed: the stream-collide kernel writes ρ, ux, uy (and θ) only on steps whose fields are read (frames, probes, diagnostics), through a second kernel variant (`write_macro`), so the other steps move 72 instead of 84 B per cell (≈ +15% MLUPS on every GPU backend; parity stays exact, since only stores are skipped). Issues and solutions:
   - Pressure outlets read the cell's velocity from the previous step (`mac`) → keep writing u for the cells that have an anti-bounce-back link (a few columns), or recompute it from the cell's own populations.
   - Diagnostics, probes and `request_fields` must see fresh fields → the solver schedules a `write_macro` step before any read (the `Solver` trait already knows when they happen); CUDA keeps one captured graph per variant.
   - The CPU backend gains nothing (it is not bandwidth-bound at small sizes) but keeps the same rule, so all three backends stay identical.
-- [ ] M — `ResultStore` on disk; SQLite for job and scene metadata.
-- [ ] S — `/api/capabilities` (backends, GPU, limits).
-- [ ] S — Integration tests: submit scene → receive N frames → `completed`.
+- [x] M — `ResultStore` on disk; SQLite for job and scene metadata.
+- [x] S — `/api/capabilities` (backends, GPU, limits).
+- [x] S — Integration tests: submit scene → receive N frames → `completed`.
 
-**Acceptance:** a test client (script) submits the cylinder and receives frames in real time; cancelling works in < 1 s.
+**Acceptance:** a test client (script) submits the cylinder and receives frames in real time; cancelling works in < 1 s. ✅ **Met (2026-10-13):** `cfd-cli submit scenes/cylinder-re100.json --cancel-after 3` streams the cylinder in real time on CUDA, wgpu and the CPU (first frame after 0.04–0.38 s, ≈ 30–39 frames/s) and the cancel takes effect in 30–46 ms (release build); the same scenario is an integration test on every available engine (`crates/cfd-server/tests/stream.rs`).
 
 ---
 

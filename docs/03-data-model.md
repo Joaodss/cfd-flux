@@ -132,8 +132,8 @@ magic "LFFR" | version u16 | header length u32 | JSON header | zstd(field data)
 FrameHeader { jobId, frameIndex, step, simTime, width, height, fields: [FieldDesc] }
 FieldDesc   { name, components (1|2), dtype (f16|f32) }
 ```
-- For streaming visualisation: **f16** and optionally downsampling (e.g. 2048² → 1024²).
-- For download/analysis: f32 at full resolution.
+- **Stored frames:** f32 at full resolution every output interval (`frames/NNNNNN.bin`); `GET …/frames/{n}?dtype=f16` converts on the fly.
+- **Stream frames** (WebSocket): **f16**, only the fields the viewer asked for, box-downsampled by the integer factor `k = ceil(max(width, height) / maxSize)` to `ceil(width/k) × ceil(height/k)` (partial blocks at the edges average what they have). `frameIndex` is the output index; a snapshot (a frame taken for a viewer that joined a paused job, or a new stream format) repeats the last output index and carries its own `step`.
 
 ### 6.2 Storage
 ```
@@ -141,27 +141,54 @@ results/{job_id}/
   scene.json          # exact scene used (reproducibility)
   meta.json           # solver version, backend, GPU, timings, diagnostics, Re/Ma/...
   frames/000123.bin   # encoded frames
-  png/<field>/000123.png, png/ranges.json   # colour-mapped images (one range per field)
+  png/<field>/000123.png, png/ranges.json   # colour-mapped images (cfd-cli run / render only)
   probes.csv          # probe time series (u, v, p, T per probe)
   forces.csv          # force per element (N/m, gauge)
   diagnostics.csv     # mass, kinetic energy, max velocity/Mach, heat
 ```
-`cfd-cli run scene.json --out DIR` already writes this layout (`meta.json` also records the run status: `completed` or `diverged`).
+Written by `cfd-job` for both `cfd-cli run --out DIR` and server jobs (`<data>/results/{job id}/`), so `cfd-cli render` works on server results. `meta.json` records:
+- `run.status`: `running` while the job runs, then `completed`, `diverged` (with a message and hints) or `cancelled`;
+- `run.frames` (output events) and `run.framesStored` (frame files; fewer with `--no-frames` / `storeFrames: false`, or past the server's per-job `maxStoredBytes`, which adds a `storage.limit` warning — the run goes on without storing frames);
+- `generator`: `cfd-cli x.y.z` or `cfd-server x.y.z`.
+
 Later: Zarr/HDF5 for efficient partial reads; VTK (`.vti`) export for ParaView.
 
-## 7. API (draft)
+## 7. API
 
-| Method | Route | Description |
-|--------|-------|-------------|
-| `POST` | `/api/simulations` | Creates a job from a `Scene` → `{ id, estimatedMemory, warnings[] }` |
-| `GET` | `/api/simulations/{id}` | Status, progress, diagnostics |
-| `DELETE` | `/api/simulations/{id}` | Cancel |
-| `POST` | `/api/simulations/{id}/pause` · `/resume` | Control |
-| `WS` | `/api/simulations/{id}/stream` | Messages: `progress` (JSON), `frame` (binary), `log`, `done` |
-| `GET` | `/api/simulations/{id}/frames/{n}` | Single frame |
-| `GET` | `/api/simulations/{id}/probes.csv` | Probe data |
-| `POST` | `/api/scenes/validate` | Validate without running (stability warnings) |
-| `GET/POST` | `/api/scenes` | Save/list scenes |
-| `GET` | `/api/capabilities` | Available methods, backends and limits |
+Implemented by `cfd-server` (Phase 3). All JSON is camelCase like the scene format; times are Unix milliseconds.
 
-WebSocket control messages (future interactive mode): `{ "type": "patch", "rect": [...], "layer": "cellType", "data": ... }`, `{ "type": "setParam", ... }`.
+| Method | Route | Body / query | Response |
+|--------|-------|--------------|----------|
+| `GET` | `/api/capabilities` | — | engines (kind, availability or `reason`, device, memory, `physicalDevice`), `auto`, limits, stream defaults |
+| `POST` | `/api/scenes/validate` | `Scene` | `{ ok, code?, message?, issues: [{ code, severity, message }], estimate }` — a scene that cannot run is `ok: false`, not an error status |
+| `POST` | `/api/simulations` | `{ scene \| sceneId, options? }` | `201` + `Location` with the job (status, backend, device, estimate, warnings, notes); `422` with `issues`; `429` when the queue is full |
+| `GET` | `/api/simulations` | `?status=&limit=` | jobs, newest first |
+| `GET` | `/api/simulations/{id}` | — | the job: status, reason, message, progress, frames, timings |
+| `POST` | `/api/simulations/{id}/pause` · `/resume` | — | `202` (applied between batches); `409` unless running/paused |
+| `DELETE` | `/api/simulations/{id}` | `?purge=true` | cancel: `202`; with `purge`, also delete results and record (`204`, or `202` while an active job stops) |
+| `WS` | `/api/simulations/{id}/stream` | `?fields=velocity,vorticity&maxSize=1024` | see below; `404` before the upgrade for an unknown job |
+| `GET` | `/api/simulations/{id}/frames/{n}` | `?dtype=f32\|f16` | one stored frame (LFFR) |
+| `GET` | `/api/simulations/{id}/files/{name}` | `scene.json`, `meta.json`, `probes.csv`, `forces.csv`, `diagnostics.csv` | the file |
+| `GET` · `POST` | `/api/scenes` | `Scene` | list (id, name, times) · save (`201 { id, name }`) |
+| `GET` · `DELETE` | `/api/scenes/{id}` | — | the scene JSON · `204` |
+
+- **Options** (`options` of a submission; the same overrides as `cfd-cli run`): `backend` (`auto|cpu|wgpu|cuda`; default: the scene's `run.backend`), `latticeVelocity`, `endTime`, `outputInterval`, `sampleInterval` (s), `storeFrames` (default `true`; streaming works either way). Unknown options are a `400`.
+- **Job status:** `queued → running ⇄ paused → completed | failed | cancelled`; `failed` carries `reason`: `diverged` (the frames before stay valid), `error` (backend or I/O) or `interrupted` (the server stopped; jobs are not resumed).
+- **Errors:** `{ "error": { "code", "message", "issues"? } }` with stable codes: `request.json` (400, not JSON or not the expected shape), `scene.format` (400, not a scene), `scene.invalid` (422, with the validation `issues`), `limits.cells` / `limits.steps` (422), `engine.unavailable` / `engine.memory` (422), `request.tooLarge` (413: send layers as `zstd+base64`), `queue.full` (429), `notFound`, `conflict`, `internal`.
+- **Limits** (`/api/capabilities`): 4096² cells, 10⁸ steps, 10 GiB of stored frames per job, 16 queued jobs, 64 MB request bodies.
+
+### WebSocket messages
+
+Server → client; text messages are JSON with a `type`, binary messages are stream frames (§6.1).
+
+| `type` | When | Content |
+|--------|------|---------|
+| `hello` | first | `job` (as `GET /api/simulations/{id}`), `grid` (`width`, `height`, `dx`, `dt`, `thermal`; `null` until the job starts), `format` (`fields`, `maxSize`, `factor`, `width`, `height`, `dtype`), `ranges` (min/max of each field so far; velocity: of its magnitude) |
+| `status` | on a change | `status`, `reason?`, `message?` |
+| `progress` | at most 10 Hz | `step`, `total`, `simTime`, `percent`, `mlups`, `massDrift`, `maxMach` |
+| `log` | occasionally | `message` (e.g. the stored-frame limit was reached) |
+| `done` | last | `status`, `reason?`, `message?`, `stepsDone`, `frames`; the server then closes the socket |
+
+- A viewer gets the latest frame of its format; one that reads slowly skips frames (never the last one, sent before `done`), and the job never waits for viewers. Events are buffered per viewer (64); one that falls further behind gets the current `status`/`progress` again.
+- A viewer of a finished job gets `hello` and `done` at once.
+- Client → server messages are reserved for interactive mode (Phase 5b): `{ "type": "patch", "rect": [...], "layer": "cellType", "data": ... }`, `{ "type": "setParam", ... }`; until then they are ignored. Pause, resume and cancel go through REST.
