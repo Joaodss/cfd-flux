@@ -1,0 +1,20 @@
+[package]
+name = "cfd-job"
+description = "The live-fluids job runner: scene preparation, the run loop and the result layout, shared by the CLI and the server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+cfd-core.workspace = true
+cfd-engines.workspace = true
+cfd-io.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

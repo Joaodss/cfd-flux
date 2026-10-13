@@ -169,8 +169,10 @@ dependencies = [
  "anyhow",
  "cfd-core",
  "cfd-cuda",
+ "cfd-engines",
  "cfd-gpu",
  "cfd-io",
+ "cfd-job",
  "cfd-lbm",
  "cfd-verify",
  "clap",
@@ -204,6 +206,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cfd-engines"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cfd-core",
+ "cfd-cuda",
+ "cfd-gpu",
+ "cfd-lbm",
+ "clap",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cfd-gpu"
 version = "0.1.0"
 dependencies = [
@@ -224,6 +241,19 @@ dependencies = [
  "half",
  "png",
  "ruzstd",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "cfd-job"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cfd-core",
+ "cfd-engines",
+ "cfd-io",
  "serde",
  "serde_json",
  "thiserror",

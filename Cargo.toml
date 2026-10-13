@@ -12,8 +12,10 @@ rust-version = "1.87"
 [workspace.dependencies]
 cfd-core = { path = "crates/cfd-core" }
 cfd-cuda = { path = "crates/cfd-cuda" }
+cfd-engines = { path = "crates/cfd-engines" }
 cfd-gpu = { path = "crates/cfd-gpu" }
 cfd-io = { path = "crates/cfd-io" }
+cfd-job = { path = "crates/cfd-job" }
 cfd-lbm = { path = "crates/cfd-lbm" }
 cfd-verify = { path = "crates/cfd-verify" }
 anyhow = "1"

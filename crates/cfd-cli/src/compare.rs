@@ -23,11 +23,12 @@ use anyhow::{bail, Context, Result};
 use cfd_core::units::DEFAULT_LATTICE_VELOCITY;
 use cfd_core::validate::Severity;
 use cfd_core::{Domain, DomainOptions, Scene, Solver};
+use cfd_engines::{EngineKind, SolverChoice};
 use cfd_verify::compare::{self, Engine, Maps, Mode, Plan, ReportInfo, Setup};
 use cfd_verify::parity;
 use clap::{Args, ValueEnum};
 
-use crate::backend::{self, EngineArg, EngineArgs, SolverChoice};
+use crate::backend::EngineArgs;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum MapsArg {
@@ -59,7 +60,7 @@ pub struct CompareArgs {
     /// Backends to compare; the first is the reference [default: every available backend:
     /// cpu, cuda, wgpu]. The same backend may appear twice (labelled `cpu-2`, …).
     #[arg(long, value_enum, value_delimiter = ',')]
-    pub backends: Option<Vec<EngineArg>>,
+    pub backends: Option<Vec<EngineKind>>,
     /// Number of steps.
     #[arg(long, default_value_t = 1000, conflicts_with = "end_time")]
     pub steps: u64,
@@ -109,7 +110,7 @@ fn open_backends(args: &CompareArgs) -> Result<Vec<(String, SolverChoice)>> {
         return args.engine.open_all(list);
     }
     let mut opened = Vec::new();
-    for b in [EngineArg::Cpu, EngineArg::Cuda, EngineArg::Wgpu] {
+    for b in [EngineKind::Cpu, EngineKind::Cuda, EngineKind::Wgpu] {
         match args.engine.open(b) {
             Ok(choice) => opened.push((b, choice)),
             Err(e) => eprintln!("note: {} unavailable, not compared: {e:#}", b.name()),
@@ -120,7 +121,7 @@ fn open_backends(args: &CompareArgs) -> Result<Vec<(String, SolverChoice)>> {
             "only the CPU backend is available; compare it with itself with `--backends cpu,cpu`"
         );
     }
-    Ok(backend::label(opened))
+    Ok(cfd_engines::label(opened))
 }
 
 /// Refuses a non-empty directory without `--force`; with it, removes what a report writes.
