@@ -1,9 +1,10 @@
 # Phase 3 — server and jobs: design proposal (2026-10-13)
 
-**Status: proposal, not approved.** Written at the end of the Phase 2c session for the author to review;
-nothing here is implemented. Once approved (possibly with changes), the accepted parts move into
-[02 — Architecture](../02-architecture.md), [03 §6–7](../03-data-model.md#6-results) and new ADRs, and the
-plan's Phase 3 tasks are split along §11.
+**Status: approved by the author on 2026-10-13, as proposed** (every recommendation of §12 accepted).
+Written at the end of the Phase 2c session and implemented in the Phase 3 session
+([checklist](2026-10-13-phase3-server.md)). The accepted parts move into
+[02 — Architecture](../02-architecture.md), [03 §6–7](../03-data-model.md#6-results) and new ADRs as they
+are implemented; the plan's Phase 3 tasks follow §11.
 
 Goal of Phase 3 ([plan](../05-implementation-plan.md#phase-3--server-and-jobs)): simulation requests over
 HTTP with results streamed in real time. **Acceptance:** a test client submits the cylinder and receives
@@ -268,9 +269,11 @@ bandwidth figure used to suggest a storage mode.
 
 Steps 6–7 are independent of 3–5 and could also come first if the author prefers kernel work.
 
-## 12. Open questions for the author
+## 12. Open questions — answered (2026-10-13)
 
-| # | Question | Proposal |
+The author accepted every proposal as written.
+
+| # | Question | Decision |
 |---|----------|----------|
 | Q1 | New crates `cfd-engines` and `cfd-job` (§2), or keep everything in `cfd-server` and leave the CLI as it is? | New crates: one result layout, one loop, tested once |
 | Q2 | CUDA and wgpu on the same GPU share one job slot? CPU jobs: 1 at a time? | Yes / yes (configurable `--cpu-jobs`) |
