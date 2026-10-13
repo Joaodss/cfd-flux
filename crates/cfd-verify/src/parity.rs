@@ -22,8 +22,14 @@ use cfd_lbm::{Collision, CpuLbm, LbmConfig};
 
 use crate::scenes;
 
-/// Field tolerance of 04 §7.
+/// Field tolerance of 04 §7; also used for the kinetic energy and max |u| (relative).
 pub const TOLERANCE: f64 = 1e-5;
+
+/// Total mass, relative (f64 sums of f32 values, conserved by construction).
+pub const MASS_TOLERANCE: f64 = 1e-7;
+
+/// Force per element, relative to the largest force component of the reference.
+pub const FORCE_TOLERANCE: f64 = 1e-4;
 
 /// Builds the solver under test (in C#: a `Func<Domain, LbmConfig, ISolver>`).
 pub type Factory = dyn Fn(Domain, LbmConfig) -> Box<dyn Solver>;
@@ -157,7 +163,7 @@ pub fn check(
     assert!(dg.finite && dc.finite);
     let rel = |a: f64, b: f64| (a - b).abs() / b.abs().max(1e-30);
     assert!(
-        rel(dg.mass, dc.mass) < 1e-7,
+        rel(dg.mass, dc.mass) < MASS_TOLERANCE,
         "{name}: mass {} vs {}",
         dg.mass,
         dc.mass
@@ -190,7 +196,7 @@ pub fn check(
         for c in 0..2 {
             let diff = (a.lattice[c] - b.lattice[c]).abs() / scale;
             assert!(
-                diff < 1e-4,
+                diff < FORCE_TOLERANCE,
                 "{name}: force on element {} differs by {diff:e}",
                 a.element
             );

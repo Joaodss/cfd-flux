@@ -187,6 +187,25 @@ pub fn interp(xs: &[f64], ys: &[f64], x: f64) -> f64 {
     }
 }
 
+/// Upward zero crossings of `y − mean(y)`, linearly interpolated in time.
+pub fn upward_crossings(t: &[f64], y: &[f64]) -> Vec<f64> {
+    let mean = y.iter().sum::<f64>() / y.len() as f64;
+    (1..y.len())
+        .filter(|&i| y[i - 1] - mean < 0.0 && y[i] - mean >= 0.0)
+        .map(|i| {
+            let (a, b) = (y[i - 1] - mean, y[i] - mean);
+            t[i - 1] + (t[i] - t[i - 1]) * (-a / (b - a))
+        })
+        .collect()
+}
+
+/// Frequency of an oscillating signal from its upward zero crossings (whole periods between
+/// the first and the last); `None` with fewer than two crossings.
+pub fn oscillation_frequency(t: &[f64], y: &[f64]) -> Option<f64> {
+    let c = upward_crossings(t, y);
+    (c.len() >= 2).then(|| (c.len() - 1) as f64 / (c[c.len() - 1] - c[0]))
+}
+
 /// Maximum of samples `(x, y)` refined with a parabola through the largest one and its
 /// neighbours (uniform spacing). Returns `(x_max, y_max)`.
 pub fn refined_max(x: &[f64], y: &[f64]) -> (f64, f64) {
@@ -283,5 +302,18 @@ mod tests {
         assert!((xm - 0.33).abs() < 1e-9 && (ym - 1.0).abs() < 1e-9);
         assert!((rel_l2(&[1.0, 2.0], &[1.0, 2.0])).abs() < 1e-15);
         assert_eq!(max_abs(&[1.0, 2.5], &[1.0, 2.0]), 0.5);
+    }
+
+    #[test]
+    fn zero_crossings_give_the_frequency() {
+        let f = 3.0;
+        let t: Vec<f64> = (0..3000).map(|i| i as f64 * 1e-3).collect();
+        let y: Vec<f64> = t
+            .iter()
+            .map(|t| 0.2 + (2.0 * std::f64::consts::PI * f * t + 0.3).sin())
+            .collect();
+        let measured = oscillation_frequency(&t, &y).unwrap();
+        assert!((measured / f - 1.0).abs() < 1e-3, "{measured}");
+        assert_eq!(oscillation_frequency(&t, &vec![1.0; t.len()]), None);
     }
 }

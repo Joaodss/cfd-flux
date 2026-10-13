@@ -19,6 +19,14 @@ pub enum BackendArg {
     Cuda,
 }
 
+/// One concrete engine (no `auto`), for commands that run several side by side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+pub enum EngineArg {
+    Cpu,
+    Wgpu,
+    Cuda,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum CollisionArg {
     /// Two relaxation times with Λ = 3/16 (default).
@@ -27,12 +35,20 @@ pub enum CollisionArg {
     Bgk,
 }
 
-/// Solver options shared by `run`, `bench` and `verify`.
+/// Solver options shared by `run`, `bench` and `verify`: the backend plus the engine options.
 #[derive(Debug, Clone, Args)]
 pub struct SolverArgs {
     /// Backend; defaults to the scene's preference (or `auto`).
     #[arg(long, value_enum)]
     pub backend: Option<BackendArg>,
+    #[command(flatten)]
+    pub engine: EngineArgs,
+}
+
+/// Everything about a solver except which backend runs it (shared by `compare` and
+/// `bench --backends`, which open several backends in one process).
+#[derive(Debug, Clone, Args)]
+pub struct EngineArgs {
     /// Collision operator.
     #[arg(long, value_enum, default_value = "trt")]
     pub collision: CollisionArg,
@@ -117,6 +133,13 @@ fn open_cuda() -> Result<std::convert::Infallible, String> {
     Err(cfd_cuda::CudaError::NotBuilt.to_string())
 }
 
+fn open_wgpu(allow_software: bool) -> Result<Arc<GpuContext>> {
+    Ok(GpuContext::new(&GpuOptions {
+        allow_software,
+        ..Default::default()
+    })?)
+}
+
 impl SolverArgs {
     /// Resolves the backend (falling back from `auto` to the next engine) and sets up the thread
     /// pool. Call once per process: rayon's global pool can only be configured once.
@@ -127,31 +150,22 @@ impl SolverArgs {
             Some(BackendPreference::Cuda) => BackendArg::Cuda,
             Some(BackendPreference::Auto) | None => BackendArg::Auto,
         });
-        let wgpu = |allow_software: bool| {
-            GpuContext::new(&GpuOptions {
-                allow_software,
-                ..Default::default()
-            })
-        };
         let engine = match backend {
-            BackendArg::Cpu => Engine::Cpu,
-            #[cfg(feature = "cuda")]
-            BackendArg::Cuda => Engine::Cuda(open_cuda().map_err(anyhow::Error::msg)?),
-            #[cfg(not(feature = "cuda"))]
-            BackendArg::Cuda => anyhow::bail!(cfd_cuda::CudaError::NotBuilt),
-            BackendArg::Wgpu => Engine::Wgpu(wgpu(self.allow_software)?),
+            BackendArg::Cpu => EngineArg::Cpu,
+            BackendArg::Wgpu => EngineArg::Wgpu,
+            BackendArg::Cuda => EngineArg::Cuda,
             // Software adapters are slower than the CPU backend: `auto` never picks them.
             BackendArg::Auto => {
                 let mut notes = Vec::new();
                 let picked = pick_auto(
                     open_cuda,
-                    || wgpu(false).map_err(|e| e.to_string()),
+                    || open_wgpu(false).map_err(|e| e.to_string()),
                     &mut notes,
                 );
                 for n in &notes {
                     eprintln!("note: {n}");
                 }
-                match picked {
+                let engine = match picked {
                     #[cfg(feature = "cuda")]
                     Auto::Cuda(dev) => Engine::Cuda(dev),
                     #[cfg(not(feature = "cuda"))]
@@ -161,15 +175,44 @@ impl SolverArgs {
                         eprintln!("note: using the CPU backend");
                         Engine::Cpu
                     }
-                }
+                };
+                self.engine.configure_threads()?;
+                return Ok(self.engine.choice(engine));
             }
         };
+        self.engine.configure_threads()?;
+        self.engine.open(engine)
+    }
+}
+
+impl EngineArgs {
+    /// Sets the size of rayon's global thread pool (when `--threads` is given). Call once per
+    /// process, before any solver runs: the global pool can only be configured once.
+    pub fn configure_threads(&self) -> Result<()> {
         if let Some(n) = self.threads {
             // In C# terms: configuring the default TaskScheduler's degree of parallelism.
             rayon::ThreadPoolBuilder::new()
                 .num_threads(n)
                 .build_global()?;
         }
+        Ok(())
+    }
+
+    /// Opens one engine, with no fallback (an unavailable engine is an error). Can be called
+    /// any number of times; each call returns an independent choice.
+    pub fn open(&self, engine: EngineArg) -> Result<SolverChoice> {
+        let engine = match engine {
+            EngineArg::Cpu => Engine::Cpu,
+            #[cfg(feature = "cuda")]
+            EngineArg::Cuda => Engine::Cuda(open_cuda().map_err(anyhow::Error::msg)?),
+            #[cfg(not(feature = "cuda"))]
+            EngineArg::Cuda => anyhow::bail!(cfd_cuda::CudaError::NotBuilt),
+            EngineArg::Wgpu => Engine::Wgpu(open_wgpu(self.allow_software)?),
+        };
+        Ok(self.choice(engine))
+    }
+
+    fn choice(&self, engine: Engine) -> SolverChoice {
         let collision = match self.collision {
             CollisionArg::Trt => Collision::default(),
             CollisionArg::Bgk => Collision::Bgk,
@@ -184,7 +227,7 @@ impl SolverArgs {
             #[cfg(feature = "cuda")]
             Engine::Cuda(dev) => ("cuda", Some(dev.description())),
         };
-        Ok(SolverChoice {
+        SolverChoice {
             backend,
             device,
             collision: name,
@@ -195,7 +238,7 @@ impl SolverArgs {
             workgroup: self.workgroup,
             fmad: self.fmad,
             graph_steps: self.graph_steps,
-        })
+        }
     }
 }
 
@@ -227,6 +270,11 @@ impl SolverChoice {
     /// Whether the solver runs on a GPU (the workgroup/block size applies).
     pub fn is_gpu(&self) -> bool {
         !matches!(self.engine, Engine::Cpu)
+    }
+
+    /// The workgroup/block size, on GPU backends.
+    pub fn workgroup(&self) -> Option<u32> {
+        self.is_gpu().then_some(self.workgroup)
     }
 
     /// "cpu", "wgpu (adapter)" or "cuda (device)", for log lines.
