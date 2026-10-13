@@ -78,3 +78,79 @@ impl ResultDir {
         self.frames_dir().join(frame_file_name(index))
     }
 }
+
+/// Result directories of many jobs under one root: `<root>/<job id>/` (the server's results).
+/// Local disk for now; an object store (S3/MinIO) would make this a trait.
+#[derive(Debug, Clone)]
+pub struct LocalStore {
+    root: PathBuf,
+}
+
+impl LocalStore {
+    pub fn new(root: impl Into<PathBuf>) -> Result<Self> {
+        let root = root.into();
+        std::fs::create_dir_all(&root)
+            .with_context(|| format!("cannot create {}", root.display()))?;
+        Ok(Self { root })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Job ids become directory names: only letters, digits, `-` and `_` are accepted.
+    fn path(&self, id: &str) -> Result<PathBuf> {
+        let ok = !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+        if !ok {
+            bail!("invalid job id {id:?}");
+        }
+        Ok(self.root.join(id))
+    }
+
+    /// A new, empty directory for a job (an existing non-empty one is an error).
+    pub fn create(&self, id: &str) -> Result<ResultDir> {
+        ResultDir::create(&self.path(id)?, false)
+    }
+
+    /// The directory of an existing job, if there is one.
+    pub fn open(&self, id: &str) -> Option<ResultDir> {
+        let p = self.path(id).ok()?;
+        p.is_dir().then(|| ResultDir::open(&p))
+    }
+
+    /// Deletes a job's results (nothing to do if there are none).
+    pub fn delete(&self, id: &str) -> Result<()> {
+        let p = self.path(id)?;
+        if p.exists() {
+            std::fs::remove_dir_all(&p)
+                .with_context(|| format!("cannot remove {}", p.display()))?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_ids_cannot_escape_the_root() {
+        let root = std::env::temp_dir().join(format!("cfd-job-store-{}", std::process::id()));
+        let store = LocalStore::new(&root).unwrap();
+        for bad in ["", "..", "../x", "a/b", r"a\b", "c:", "x y"] {
+            assert!(store.create(bad).is_err(), "{bad:?}");
+            assert!(store.open(bad).is_none(), "{bad:?}");
+            assert!(store.delete(bad).is_err(), "{bad:?}");
+        }
+        let dir = store.create("0192-abc_D").unwrap();
+        dir.write("meta.json", "{}").unwrap();
+        assert!(store.open("0192-abc_D").is_some());
+        assert!(store.create("0192-abc_D").is_err(), "not empty");
+        store.delete("0192-abc_D").unwrap();
+        assert!(store.open("0192-abc_D").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}

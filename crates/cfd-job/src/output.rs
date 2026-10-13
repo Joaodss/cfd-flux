@@ -48,9 +48,18 @@ fn sampling_domain(d: &Domain) -> Domain {
     }
 }
 
+/// What the output thread stored.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Stored {
+    pub frames: u32,
+    pub bytes: u64,
+    /// Storing stopped at the size limit.
+    pub limit_reached: bool,
+}
+
 pub(crate) struct OutputThread {
     tx: Option<SyncSender<OutputJob>>,
-    handle: Option<JoinHandle<Result<()>>>,
+    handle: Option<JoinHandle<Result<Stored>>>,
 }
 
 pub(crate) struct OutputConfig {
@@ -58,6 +67,8 @@ pub(crate) struct OutputConfig {
     pub job_id: String,
     pub req: SampleRequest,
     pub dtype: Dtype,
+    /// Stop storing frames (not the run) past this many bytes.
+    pub max_stored_bytes: Option<u64>,
 }
 
 impl OutputThread {
@@ -72,20 +83,42 @@ impl OutputThread {
         // copy, the receiver, the observer's `Arc`): nothing is shared but the observer.
         let handle = std::thread::Builder::new()
             .name(format!("output-{}", config.job_id))
-            .spawn(move || -> Result<()> {
+            .spawn(move || -> Result<Stored> {
+                let mut stored = Stored::default();
                 // The loop ends when every sender is dropped (the run is over).
                 for job in rx {
                     let fs = FieldSet::from_lattice(&domain, &job.fields, job.step, &config.req);
-                    if let (true, Some(index)) = (job.store, job.index) {
-                        write_frame(&config, index, &fs)?;
+                    let mut written = false;
+                    if let (true, Some(index), false) = (job.store, job.index, stored.limit_reached)
+                    {
+                        let bytes = encode_frame(&config, index, &fs)?;
+                        let size = bytes.len() as u64;
+                        if config
+                            .max_stored_bytes
+                            .is_some_and(|max| stored.bytes + size > max)
+                        {
+                            stored.limit_reached = true;
+                            observer.log(&format!(
+                                "stored frames reached the size limit ({} MiB) at frame {index}; \
+                                 the run goes on without storing frames",
+                                stored.bytes >> 20
+                            ));
+                        } else {
+                            let path = config.dir.frame_path(index);
+                            std::fs::write(&path, bytes)
+                                .with_context(|| format!("cannot write {}", path.display()))?;
+                            stored.frames += 1;
+                            stored.bytes += size;
+                            written = true;
+                        }
                     }
                     observer.frame(&FrameEvent {
                         index: job.index,
-                        stored: job.store,
+                        stored: written,
                         fields: &fs,
                     });
                 }
-                Ok(())
+                Ok(stored)
             })
             .context("cannot start the output thread")?;
         Ok(Self {
@@ -109,23 +142,23 @@ impl OutputThread {
     }
 
     /// Waits for every queued frame to be written.
-    pub fn finish(mut self) -> Result<()> {
+    pub fn finish(mut self) -> Result<Stored> {
         self.join()
     }
 
-    fn join(&mut self) -> Result<()> {
+    fn join(&mut self) -> Result<Stored> {
         // Dropping the sender ends the thread's `for` loop once the queue is empty.
         self.tx = None;
         match self.handle.take() {
             Some(h) => h
                 .join()
                 .map_err(|_| anyhow!("the output thread panicked"))?,
-            None => Ok(()),
+            None => Ok(Stored::default()),
         }
     }
 }
 
-fn write_frame(config: &OutputConfig, index: u32, fs: &FieldSet) -> Result<()> {
+fn encode_frame(config: &OutputConfig, index: u32, fs: &FieldSet) -> Result<Vec<u8>> {
     let frame = Frame {
         job_id: config.job_id.clone(),
         frame_index: index,
@@ -146,7 +179,5 @@ fn write_frame(config: &OutputConfig, index: u32, fs: &FieldSet) -> Result<()> {
             })
             .collect(),
     };
-    let path = config.dir.frame_path(index);
-    std::fs::write(&path, frame.encode()?)
-        .with_context(|| format!("cannot write {}", path.display()))
+    Ok(frame.encode()?)
 }

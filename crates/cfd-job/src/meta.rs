@@ -105,7 +105,10 @@ pub(crate) struct RunMeta {
     pub sim_time: f64,
     pub output_every_steps: u64,
     pub sample_every_steps: u64,
+    /// Output events (frames sampled), whether stored or not.
     pub frames: u32,
+    /// Frame files written (fewer than `frames` with `--no-frames` or past the size limit).
+    pub frames_stored: u32,
     pub frame_dtype: &'static str,
     pub frame_fields: Vec<&'static str>,
 }

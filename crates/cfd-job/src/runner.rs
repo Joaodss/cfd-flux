@@ -146,7 +146,10 @@ pub struct Outcome {
     /// Why it stopped early, with a hint (divergence).
     pub message: Option<String>,
     pub steps_done: u64,
+    /// Output events (frames sampled), stored or not.
     pub frames: u32,
+    /// Frames written to `frames/`.
+    pub frames_stored: u32,
     pub timings: TimingsMeta,
     pub dir: PathBuf,
 }
@@ -401,6 +404,7 @@ fn initial_meta(
             output_every_steps: domain.run.output_every,
             sample_every_steps: sample_every,
             frames: 0,
+            frames_stored: 0,
             frame_dtype: match options.frame_dtype {
                 Dtype::F32 => "f32",
                 Dtype::F16 => "f16",
@@ -475,6 +479,7 @@ pub fn run(
                 fields: frame_fields,
             },
             dtype: options.frame_dtype,
+            max_stored_bytes: options.max_stored_bytes,
         },
         observer.clone(),
     )?;
@@ -598,13 +603,24 @@ pub fn run(
         ..
     } = r;
     // Every queued frame is on disk before `meta.json` says the run is over.
-    output.finish()?;
+    let stored = output.finish()?;
 
     let domain = solver.domain();
     let done = solver.steps_done();
     meta.run.steps_done = done;
     meta.run.sim_time = domain.units.steps_to_time(done);
     meta.run.frames = frame_index;
+    meta.run.frames_stored = stored.frames;
+    if stored.limit_reached {
+        meta.warnings.push(WarningMeta {
+            code: "storage.limit",
+            message: format!(
+                "frames stopped being stored after {} ({} MiB, the size limit)",
+                stored.frames,
+                stored.bytes >> 20
+            ),
+        });
+    }
     meta.diagnostics.last = DiagMeta::new(&last, domain);
     meta.diagnostics.relative_mass_drift = mass_drift(&last);
     meta.diagnostics.peak_mach = peak_mach;
@@ -643,6 +659,7 @@ pub fn run(
         message: meta.run.message.clone(),
         steps_done: done,
         frames: frame_index,
+        frames_stored: stored.frames,
         timings: meta.timings,
         dir: dir.path().to_path_buf(),
     };

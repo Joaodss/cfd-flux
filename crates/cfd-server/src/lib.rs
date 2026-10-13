@@ -7,13 +7,20 @@
 //! - [`config`]: listen address, data directory, limits.
 //! - [`api`]: the REST handlers.
 //! - [`error`]: `ApiError` and its JSON form.
+//! - [`jobs`]: job states, the job manager, per-device slots, the bridge to the job threads.
+//! - [`stream`]: the latest frame per stream format, for WebSocket viewers.
+//! - [`db`]: job and scene metadata in SQLite.
 
 pub mod api;
 pub mod config;
+pub mod db;
 pub mod error;
+pub mod jobs;
+pub mod stream;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Result;
 use axum::extract::DefaultBodyLimit;
@@ -40,6 +47,7 @@ pub struct AppState {
 pub struct Inner {
     pub config: Config,
     pub inventory: Inventory,
+    pub jobs: jobs::JobManager,
     /// Measured throughput per engine (MLUPS, smoothed over finished jobs), for time estimates.
     mlups: Mutex<HashMap<EngineKind, f64>>,
 }
@@ -61,12 +69,27 @@ impl Inner {
 }
 
 impl AppState {
+    /// Opens the database (marking jobs of an earlier run that never ended as interrupted) and
+    /// the results directory.
     pub async fn new(config: Config, inventory: Inventory) -> Result<Self> {
+        std::fs::create_dir_all(&config.data_dir)?;
+        let db = db::Db::connect(&config.database_url()).await?;
+        let mut mlups = HashMap::new();
+        for (backend, m) in db.mlups_by_engine().await? {
+            if let Some(k) = EngineKind::BY_PREFERENCE
+                .into_iter()
+                .find(|k| k.name() == backend)
+            {
+                mlups.insert(k, m);
+            }
+        }
+        let jobs = jobs::JobManager::new(&config, &inventory, db).await?;
         Ok(Self {
             inner: Arc::new(Inner {
                 config,
                 inventory,
-                mlups: Mutex::default(),
+                jobs,
+                mlups: Mutex::new(mlups),
             }),
         })
     }
@@ -91,6 +114,20 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/capabilities", get(api::capabilities))
         .route("/api/scenes/validate", post(api::validate))
+        .route("/api/scenes", get(api::list_scenes).post(api::save_scene))
+        .route(
+            "/api/scenes/{id}",
+            get(api::get_scene).delete(api::delete_scene),
+        )
+        .route("/api/simulations", get(api::list_jobs).post(api::submit))
+        .route(
+            "/api/simulations/{id}",
+            get(api::get_job).delete(api::delete_job),
+        )
+        .route("/api/simulations/{id}/pause", post(api::pause))
+        .route("/api/simulations/{id}/resume", post(api::resume))
+        .route("/api/simulations/{id}/frames/{n}", get(api::frame))
+        .route("/api/simulations/{id}/files/{name}", get(api::file))
         .fallback(api::not_found)
         // Layers wrap the routes above, like ASP.NET middleware: the last one added runs first.
         .layer(DefaultBodyLimit::max(config.limits.max_body_bytes))
@@ -100,14 +137,19 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-/// Serves the API on `listener` until `shutdown` completes.
+/// Serves the API on `listener` until `shutdown` completes; then stops every job (recorded as
+/// interrupted) before returning.
 pub async fn serve(
     listener: TcpListener,
     state: AppState,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
+    let st = state.clone();
     axum::serve(listener, router(state))
-        .with_graceful_shutdown(shutdown)
+        .with_graceful_shutdown(async move {
+            shutdown.await;
+            st.inner.jobs.shutdown(Duration::from_secs(5)).await;
+        })
         .await?;
     Ok(())
 }

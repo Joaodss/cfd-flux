@@ -149,6 +149,7 @@ pub fn run(args: RunArgs) -> Result<ExitCode> {
         },
         write_frames: !args.no_frames,
         extra_fields: png_fields(true).into_iter().map(png_source).collect(),
+        max_stored_bytes: None,
     };
     let prepared = match cfd_job::prepare(json, opts) {
         Ok(p) => p,

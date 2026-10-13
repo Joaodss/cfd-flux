@@ -321,3 +321,49 @@ fn results_do_not_depend_on_the_batch_size() {
         let _ = std::fs::remove_dir_all(d);
     }
 }
+
+/// Past `max_stored_bytes` the run goes on without storing frames, and says so.
+#[test]
+fn storing_stops_at_the_size_limit() {
+    let opts = RunOptions {
+        end_time: Some(0.2),
+        output_interval: Some(0.05),
+        ..Default::default()
+    };
+    let full = temp_dir("limit-full");
+    let (_tx, handle) = spawn(small_channel(), opts.clone(), &full, Arc::new(NoObserver));
+    handle.join().unwrap().unwrap();
+    let size = |i: u32| {
+        std::fs::metadata(full.join(format!("frames/{i:06}.bin")))
+            .unwrap()
+            .len()
+    };
+
+    let dir = temp_dir("limit");
+    let opts = RunOptions {
+        // Exactly the first two frames (frame 0, the fluid at rest, compresses to almost nothing).
+        max_stored_bytes: Some(size(0) + size(1)),
+        ..opts
+    };
+    let (rec, _events) = Recorder::new(false);
+    let (_tx, handle) = spawn(small_channel(), opts, &dir, rec.clone());
+    let outcome = handle.join().unwrap().unwrap();
+    assert_eq!(outcome.status, Status::Completed);
+    assert_eq!(outcome.frames, 5);
+    assert_eq!(outcome.frames_stored, 2);
+    assert_eq!(std::fs::read_dir(dir.join("frames")).unwrap().count(), 2);
+    let m = meta(&dir);
+    assert_eq!(m["run"]["frames"], 5);
+    assert_eq!(m["run"]["framesStored"], 2);
+    assert!(m["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|w| w["code"] == "storage.limit"));
+    assert!(rec
+        .events()
+        .iter()
+        .any(|e| matches!(e, Ev::Log(m) if m.contains("size limit"))));
+    let _ = std::fs::remove_dir_all(&full);
+    let _ = std::fs::remove_dir_all(&dir);
+}

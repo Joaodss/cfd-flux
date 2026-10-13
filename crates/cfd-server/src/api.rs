@@ -2,16 +2,22 @@
 //! `Query`, `ApiJson`): axum builds them from the request before calling it, as ASP.NET's model
 //! binding does for controller actions.
 
-use axum::extract::State;
+use axum::extract::{Path, Query, State};
+use axum::http::header::{CONTENT_TYPE, LOCATION};
+use axum::http::{HeaderName, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::Json;
 use cfd_core::scene::BackendPreference;
+use cfd_core::Scene;
 use cfd_engines::{bytes_per_cell, ChooseError, EngineInfo, EngineKind};
+use cfd_io::frame::{Dtype, Frame};
 use cfd_job::{PrepareError, Prepared, RunOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::config::{Limits, StreamDefaults};
 use crate::error::{ApiError, ApiJson, IssueDto};
+use crate::jobs::{JobStatus, JobView};
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -241,6 +247,284 @@ pub async fn validate(
         },
         Err(e) => return Err(e),
     }))
+}
+
+// ---- jobs --------------------------------------------------------------------------------
+
+/// `POST /api/simulations` body: a scene (or the id of a saved one) and run options.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubmitRequest {
+    /// Kept exactly as sent: it is stored as the job's `scene.json`.
+    scene: Option<Box<RawValue>>,
+    scene_id: Option<String>,
+    #[serde(default)]
+    options: JobOptions,
+}
+
+/// `POST /api/simulations`: validates and queues a job; `201` with the job, or `422` with the
+/// issues that prevent running it.
+pub async fn submit(
+    State(state): State<AppState>,
+    ApiJson(req): ApiJson<SubmitRequest>,
+) -> Result<(StatusCode, [(HeaderName, String); 1], Json<JobView>), ApiError> {
+    let db = &state.inner.jobs.db;
+    let scene = match (req.scene, &req.scene_id) {
+        (Some(scene), _) => scene,
+        (None, Some(id)) => {
+            let json = db
+                .scene_json(id)
+                .await?
+                .ok_or_else(|| ApiError::NotFound(format!("no saved scene {id}")))?;
+            RawValue::from_string(json).map_err(anyhow::Error::from)?
+        }
+        (None, None) => {
+            return Err(ApiError::BadRequest {
+                code: "request.scene",
+                message: "give a `scene` or a `sceneId`".into(),
+            })
+        }
+    };
+    if let Some(id) = &req.scene_id {
+        if db.scene_json(id).await?.is_none() {
+            return Err(ApiError::NotFound(format!("no saved scene {id}")));
+        }
+    }
+    // Decoding the layers and building the domain is CPU work (≈ 0.1 s for 4096²): it runs on
+    // tokio's blocking pool, not on the threads that serve requests (`Task.Run` in C#).
+    let (st, options) = (state.clone(), req.options.clone());
+    let checked = tokio::task::spawn_blocking(move || check(&st, &scene, &options))
+        .await
+        .map_err(anyhow::Error::from)??;
+    let view = state
+        .inner
+        .jobs
+        .submit(&state, checked, &req.options, req.scene_id)
+        .await?;
+    let location = format!("/api/simulations/{}", view.id);
+    Ok((StatusCode::CREATED, [(LOCATION, location)], Json(view)))
+}
+
+#[derive(Deserialize)]
+pub struct ListQuery {
+    status: Option<String>,
+    limit: Option<u32>,
+}
+
+/// `GET /api/simulations?status=&limit=`: newest first.
+pub async fn list_jobs(
+    State(state): State<AppState>,
+    Query(q): Query<ListQuery>,
+) -> Result<Json<Vec<JobView>>, ApiError> {
+    if let Some(s) = &q.status {
+        if JobStatus::parse(s).is_none() {
+            return Err(ApiError::BadRequest {
+                code: "request.status",
+                message: format!("unknown status {s:?}"),
+            });
+        }
+    }
+    let jobs = &state.inner.jobs;
+    let rows = jobs
+        .db
+        .jobs(q.status.as_deref(), q.limit.unwrap_or(100).min(1000))
+        .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| match jobs.get(&r.id) {
+                Some(live) => live.view(),
+                None => JobView::from_row(r),
+            })
+            .collect(),
+    ))
+}
+
+pub async fn get_job(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<JobView>, ApiError> {
+    Ok(Json(state.inner.jobs.view(&id).await?))
+}
+
+#[derive(Deserialize)]
+pub struct DeleteQuery {
+    #[serde(default)]
+    purge: bool,
+}
+
+/// `DELETE /api/simulations/{id}`: cancels an active job (`202`, applied between batches).
+/// With `?purge=true` also deletes its results and record (`204` once done; `202` while an
+/// active job is still stopping, after which it is purged).
+pub async fn delete_job(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<DeleteQuery>,
+) -> Result<Response, ApiError> {
+    let jobs = &state.inner.jobs;
+    if q.purge {
+        return Ok(if jobs.purge(&id).await? {
+            StatusCode::NO_CONTENT.into_response()
+        } else {
+            (StatusCode::ACCEPTED, Json(jobs.view(&id).await?)).into_response()
+        });
+    }
+    let view = jobs.view(&id).await?;
+    if !view.status.is_active() {
+        return Err(ApiError::Conflict(format!(
+            "the job is already {}",
+            view.status.as_str()
+        )));
+    }
+    Ok((StatusCode::ACCEPTED, Json(jobs.cancel(&id).await?)).into_response())
+}
+
+/// `POST /api/simulations/{id}/pause`: `202`; the job pauses after its current batch.
+pub async fn pause(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<JobView>), ApiError> {
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(state.inner.jobs.pause(&id, true)?),
+    ))
+}
+
+pub async fn resume(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<(StatusCode, Json<JobView>), ApiError> {
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(state.inner.jobs.pause(&id, false)?),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct FrameQuery {
+    dtype: Option<String>,
+}
+
+/// `GET /api/simulations/{id}/frames/{n}?dtype=f32|f16`: one stored frame (LFFR).
+pub async fn frame(
+    State(state): State<AppState>,
+    Path((id, n)): Path<(String, u32)>,
+    Query(q): Query<FrameQuery>,
+) -> Result<([(HeaderName, &'static str); 1], Vec<u8>), ApiError> {
+    let dir = state
+        .inner
+        .jobs
+        .store
+        .open(&id)
+        .ok_or_else(|| ApiError::NotFound(format!("no results for job {id}")))?;
+    let bytes = tokio::fs::read(dir.frame_path(n))
+        .await
+        .map_err(|_| ApiError::NotFound(format!("job {id} has no stored frame {n}")))?;
+    let bytes = match q.dtype.as_deref() {
+        None | Some("f32") => bytes,
+        Some("f16") => tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
+            let mut frame = Frame::decode(&bytes)?;
+            for f in &mut frame.fields {
+                f.desc.dtype = Dtype::F16;
+            }
+            Ok(frame.encode()?)
+        })
+        .await
+        .map_err(anyhow::Error::from)??,
+        Some(other) => {
+            return Err(ApiError::BadRequest {
+                code: "request.dtype",
+                message: format!("unknown dtype {other:?} (f32 or f16)"),
+            })
+        }
+    };
+    Ok(([(CONTENT_TYPE, "application/octet-stream")], bytes))
+}
+
+/// `GET /api/simulations/{id}/files/{name}`: `scene.json`, `meta.json` or a CSV series.
+pub async fn file(
+    State(state): State<AppState>,
+    Path((id, name)): Path<(String, String)>,
+) -> Result<([(HeaderName, &'static str); 1], Vec<u8>), ApiError> {
+    let content_type = match name.as_str() {
+        "scene.json" | "meta.json" => "application/json",
+        "probes.csv" | "forces.csv" | "diagnostics.csv" => "text/csv; charset=utf-8",
+        _ => return Err(ApiError::NotFound(format!("no file {name:?}"))),
+    };
+    let dir = state
+        .inner
+        .jobs
+        .store
+        .open(&id)
+        .ok_or_else(|| ApiError::NotFound(format!("no results for job {id}")))?;
+    let bytes = tokio::fs::read(dir.path().join(&name))
+        .await
+        .map_err(|_| ApiError::NotFound(format!("job {id} has no {name}")))?;
+    Ok(([(CONTENT_TYPE, content_type)], bytes))
+}
+
+// ---- saved scenes ------------------------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedScene {
+    id: String,
+    name: String,
+}
+
+/// `POST /api/scenes`: saves a scene (it must parse; it need not be runnable).
+pub async fn save_scene(
+    State(state): State<AppState>,
+    ApiJson(scene): ApiJson<Box<RawValue>>,
+) -> Result<(StatusCode, Json<SavedScene>), ApiError> {
+    let parsed = Scene::from_json(scene.get()).map_err(|e| ApiError::BadRequest {
+        code: "scene.format",
+        message: format!("invalid scene: {e}"),
+    })?;
+    let id = uuid::Uuid::now_v7().to_string();
+    state
+        .inner
+        .jobs
+        .db
+        .insert_scene(&id, &parsed.name, scene.get())
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(SavedScene {
+            id,
+            name: parsed.name,
+        }),
+    ))
+}
+
+pub async fn list_scenes(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<crate::db::SceneSummary>>, ApiError> {
+    Ok(Json(state.inner.jobs.db.scenes().await?))
+}
+
+pub async fn get_scene(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<([(HeaderName, &'static str); 1], String), ApiError> {
+    let json = state
+        .inner
+        .jobs
+        .db
+        .scene_json(&id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("no saved scene {id}")))?;
+    Ok(([(CONTENT_TYPE, "application/json")], json))
+}
+
+pub async fn delete_scene(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    if state.inner.jobs.db.delete_scene(&id).await? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound(format!("no saved scene {id}")))
+    }
 }
 
 /// Any route that does not exist.

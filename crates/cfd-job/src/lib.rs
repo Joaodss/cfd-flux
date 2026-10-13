@@ -32,7 +32,7 @@ pub use runner::{
     run, CellPatch, Command, FrameEvent, JobContext, JobObserver, NoObserver, Outcome, ParamChange,
     Progress, Started, Status, DEFAULT_BATCH_TIME,
 };
-pub use store::ResultDir;
+pub use store::{LocalStore, ResultDir};
 
 /// The name of an output field in frames and `meta.json`.
 pub fn output_field_name(f: OutputField) -> &'static str {
@@ -63,6 +63,8 @@ pub struct RunOptions {
     pub write_frames: bool,
     /// Fields stored in the frames besides the scene's `run.outputFields`.
     pub extra_fields: Vec<OutputField>,
+    /// Stop storing frames (not the run) past this many bytes.
+    pub max_stored_bytes: Option<u64>,
 }
 
 impl Default for RunOptions {
@@ -75,6 +77,7 @@ impl Default for RunOptions {
             frame_dtype: Dtype::F32,
             write_frames: true,
             extra_fields: Vec::new(),
+            max_stored_bytes: None,
         }
     }
 }
