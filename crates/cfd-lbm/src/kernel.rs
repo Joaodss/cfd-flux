@@ -95,8 +95,9 @@ fn dot(c: [i32; 2], v: [f32; 2]) -> f32 {
 }
 
 /// With `write_macro == false` (the `skip_macro` steps, design proposal §7) the macroscopic outputs
-/// are not stored, except u on cells that read it (a pressure-outlet link): nothing else reads them
-/// between two `step` calls, and the last step of a call always writes them.
+/// are not stored, except u on cells with a boundary link (pressure-outlet links read their cell's
+/// u on the next step): nothing else reads them between two `step` calls, and the last step of a
+/// call always writes them.
 pub(crate) fn update_block<const THERMAL: bool>(
     p: &StepParams,
     s: &Source,
@@ -160,8 +161,6 @@ pub(crate) fn update_block<const THERMAL: bool>(
 
             // ---- Flow pull ----
             let mut f = [0.0f32; 9];
-            // Set when a pressure-outlet link reads this cell's velocity of the previous step.
-            let mut reads_u = false;
             if mask == 0 {
                 for i in 0..9 {
                     f[i] = s.f[i * n + ys[i] * w + xs[i]];
@@ -182,7 +181,6 @@ pub(crate) fn update_block<const THERMAL: bool>(
                         flags::BOUNCE_BACK => out + 6.0 * W9[i] * dot(LINKS[i], bc.velocity),
                         // Anti-bounce-back with the outlet density and this cell's velocity.
                         flags::PRESSURE => {
-                            reads_u = true;
                             let u = [ux_o[local], uy_o[local]];
                             let cu = dot(LINKS[i], u);
                             let usq = u[0] * u[0] + u[1] * u[1];
@@ -236,7 +234,7 @@ pub(crate) fn update_block<const THERMAL: bool>(
             if write_macro {
                 rho_o[local] = rho;
             }
-            if write_macro || reads_u {
+            if write_macro || mask != 0 {
                 ux_o[local] = u[0];
                 uy_o[local] = u[1];
             }

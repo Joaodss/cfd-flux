@@ -14,7 +14,9 @@
 override WG: u32 = 128u;
 override THERMAL: bool = false;
 // Whether ρ, u and θ are stored (`skip_macro`, design proposal §7: off on every step of a `step` call
-// but the last; u is still stored where a pressure-outlet link reads it on the next step).
+// but the last). u is still stored on cells with a boundary link (`mask != 0`): pressure-outlet links
+// read their cell's u on the next step. A superset of those cells, known before the pull loop: a
+// flag set inside the loop instead made the 256² kernel 20% slower on the RTX 4060.
 override WRITE_MACRO: bool = true;
 
 @group(0) @binding(0) var<uniform> P: Params;
@@ -161,8 +163,6 @@ fn stream_collide(
 
     // ---- Flow pull ----
     var f: array<f32, 9>;
-    // Set when a pressure-outlet link reads this cell's velocity of the previous step.
-    var reads_u = false;
     if (mask == 0u) {
         for (var i = 0u; i < 9u; i++) {
             f[i] = f_src[i * n + ys[i] * w + xs[i]];
@@ -184,7 +184,6 @@ fn stream_collide(
                 }
                 // Anti-bounce-back with the outlet density and this cell's velocity (previous step).
                 case PRESSURE: {
-                    reads_u = true;
                     let u = vec2<f32>(mac[n + k], mac[2u * n + k]);
                     let cu = dot_c(i, u);
                     let usq = u.x * u.x + u.y * u.y;
@@ -225,7 +224,7 @@ fn stream_collide(
     if (WRITE_MACRO) {
         mac[k] = rho;
     }
-    if (WRITE_MACRO || reads_u) {
+    if (WRITE_MACRO || mask != 0u) {
         mac[n + k] = u.x;
         mac[2u * n + k] = u.y;
     }

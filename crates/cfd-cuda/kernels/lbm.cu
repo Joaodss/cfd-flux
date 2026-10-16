@@ -91,8 +91,8 @@ __device__ __forceinline__ float collide_thermal_pair(
 // The step, with the thermal lattice compiled in or out and the macroscopic stores on or off (template
 // arguments play the role of WGSL's pipeline-overridable `THERMAL` and `WRITE_MACRO` constants).
 // Without `WRITE_MACRO` (the `skip_macro` steps, design proposal §7) ρ, u and θ are not stored,
-// except u on cells whose pressure-outlet links read it on the next step; the status word is still
-// written. The last step of every `step` call stores them, so every read sees fresh values.
+// except u on cells with a boundary link (pressure-outlet links read their cell's u on the next
+// step); the status word is still written. The last step of every `step` call stores them, so every read sees fresh values.
 template <bool THERMAL, bool WRITE_MACRO>
 __device__ __forceinline__ void step(
     const Params P,
@@ -161,8 +161,6 @@ __device__ __forceinline__ void step(
 
     // ---- Flow pull ----
     float f[9];
-    // Set when a pressure-outlet link reads this cell's velocity of the previous step.
-    bool reads_u = false;
     if (mask == 0u) {
 #pragma unroll
         for (unsigned i = 0u; i < 9u; i++) {
@@ -186,7 +184,6 @@ __device__ __forceinline__ void step(
                     break;
                 // Anti-bounce-back with the outlet density and this cell's velocity (previous step).
                 case PRESSURE: {
-                    reads_u = true;
                     const float2 u = make_float2(mac[n + k], mac[2u * n + k]);
                     const float cu = dot_c(i, u);
                     const float usq = u.x * u.x + u.y * u.y;
@@ -229,7 +226,7 @@ __device__ __forceinline__ void step(
     if (WRITE_MACRO) {
         mac[k] = rho;
     }
-    if (WRITE_MACRO || reads_u) {
+    if (WRITE_MACRO || mask != 0u) {
         mac[n + k] = u.x;
         mac[2u * n + k] = u.y;
     }
