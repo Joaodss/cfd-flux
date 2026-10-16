@@ -1,6 +1,6 @@
-//! The output thread of a run: converts copied lattice fields to physical fields, encodes and
-//! writes the stored frames, and hands every frame to the observer (the server encodes its stream
-//! frames there).
+//! The output thread of a run: collects the samples of a frame (converting copied lattice fields to
+//! physical fields when the backend does not sample on the device), encodes and writes the stored
+//! frame, and hands every sample to the observer (the server encodes its stream frames there).
 //!
 //! It is fed by a **bounded** channel (`sync_channel(2)`): the solver keeps stepping while a frame
 //! is converted and written, and if the disk cannot keep up the solver waits, so stored frames are
@@ -14,10 +14,9 @@ use std::thread::JoinHandle;
 
 use anyhow::{anyhow, Context, Result};
 use cfd_core::domain::Domain;
-use cfd_core::solver::{FieldSet, LatticeFields, SampleRequest};
-use cfd_io::frame::{Dtype, Field, FieldDesc, Frame};
+use cfd_core::sample::SampleSet;
 
-use crate::output_field_name;
+use crate::encode_sample;
 use crate::runner::{FrameEvent, JobObserver};
 use crate::store::ResultDir;
 
@@ -30,8 +29,8 @@ pub(crate) struct OutputJob {
     pub index: Option<u32>,
     /// Write it to `frames/`.
     pub store: bool,
-    pub step: u64,
-    pub fields: LatticeFields,
+    /// One sample per requested spec; the first is the stored frame's when `store`.
+    pub samples: SampleSet,
 }
 
 /// What converting lattice fields to physical ones needs from the domain: everything but the
@@ -75,8 +74,6 @@ pub(crate) enum TrySend {
 pub(crate) struct OutputConfig {
     pub dir: ResultDir,
     pub job_id: String,
-    pub req: SampleRequest,
-    pub dtype: Dtype,
     /// Stop storing frames (not the run) past this many bytes.
     pub max_stored_bytes: Option<u64>,
 }
@@ -102,11 +99,11 @@ impl OutputThread {
                     if abandoned.load(Ordering::Relaxed) {
                         continue; // cancelled: drain the queue without writing
                     }
-                    let fs = FieldSet::from_lattice(&domain, &job.fields, job.step, &config.req);
+                    let samples = job.samples.into_samples(&domain);
                     let mut written = false;
                     if let (true, Some(index), false) = (job.store, job.index, stored.limit_reached)
                     {
-                        let bytes = encode_frame(&config, index, &fs)?;
+                        let bytes = encode_sample(&config.job_id, index, &samples[0])?;
                         let size = bytes.len() as u64;
                         if config
                             .max_stored_bytes
@@ -130,7 +127,7 @@ impl OutputThread {
                     observer.frame(&FrameEvent {
                         index: job.index,
                         stored: written,
-                        fields: &fs,
+                        samples: &samples,
                     });
                 }
                 Ok(stored)
@@ -178,28 +175,4 @@ impl OutputThread {
             None => Ok(Stored::default()),
         }
     }
-}
-
-fn encode_frame(config: &OutputConfig, index: u32, fs: &FieldSet) -> Result<Vec<u8>> {
-    let frame = Frame {
-        job_id: config.job_id.clone(),
-        frame_index: index,
-        step: fs.step,
-        sim_time: fs.time,
-        width: fs.width,
-        height: fs.height,
-        fields: fs
-            .fields
-            .iter()
-            .map(|f| Field {
-                desc: FieldDesc {
-                    name: output_field_name(f.field).into(),
-                    components: f.components,
-                    dtype: config.dtype,
-                },
-                values: f.values.clone(),
-            })
-            .collect(),
-    };
-    Ok(frame.encode()?)
 }

@@ -21,7 +21,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use cfd_core::domain::Domain;
-use cfd_core::solver::{Diagnostics, FieldSet, PendingFields, SampleRequest, Solver, SolverError};
+use cfd_core::sample::{PendingSamples, Sample, SampleSpec};
+use cfd_core::scene::OutputField;
+use cfd_core::solver::{Diagnostics, Solver, SolverError};
 use cfd_core::Scene;
 use cfd_engines::SolverChoice;
 use cfd_io::frame::Dtype;
@@ -112,13 +114,16 @@ pub struct Progress {
     pub mlups: f64,
 }
 
-/// A frame in physical units, as stored (or, for snapshots, only streamed).
+/// A frame in physical units: the samples taken for it (the stored frame, the observer's stream
+/// formats).
 pub struct FrameEvent<'a> {
     /// Output index; `None` for a snapshot.
     pub index: Option<u32>,
     /// Whether it was written to `frames/` (before this event).
     pub stored: bool,
-    pub fields: &'a FieldSet,
+    /// One per spec requested: when frames are stored, first the stored frame's (full resolution,
+    /// the frame dtype), then those of [`JobObserver::stream_specs`] that differ from it.
+    pub samples: &'a [Sample],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -169,6 +174,16 @@ pub trait JobObserver: Send + Sync {
     /// Whether frames should be sampled even when they are not stored (`--no-frames`).
     fn wants_frames(&self) -> bool {
         false
+    }
+    /// Extra samples to take with every frame (e.g. downsampled f16 for viewers), asked again for
+    /// each frame; `frame_fields` are the run's frame fields, `width × height` the grid.
+    fn stream_specs(
+        &self,
+        _frame_fields: &[OutputField],
+        _width: u32,
+        _height: u32,
+    ) -> Vec<SampleSpec> {
+        Vec::new()
     }
     fn frame(&self, _frame: &FrameEvent) {}
     /// Something worth telling a user (e.g. an unsupported command).
@@ -244,6 +259,9 @@ struct Runner<'a> {
     snapshot: bool,
     solver_time: Duration,
     output_time: Duration,
+    /// The stored frames' spec (full resolution, the frame dtype).
+    stored_spec: SampleSpec,
+    frame_fields: Vec<OutputField>,
 }
 
 impl Runner<'_> {
@@ -312,14 +330,12 @@ impl Runner<'_> {
                 Command::Cancel => return Ok(self.cancel()),
                 Command::Pause => {}
                 Command::Snapshot => {
-                    let pending = self.solver.request_fields();
-                    self.collect(
-                        FrameRequest {
-                            index: None,
-                            store: false,
-                        },
-                        pending,
-                    )?;
+                    let req = FrameRequest {
+                        index: None,
+                        store: false,
+                    };
+                    let pending = self.request(req);
+                    self.collect(req, pending)?;
                     if self.cancelled {
                         return Ok(Flow::Cancel);
                     }
@@ -333,17 +349,34 @@ impl Runner<'_> {
         Ok(Flow::Continue)
     }
 
+    /// Starts sampling a frame: the stored frame (if `req.store`), then every stream format the
+    /// observer wants that differs from it. GPU backends compute the samples on the device.
+    fn request(&mut self, req: FrameRequest) -> Box<dyn PendingSamples> {
+        let d = self.solver.domain();
+        let mut specs = Vec::new();
+        if req.store {
+            specs.push(self.stored_spec.clone());
+        }
+        for s in self
+            .observer
+            .stream_specs(&self.frame_fields, d.width, d.height)
+        {
+            if !specs.contains(&s) {
+                specs.push(s);
+            }
+        }
+        self.solver.request_samples(&specs)
+    }
+
     /// Waits for a requested copy and queues it for the output thread. While the queue is full
     /// (the disk or the encoder is slower than the solver), commands are still read: a Cancel
     /// drops the frame and returns at once, other commands are kept for the next poll.
-    fn collect(&mut self, req: FrameRequest, pending: Box<dyn PendingFields>) -> Result<()> {
+    fn collect(&mut self, req: FrameRequest, pending: Box<dyn PendingSamples>) -> Result<()> {
         let t = Instant::now();
-        let step = pending.step();
         let mut job = OutputJob {
             index: req.index,
             store: req.store,
-            step,
-            fields: pending.wait(),
+            samples: pending.wait(),
         };
         loop {
             match self.output.try_send(job)? {
@@ -515,10 +548,6 @@ pub fn run(
         OutputConfig {
             dir: dir.clone(),
             job_id: job.id.clone(),
-            req: SampleRequest {
-                fields: frame_fields,
-            },
-            dtype: options.frame_dtype,
             max_stored_bytes: options.max_stored_bytes,
         },
         observer.clone(),
@@ -540,6 +569,8 @@ pub fn run(
         snapshot: false,
         solver_time: Duration::ZERO,
         output_time: Duration::ZERO,
+        stored_spec: SampleSpec::full(frame_fields.clone(), crate::precision(options.frame_dtype)),
+        frame_fields,
     };
     let mut batcher = Batcher::new(job.batch_time);
     let mut last = initial;
@@ -593,7 +624,7 @@ pub fn run(
         }
         // Only start the copy here: it is collected after the next batch has been queued, so on
         // asynchronous backends the copy overlaps with the steps (the CPU copies immediately).
-        let pending = request.map(|req| (req, r.solver.request_fields()));
+        let pending = request.map(|req| (req, r.request(req)));
         r.output_time += t0.elapsed();
         if step >= total {
             if let Some((req, p)) = pending {

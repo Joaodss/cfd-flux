@@ -21,11 +21,12 @@ mod series;
 pub mod store;
 
 use cfd_core::domain::Domain;
+use cfd_core::sample::{Precision, Sample};
 use cfd_core::scene::OutputField;
 use cfd_core::units::DEFAULT_LATTICE_VELOCITY;
 use cfd_core::validate::Report;
 use cfd_core::{DomainOptions, Scene};
-use cfd_io::frame::Dtype;
+use cfd_io::frame::{encode_raw, Codec, Dtype, FieldDesc, FrameError, FrameInfo, RawField};
 
 pub use meta::TimingsMeta as Timings;
 pub use runner::{
@@ -44,6 +45,49 @@ pub fn output_field_name(f: OutputField) -> &'static str {
         OutputField::Vorticity => "vorticity",
         OutputField::FillFraction => "fillFraction",
     }
+}
+
+/// The sample precision of a frame dtype.
+pub fn precision(dtype: Dtype) -> Precision {
+    match dtype {
+        Dtype::F32 => Precision::F32,
+        Dtype::F16 => Precision::F16,
+    }
+}
+
+/// Encodes a sample as an LFFR frame (its values go into the frame as they are, f16 bits
+/// included: no conversion on the CPU).
+pub fn encode_sample(job_id: &str, index: u32, s: &Sample) -> Result<Vec<u8>, FrameError> {
+    let dtype = match s.spec.precision {
+        Precision::F32 => Dtype::F32,
+        Precision::F16 => Dtype::F16,
+    };
+    let descs: Vec<FieldDesc> = s
+        .fields
+        .iter()
+        .map(|f| FieldDesc {
+            name: output_field_name(f.field).into(),
+            components: f.components,
+            dtype,
+        })
+        .collect();
+    let raw: Vec<RawField> = descs
+        .iter()
+        .zip(&s.fields)
+        .map(|(desc, f)| RawField {
+            desc,
+            bytes: f.data.bytes(),
+        })
+        .collect();
+    let info = FrameInfo {
+        job_id: job_id.to_string(),
+        frame_index: index,
+        step: s.step,
+        sim_time: s.time,
+        width: s.width,
+        height: s.height,
+    };
+    encode_raw(&info, &raw, Codec::default())
 }
 
 /// Run settings that are not part of the scene (the same overrides as `cfd-cli run`).

@@ -8,6 +8,7 @@
 //! waits for anyone. Stored frames are written by the output thread before this and are never
 //! dropped.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -16,8 +17,8 @@ use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::response::Response;
-use cfd_core::solver::FieldSet;
-use cfd_io::frame::{Dtype, Field, FieldDesc, Frame};
+use cfd_core::sample::{Precision, Sample, SampleData, SampleSpec};
+use cfd_core::scene::OutputField;
 use cfd_job::{Command, FrameEvent};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch};
@@ -44,6 +45,26 @@ impl StreamFormat {
     pub fn factor(&self, width: u32, height: u32) -> u32 {
         width.max(height).div_ceil(self.max_size.max(1)).max(1)
     }
+
+    /// The sample this format streams: the frame fields it names (in frame order; all of them
+    /// without a list), box-downsampled to fit, in f16.
+    pub fn spec(&self, frame_fields: &[OutputField], width: u32, height: u32) -> SampleSpec {
+        let fields = frame_fields
+            .iter()
+            .copied()
+            .filter(|f| {
+                let name = cfd_job::output_field_name(*f);
+                self.fields
+                    .as_ref()
+                    .is_none_or(|list| list.iter().any(|n| n == name))
+            })
+            .collect();
+        SampleSpec {
+            fields,
+            factor: self.factor(width, height),
+            precision: Precision::F16,
+        }
+    }
 }
 
 /// Colour-range information for viewers: min/max of each field (velocity: of its magnitude)
@@ -56,6 +77,8 @@ struct HubState {
     ranges: Ranges,
     /// Index of the last output frame (snapshots reuse it).
     last_index: u32,
+    /// The run's frame fields and grid size (set by the first `stream_specs`).
+    frame: Option<(Vec<OutputField>, u32, u32)>,
     closed: bool,
 }
 
@@ -88,11 +111,30 @@ impl Hub {
         self.state.lock().unwrap().ranges.clone()
     }
 
-    /// Encodes `f` for every format with viewers. Runs on the job's output thread; the lock is
-    /// held only to read and update the bookkeeping, never while encoding, so async handlers that
-    /// subscribe are not blocked by it.
+    /// The samples to take with the next frame: one per format with viewers (formats whose last
+    /// viewer has gone are dropped here). Called by the job's thread before each frame.
+    pub fn stream_specs(
+        &self,
+        frame_fields: &[OutputField],
+        width: u32,
+        height: u32,
+    ) -> Vec<SampleSpec> {
+        let mut s = self.state.lock().unwrap();
+        s.frame = Some((frame_fields.to_vec(), width, height));
+        s.formats.retain(|_, tx| tx.receiver_count() > 0);
+        s.formats
+            .keys()
+            .map(|fmt| fmt.spec(frame_fields, width, height))
+            .collect()
+    }
+
+    /// Encodes the sample of every format with viewers (computed on the device by GPU
+    /// backends). Runs on the job's output thread; the lock is held only to read and update the
+    /// bookkeeping, never while encoding, so async handlers that subscribe are not blocked by it.
+    /// A format that appeared after the frame was requested has no sample yet: it gets the next
+    /// frame (subscribing a new format also asks the job for a snapshot).
     pub fn publish(&self, job_id: &str, f: &FrameEvent) {
-        let ranges = field_ranges(f.fields);
+        let ranges = sample_ranges(f.samples);
         let (targets, index) = {
             let mut s = self.state.lock().unwrap();
             if s.closed {
@@ -105,17 +147,21 @@ impl Hub {
             if let Some(i) = f.index {
                 s.last_index = i;
             }
-            // Formats whose last viewer has gone are dropped here.
-            s.formats.retain(|_, tx| tx.receiver_count() > 0);
+            let Some((fields, w, h)) = s.frame.clone() else {
+                return;
+            };
             let targets: Vec<_> = s
                 .formats
                 .iter()
-                .map(|(fmt, tx)| (fmt.clone(), tx.clone()))
+                .map(|(fmt, tx)| (fmt.spec(&fields, w, h), tx.clone()))
                 .collect();
             (targets, f.index.unwrap_or(s.last_index))
         };
-        for (fmt, tx) in targets {
-            match encode(job_id, index, f.fields, &fmt) {
+        for (spec, tx) in targets {
+            let Some(sample) = f.samples.iter().find(|s| s.spec == spec) else {
+                continue;
+            };
+            match cfd_job::encode_sample(job_id, index, sample) {
                 // `send_replace` stores the value even if every viewer left meanwhile.
                 Ok(bytes) => {
                     tx.send_replace(Some(Bytes::from(bytes)));
@@ -159,90 +205,33 @@ impl FormatInfo {
     }
 }
 
-fn field_ranges(fs: &FieldSet) -> Vec<(String, [f32; 2])> {
-    fs.fields
-        .iter()
-        .filter_map(|f| {
-            let name = cfd_job::output_field_name(f.field).to_string();
-            let c = f.components as usize;
-            let mut it = f.values.chunks_exact(c).map(|v| {
-                if c == 1 {
-                    v[0]
-                } else {
-                    v.iter().map(|x| x * x).sum::<f32>().sqrt()
-                }
-            });
-            let first = it.next()?;
-            let (lo, hi) = it.fold((first, first), |(lo, hi), v| (lo.min(v), hi.max(v)));
-            Some((name, [lo, hi]))
-        })
-        .collect()
-}
-
-/// Averages `k × k` blocks (partial blocks at the right and top edges average what they have).
-/// `values` are row-major with `c` interleaved components.
-pub fn downsample(values: &[f32], c: usize, w: usize, h: usize, k: usize) -> Vec<f32> {
-    if k <= 1 {
-        return values.to_vec();
-    }
-    let (ow, oh) = (w.div_ceil(k), h.div_ceil(k));
-    let mut out = vec![0.0f32; ow * oh * c];
-    for oy in 0..oh {
-        for ox in 0..ow {
-            let (x0, y0) = (ox * k, oy * k);
-            let (x1, y1) = ((x0 + k).min(w), (y0 + k).min(h));
-            let n = ((x1 - x0) * (y1 - y0)) as f32;
-            for comp in 0..c {
-                let mut sum = 0.0f32;
-                for y in y0..y1 {
-                    for x in x0..x1 {
-                        sum += values[(y * w + x) * c + comp];
-                    }
-                }
-                out[(oy * ow + ox) * c + comp] = sum / n;
+/// Min/max of every field over the samples of a frame (velocity: of its magnitude). The stored
+/// frame, when there is one, is the full-resolution sample; downsampled ones lie within it.
+fn sample_ranges(samples: &[Sample]) -> Vec<(String, [f32; 2])> {
+    let mut out: Vec<(String, [f32; 2])> = Vec::new();
+    for f in samples.iter().flat_map(|s| &s.fields) {
+        let name = cfd_job::output_field_name(f.field).to_string();
+        let c = f.components as usize;
+        // The f32 values are borrowed; f16 ones converted (`Cow` ≈ "borrowed or owned").
+        let values: Cow<[f32]> = match &f.data {
+            SampleData::F32(v) => Cow::Borrowed(v),
+            other => Cow::Owned(other.to_f32()),
+        };
+        let mut it = values.chunks_exact(c).map(|v| {
+            if c == 1 {
+                v[0]
+            } else {
+                v.iter().map(|x| x * x).sum::<f32>().sqrt()
             }
+        });
+        let Some(first) = it.next() else { continue };
+        let (lo, hi) = it.fold((first, first), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        match out.iter_mut().find(|(n, _)| *n == name) {
+            Some((_, r)) => *r = [r[0].min(lo), r[1].max(hi)],
+            None => out.push((name, [lo, hi])),
         }
     }
     out
-}
-
-/// One LFFR stream frame: the format's fields, downsampled, as f16.
-pub fn encode(
-    job_id: &str,
-    index: u32,
-    fs: &FieldSet,
-    fmt: &StreamFormat,
-) -> Result<Vec<u8>, cfd_io::frame::FrameError> {
-    let (w, h) = (fs.width as usize, fs.height as usize);
-    let k = fmt.factor(fs.width, fs.height) as usize;
-    let fields = fs
-        .fields
-        .iter()
-        .filter(|f| {
-            let name = cfd_job::output_field_name(f.field);
-            fmt.fields
-                .as_ref()
-                .is_none_or(|list| list.iter().any(|n| n == name))
-        })
-        .map(|f| Field {
-            desc: FieldDesc {
-                name: cfd_job::output_field_name(f.field).into(),
-                components: f.components,
-                dtype: Dtype::F16,
-            },
-            values: downsample(&f.values, f.components as usize, w, h, k),
-        })
-        .collect();
-    Frame {
-        job_id: job_id.to_string(),
-        frame_index: index,
-        step: fs.step,
-        sim_time: fs.time,
-        width: w.div_ceil(k) as u32,
-        height: h.div_ceil(k) as u32,
-        fields,
-    }
-    .encode()
 }
 
 // ---- the WebSocket ------------------------------------------------------------------------
@@ -420,8 +409,9 @@ async fn viewer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cfd_core::scene::OutputField;
-    use cfd_core::solver::SampledField;
+    use cfd_core::sample::SampleField;
+    use cfd_core::solver::{FieldSet, SampledField};
+    use cfd_io::frame::{Dtype, Frame};
 
     #[test]
     fn the_factor_fits_the_longest_side() {
@@ -436,19 +426,8 @@ mod tests {
         assert_eq!(f(0).factor(3, 3), 3);
     }
 
-    #[test]
-    fn downsampling_averages_blocks_and_partial_edges() {
-        // 3 × 2 cells, 2 components (component 1 = 10 × component 0).
-        let v: Vec<f32> = (0..6).flat_map(|i| [i as f32, 10.0 * i as f32]).collect();
-        let d = downsample(&v, 2, 3, 2, 2);
-        // Blocks: cells {0,1,3,4} and the partial column {2,5}.
-        assert_eq!(d, vec![2.0, 20.0, 3.5, 35.0]);
-        assert_eq!(downsample(&v, 2, 3, 2, 1), v);
-    }
-
-    #[test]
-    fn stream_frames_hold_the_requested_fields_in_f16() {
-        let fs = FieldSet {
+    fn field_set() -> FieldSet {
+        FieldSet {
             step: 10,
             time: 0.5,
             width: 4,
@@ -465,18 +444,37 @@ mod tests {
                     values: (0..8).map(|i| i as f32).collect(),
                 },
             ],
-        };
+        }
+    }
+
+    #[test]
+    fn formats_stream_their_fields_downsampled_in_f16() {
+        let frame_fields = [OutputField::Velocity, OutputField::Pressure];
         let fmt = StreamFormat {
             fields: Some(vec!["pressure".into()]),
             max_size: 2,
         };
-        let frame = Frame::decode(&encode("job", 3, &fs, &fmt).unwrap()).unwrap();
+        let spec = fmt.spec(&frame_fields, 4, 2);
+        assert_eq!(spec.fields, [OutputField::Pressure]);
+        assert_eq!((spec.factor, spec.precision), (2, Precision::F16));
+        let all = StreamFormat {
+            fields: None,
+            max_size: 8,
+        };
+        assert_eq!(all.spec(&frame_fields, 4, 2).fields, frame_fields);
+
+        let sample = Sample::from_field_set(&field_set(), &spec);
+        let frame = Frame::decode(&cfd_job::encode_sample("job", 3, &sample).unwrap()).unwrap();
         assert_eq!((frame.width, frame.height, frame.frame_index), (2, 1, 3));
         assert_eq!(frame.fields.len(), 1);
         assert_eq!(frame.fields[0].desc.dtype, Dtype::F16);
         // Blocks {0,1,4,5} and {2,3,6,7}.
         assert_eq!(frame.fields[0].values, vec![2.5, 4.5]);
-        let r: HashMap<String, [f32; 2]> = field_ranges(&fs).into_iter().collect();
+        let full = Sample::from_field_set(
+            &field_set(),
+            &SampleSpec::full(frame_fields.to_vec(), Precision::F32),
+        );
+        let r: HashMap<String, [f32; 2]> = sample_ranges(&[full, sample]).into_iter().collect();
         assert_eq!(r["pressure"], [0.0, 7.0]);
         assert_eq!(r["velocity"], [2f32.sqrt(), 2f32.sqrt()]);
     }
@@ -488,24 +486,29 @@ mod tests {
             fields: None,
             max_size: 1024,
         };
-        let fs = FieldSet {
+        let fields = [OutputField::Pressure];
+        let mut a = hub.subscribe(&fmt).unwrap();
+        // The job asks for the formats' samples before each frame.
+        let specs = hub.stream_specs(&fields, 2, 1);
+        assert_eq!(specs, [fmt.spec(&fields, 2, 1)]);
+        let sample = Sample {
+            spec: specs[0].clone(),
             step: 1,
             time: 0.1,
             width: 2,
             height: 1,
-            fields: vec![SampledField {
+            fields: vec![SampleField {
                 field: OutputField::Pressure,
                 components: 1,
-                values: vec![1.0, 2.0],
+                data: SampleData::F16(cfd_core::sample::f16_bits(&[1.0, 2.0])),
             }],
         };
-        let mut a = hub.subscribe(&fmt).unwrap();
         hub.publish(
             "job",
             &FrameEvent {
                 index: Some(0),
                 stored: true,
-                fields: &fs,
+                samples: &[sample],
             },
         );
         assert!(a.has_changed().unwrap());
@@ -515,6 +518,23 @@ mod tests {
             "the latest frame is sent at once"
         );
         assert_eq!(*a.borrow_and_update(), *late.borrow());
+        assert_eq!(hub.ranges()["pressure"], [1.0, 2.0]);
+
+        // A format without a sample in the frame (it appeared after the request) gets nothing.
+        let other = StreamFormat {
+            fields: None,
+            max_size: 1,
+        };
+        let b = hub.subscribe(&other).unwrap();
+        hub.publish(
+            "job",
+            &FrameEvent {
+                index: Some(1),
+                stored: true,
+                samples: &[],
+            },
+        );
+        assert!(!b.has_changed().unwrap());
         hub.close();
         assert!(hub.subscribe(&fmt).is_none());
         assert!(a.has_changed().is_err(), "closed after the job");
