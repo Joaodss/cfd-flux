@@ -173,8 +173,8 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   turns it off.
 - **Consequences:** results are bit-identical to storing every step — a parity case compares fields, diagnostics
   and forces with `==` after calls of 1–1203 steps on the CPU, CUDA and wgpu, and fails on all three if the
-  boundary-cell u store is removed. `bench --backends cuda,wgpu`: +16.5% at ≥ 1024² isothermal (2,803 → 3,267 MLUPS
-  on CUDA, as 84/72 B predicts), +12% thermal, +65–74% at 512² (the lattice fits in the 32 MB L2), +10–13% at 256².
+  boundary-cell u store is removed. `bench --backends cuda,wgpu`: +16.3% at ≥ 1024² isothermal (2,874 → 3,343 MLUPS
+  on CUDA, as 84/72 B predicts), +14.5% thermal (130/114 B), +62–68% at 512² (the lattice fits in the 32 MB L2), +10–13% at 256².
   A first version stored u where a flag set inside the unrolled pull loop marked a pressure-outlet read: wgpu's
   256² kernel became 20% slower than storing every step; the mask-based rule is faster everywhere. A `step(1)` loop
   gains nothing (every step is a last step): the run loop's batches are what benefit.

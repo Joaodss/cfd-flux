@@ -31,7 +31,7 @@ with everything tested and committed.
 - **Not obvious:** the samples are fused (fields computed inside the box filter, one thread per output word), so
   no full-resolution scratch buffer is needed (it would be 400 MB at 4096²); f16 values are written two per
   32-bit word on both GPU backends (WGSL has no 16-bit storage), padded at an odd count.
-- **`skip_macro`:** +16.5% at ≥ 1024² isothermal on both GPU engines (exactly 84/72 B), +12% thermal, +65–74% at
+- **`skip_macro`:** +16.3–16.8% at ≥ 1024² isothermal on both GPU engines (84/72 B), +14.5–14.8% thermal (130/114 B), +62–68% at
   512² (the lattice then fits the L2 cache). Storing u only where a flag set inside the pull loop said a
   pressure outlet had read it made wgpu's 256² kernel 20% slower than storing every step; storing it on every
   cell with a boundary link (`mask != 0`, known before the loop) is faster everywhere. A mutation (no u store on
