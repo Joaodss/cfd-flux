@@ -88,9 +88,12 @@ __device__ __forceinline__ float collide_thermal_pair(
     return new_i + new_o;
 }
 
-// The step, with the thermal lattice compiled in or out (a template argument plays the role of
-// WGSL's pipeline-overridable `THERMAL` constant).
-template <bool THERMAL>
+// The step, with the thermal lattice compiled in or out and the macroscopic stores on or off (template
+// arguments play the role of WGSL's pipeline-overridable `THERMAL` and `WRITE_MACRO` constants).
+// Without `WRITE_MACRO` (the `skip_macro` steps, design proposal §7) ρ, u and θ are not stored,
+// except u on cells with a boundary link (pressure-outlet links read their cell's u on the next
+// step); the status word is still written. The last step of every `step` call stores them, so every read sees fresh values.
+template <bool THERMAL, bool WRITE_MACRO>
 __device__ __forceinline__ void step(
     const Params P,
     const unsigned short* __restrict__ flags,
@@ -220,9 +223,13 @@ __device__ __forceinline__ void step(
     moving += collide_pair(P, f_dst, 6u, k, f[6], f[8], drho, rho, u, usq, force, uf);
     // Rest population by difference: Σ f̃* = Δρ exactly (the Guo source sums to zero).
     f_dst[k] = drho - moving;
-    mac[k] = rho;
-    mac[n + k] = u.x;
-    mac[2u * n + k] = u.y;
+    if (WRITE_MACRO) {
+        mac[k] = rho;
+    }
+    if (WRITE_MACRO || mask != 0u) {
+        mac[n + k] = u.x;
+        mac[2u * n + k] = u.y;
+    }
     // Divergence check on values read from memory (ADR-019): a NaN anywhere in a cell reaches its
     // rest population, so this flags a divergence one step after it appears.
     bool finite = finite_bits(f[0]);
@@ -233,7 +240,9 @@ __device__ __forceinline__ void step(
         moving_g += collide_thermal_pair(P, g_dst, 1u, k, g[1], g[3], theta, u);
         moving_g += collide_thermal_pair(P, g_dst, 2u, k, g[2], g[4], theta, u);
         g_dst[k] = theta - moving_g;
-        mac[3u * n + k] = theta;
+        if (WRITE_MACRO) {
+            mac[3u * n + k] = theta;
+        }
         finite = finite && finite_bits(g[0]);
     }
     if (!finite) {
@@ -254,7 +263,7 @@ extern "C" __global__ void stream_collide(
     float* __restrict__ g_dst,
     float* __restrict__ mac
 ) {
-    step<false>(P, flags, bc_slot, bc, f_src, f_dst, g_src, g_dst, mac);
+    step<false, true>(P, flags, bc_slot, bc, f_src, f_dst, g_src, g_dst, mac);
 }
 
 extern "C" __global__ void stream_collide_thermal(
@@ -268,5 +277,34 @@ extern "C" __global__ void stream_collide_thermal(
     float* __restrict__ g_dst,
     float* __restrict__ mac
 ) {
-    step<true>(P, flags, bc_slot, bc, f_src, f_dst, g_src, g_dst, mac);
+    step<true, true>(P, flags, bc_slot, bc, f_src, f_dst, g_src, g_dst, mac);
+}
+
+// The `skip_macro` variants (no ρ/u/θ stores but the ones pressure outlets read).
+extern "C" __global__ void stream_collide_skip(
+    const Params P,
+    const unsigned short* __restrict__ flags,
+    const unsigned* __restrict__ bc_slot,
+    const BcParams* __restrict__ bc,
+    const float* __restrict__ f_src,
+    float* __restrict__ f_dst,
+    const float* __restrict__ g_src,
+    float* __restrict__ g_dst,
+    float* __restrict__ mac
+) {
+    step<false, false>(P, flags, bc_slot, bc, f_src, f_dst, g_src, g_dst, mac);
+}
+
+extern "C" __global__ void stream_collide_thermal_skip(
+    const Params P,
+    const unsigned short* __restrict__ flags,
+    const unsigned* __restrict__ bc_slot,
+    const BcParams* __restrict__ bc,
+    const float* __restrict__ f_src,
+    float* __restrict__ f_dst,
+    const float* __restrict__ g_src,
+    float* __restrict__ g_dst,
+    float* __restrict__ mac
+) {
+    step<true, false>(P, flags, bc_slot, bc, f_src, f_dst, g_src, g_dst, mac);
 }

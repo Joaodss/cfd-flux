@@ -13,6 +13,10 @@ use std::fmt::Write as _;
 use std::mem::{offset_of, size_of};
 
 use cfd_core::domain::{flags, BcParams, Domain, LINKS, OPPOSITE};
+use cfd_core::sample::{
+    components, OutputCoefficients, Precision, Sample, SampleData, SampleField, SampleSpec,
+};
+use cfd_core::scene::OutputField;
 
 use crate::config::LbmConfig;
 use crate::lattice::{W5, W9};
@@ -118,6 +122,291 @@ pub fn bc_words(bc: &[BcParams]) -> Vec<f32> {
         .collect()
 }
 
+/// Fields the sampling kernels can produce (`SampleParams::fields[i][0]`).
+pub fn sample_kind(field: OutputField) -> Option<u32> {
+    Some(match field {
+        OutputField::Velocity => 0,
+        OutputField::Pressure => 1,
+        OutputField::Density => 2,
+        OutputField::Temperature => 3,
+        OutputField::Vorticity => 4,
+        OutputField::FillFraction => return None,
+    })
+}
+
+const SAMPLE_KINDS: [(&str, OutputField); 5] = [
+    ("SAMPLE_VELOCITY", OutputField::Velocity),
+    ("SAMPLE_PRESSURE", OutputField::Pressure),
+    ("SAMPLE_DENSITY", OutputField::Density),
+    ("SAMPLE_TEMPERATURE", OutputField::Temperature),
+    ("SAMPLE_VORTICITY", OutputField::Vorticity),
+];
+
+/// Most fields one sample can hold (every kind once).
+pub const MAX_SAMPLE_FIELDS: usize = SAMPLE_KINDS.len();
+
+/// One sampling launch (a [`SampleSpec`]): sizes, the output layout and the `f32` conversion
+/// coefficients, `#[repr(C)]`, 176 bytes. wgpu uploads it as a uniform (`SampleParams` in
+/// `cfd-gpu/shaders/sample.wgsl`); CUDA passes it by value (`cfd-cuda/kernels/sample.cu`), with
+/// the `f64` coefficients in [`SampleCoefficients`].
+///
+/// The output is one buffer of 32-bit words: each field starts at a word offset and holds
+/// `out_w · out_h · components` values, as `f32` or as pairs of f16 per word (the last word of
+/// an odd count padded with 0).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[repr(C)]
+pub struct SampleParams {
+    pub w: u32,
+    pub h: u32,
+    pub n: u32,
+    /// Bit 0: periodic along x; bit 1: periodic along y.
+    pub periodic: u32,
+    /// Box-filter factor (≥ 1).
+    pub factor: u32,
+    pub out_w: u32,
+    pub out_h: u32,
+    /// 1: f16 output, 0: f32.
+    pub f16: u32,
+    /// Number of fields (entries of `fields`).
+    pub count: u32,
+    pub _pad0: [u32; 3],
+    /// Per field: kind ([`sample_kind`]), components, first output word, number of words.
+    pub fields: [[u32; 4]; MAX_SAMPLE_FIELDS],
+    /// `dt / dx` (velocity: `u_lb / velocity_factor`).
+    pub velocity_factor: f32,
+    /// `c_s² ρ₀ / velocity_factor²` (gauge pressure per unit of `ρ − 1`).
+    pub pressure_factor: f32,
+    pub rho0: f32,
+    pub t_ref: f32,
+    pub delta_t: f32,
+    /// `1 / dt`.
+    pub vorticity_scale: f32,
+    /// Hydrostatic pressure at cell `(x, y)`: `hydro_a + hydro_x · x + hydro_y · y`.
+    pub hydro_a: f32,
+    pub hydro_x: f32,
+    pub hydro_y: f32,
+    pub _pad1: [f32; 3],
+}
+
+impl SampleParams {
+    /// The 44 words of the struct (`f32` fields by their bits), for byte uploads.
+    pub fn to_words(&self) -> Vec<u32> {
+        let mut w = vec![
+            self.w,
+            self.h,
+            self.n,
+            self.periodic,
+            self.factor,
+            self.out_w,
+            self.out_h,
+            self.f16,
+            self.count,
+        ];
+        w.extend(self._pad0);
+        w.extend(self.fields.iter().flatten());
+        w.extend(
+            [
+                self.velocity_factor,
+                self.pressure_factor,
+                self.rho0,
+                self.t_ref,
+                self.delta_t,
+                self.vorticity_scale,
+                self.hydro_a,
+                self.hydro_x,
+                self.hydro_y,
+            ]
+            .map(f32::to_bits),
+        );
+        w.extend(self._pad1.map(f32::to_bits));
+        w
+    }
+}
+
+/// The `f64` coefficients of [`FieldSet::from_lattice`](cfd_core::solver::FieldSet::from_lattice),
+/// for the CUDA kernel, which reproduces it bit for bit (96 bytes).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[repr(C)]
+pub struct SampleCoefficients {
+    pub velocity_factor: f64,
+    pub cs2: f64,
+    pub rho0: f64,
+    pub velocity_factor2: f64,
+    pub dx: f64,
+    pub gravity_x: f64,
+    pub gravity_y: f64,
+    pub reference_x: f64,
+    pub reference_y: f64,
+    pub t_ref: f64,
+    pub delta_t: f64,
+    pub vorticity_scale: f64,
+}
+
+impl SampleCoefficients {
+    pub fn new(c: &OutputCoefficients) -> Self {
+        Self {
+            velocity_factor: c.velocity_factor,
+            cs2: c.cs2,
+            rho0: c.rho0,
+            velocity_factor2: c.velocity_factor2,
+            dx: c.dx,
+            gravity_x: c.gravity[0],
+            gravity_y: c.gravity[1],
+            reference_x: c.reference[0],
+            reference_y: c.reference[1],
+            t_ref: c.t_ref,
+            delta_t: c.delta_t,
+            vorticity_scale: c.vorticity_scale,
+        }
+    }
+}
+
+/// The layout of one sample in the output buffer of the sampling kernels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SampleLayout {
+    pub params: SampleParams,
+    /// The fields produced, in order (the spec's fields the domain can produce).
+    pub fields: Vec<OutputField>,
+    /// Total 32-bit words of the output.
+    pub words: usize,
+}
+
+impl SampleLayout {
+    pub fn new(d: &Domain, spec: &SampleSpec) -> Self {
+        let c = OutputCoefficients::new(d);
+        let fields = spec.resolved(d.physics.thermal());
+        let (out_w, out_h) = spec.out_size(d.width, d.height);
+        let f16 = spec.precision == Precision::F16;
+        let mut p = SampleParams {
+            w: d.width,
+            h: d.height,
+            n: d.width * d.height,
+            periodic: d.periodic[0] as u32 | (d.periodic[1] as u32) << 1,
+            factor: spec.factor.max(1),
+            out_w,
+            out_h,
+            f16: f16 as u32,
+            count: fields.len() as u32,
+            velocity_factor: c.velocity_factor as f32,
+            pressure_factor: (c.cs2 * c.rho0 / c.velocity_factor2) as f32,
+            rho0: c.rho0 as f32,
+            t_ref: c.t_ref as f32,
+            delta_t: c.delta_t as f32,
+            vorticity_scale: c.vorticity_scale as f32,
+            hydro_a: (c.rho0
+                * (c.gravity[0] * (0.5 * c.dx - c.reference[0])
+                    + c.gravity[1] * (0.5 * c.dx - c.reference[1]))) as f32,
+            hydro_x: (c.rho0 * c.gravity[0] * c.dx) as f32,
+            hydro_y: (c.rho0 * c.gravity[1] * c.dx) as f32,
+            ..Default::default()
+        };
+        let mut words = 0usize;
+        for (i, &f) in fields.iter().enumerate() {
+            let comps = components(f) as usize;
+            let values = out_w as usize * out_h as usize * comps;
+            let len = if f16 { values.div_ceil(2) } else { values };
+            p.fields[i] = [
+                sample_kind(f).expect("resolved fields have a kind"),
+                comps as u32,
+                words as u32,
+                len as u32,
+            ];
+            words += len;
+        }
+        Self {
+            params: p,
+            fields,
+            words,
+        }
+    }
+
+    /// Splits the downloaded words into a [`Sample`].
+    pub fn sample(&self, spec: &SampleSpec, step: u64, time: f64, words: &[u32]) -> Sample {
+        let p = &self.params;
+        let fields = self
+            .fields
+            .iter()
+            .zip(&p.fields)
+            .map(|(&field, &[_, comps, offset, len])| {
+                let raw = &words[offset as usize..(offset + len) as usize];
+                let values = (p.out_w * p.out_h * comps) as usize;
+                let data = if p.f16 == 1 {
+                    let mut v: Vec<u16> = bytemuck::cast_slice(raw).to_vec();
+                    v.truncate(values);
+                    SampleData::F16(v)
+                } else {
+                    SampleData::F32(bytemuck::cast_slice(raw).to_vec())
+                };
+                SampleField {
+                    field,
+                    components: comps as u8,
+                    data,
+                }
+            })
+            .collect();
+        Sample {
+            spec: spec.clone(),
+            step,
+            time,
+            width: p.out_w,
+            height: p.out_h,
+            fields,
+        }
+    }
+}
+
+/// Byte offset of every named member of `SampleParams`.
+pub fn sample_params_fields() -> [(&'static str, usize); 19] {
+    [
+        ("w", offset_of!(SampleParams, w)),
+        ("h", offset_of!(SampleParams, h)),
+        ("n", offset_of!(SampleParams, n)),
+        ("periodic", offset_of!(SampleParams, periodic)),
+        ("factor", offset_of!(SampleParams, factor)),
+        ("out_w", offset_of!(SampleParams, out_w)),
+        ("out_h", offset_of!(SampleParams, out_h)),
+        ("f16", offset_of!(SampleParams, f16)),
+        ("count", offset_of!(SampleParams, count)),
+        ("fields", offset_of!(SampleParams, fields)),
+        ("velocity_factor", offset_of!(SampleParams, velocity_factor)),
+        ("pressure_factor", offset_of!(SampleParams, pressure_factor)),
+        ("rho0", offset_of!(SampleParams, rho0)),
+        ("t_ref", offset_of!(SampleParams, t_ref)),
+        ("delta_t", offset_of!(SampleParams, delta_t)),
+        ("vorticity_scale", offset_of!(SampleParams, vorticity_scale)),
+        ("hydro_a", offset_of!(SampleParams, hydro_a)),
+        ("hydro_x", offset_of!(SampleParams, hydro_x)),
+        ("hydro_y", offset_of!(SampleParams, hydro_y)),
+    ]
+}
+
+/// Byte offset of every member of `SampleCoefficients`.
+pub fn sample_coefficients_fields() -> [(&'static str, usize); 12] {
+    [
+        (
+            "velocity_factor",
+            offset_of!(SampleCoefficients, velocity_factor),
+        ),
+        ("cs2", offset_of!(SampleCoefficients, cs2)),
+        ("rho0", offset_of!(SampleCoefficients, rho0)),
+        (
+            "velocity_factor2",
+            offset_of!(SampleCoefficients, velocity_factor2),
+        ),
+        ("dx", offset_of!(SampleCoefficients, dx)),
+        ("gravity_x", offset_of!(SampleCoefficients, gravity_x)),
+        ("gravity_y", offset_of!(SampleCoefficients, gravity_y)),
+        ("reference_x", offset_of!(SampleCoefficients, reference_x)),
+        ("reference_y", offset_of!(SampleCoefficients, reference_y)),
+        ("t_ref", offset_of!(SampleCoefficients, t_ref)),
+        ("delta_t", offset_of!(SampleCoefficients, delta_t)),
+        (
+            "vorticity_scale",
+            offset_of!(SampleCoefficients, vorticity_scale),
+        ),
+    ]
+}
+
 /// Flag bits shared with the kernels.
 const FLAG_CONSTANTS: [(&str, u16); 14] = [
     ("FLOW_MASK", flags::FLOW_MASK),
@@ -198,6 +487,13 @@ pub fn wgsl_prelude() -> String {
     for (name, v) in FLAG_CONSTANTS {
         let _ = writeln!(s, "const {name}: u32 = {v}u;");
     }
+    for (name, f) in SAMPLE_KINDS {
+        let _ = writeln!(
+            s,
+            "const {name}: u32 = {}u;",
+            sample_kind(f).expect("a kind")
+        );
+    }
     s
 }
 
@@ -223,6 +519,13 @@ pub fn cuda_prelude() -> String {
     for (name, v) in FLAG_CONSTANTS {
         let _ = writeln!(s, "constexpr unsigned {name} = {v}u;");
     }
+    for (name, f) in SAMPLE_KINDS {
+        let _ = writeln!(
+            s,
+            "constexpr unsigned {name} = {}u;",
+            sample_kind(f).expect("a kind")
+        );
+    }
     s
 }
 
@@ -244,6 +547,16 @@ pub fn cuda_layout_checks() -> String {
     };
     check("Params", size_of::<KernelParams>(), &params_fields());
     check("BcParams", size_of::<BcParams>(), &bc_fields());
+    check(
+        "SampleParams",
+        size_of::<SampleParams>(),
+        &sample_params_fields(),
+    );
+    check(
+        "SampleCoefficients",
+        size_of::<SampleCoefficients>(),
+        &sample_coefficients_fields(),
+    );
     s
 }
 
@@ -299,5 +612,64 @@ mod tests {
         let c = cuda_layout_checks();
         assert!(c.contains("static_assert(sizeof(Params) == 64,"));
         assert!(c.contains("__builtin_offsetof(BcParams, heat_flux) == 16"));
+        assert!(c.contains("static_assert(sizeof(SampleParams) == 176,"));
+        assert!(c.contains("static_assert(sizeof(SampleCoefficients) == 96,"));
+        assert!(p.contains("constexpr unsigned SAMPLE_VORTICITY = 4u;"));
+    }
+
+    #[test]
+    fn sample_params_are_words_in_member_order() {
+        assert_eq!(size_of::<SampleParams>(), 176);
+        let p = SampleParams {
+            count: 2,
+            fields: [[1, 2, 3, 4]; MAX_SAMPLE_FIELDS],
+            velocity_factor: 0.5,
+            hydro_y: -2.0,
+            ..Default::default()
+        };
+        let words = p.to_words();
+        assert_eq!(words.len(), 44);
+        let at = |name: &str| {
+            sample_params_fields()
+                .iter()
+                .find(|f| f.0 == name)
+                .unwrap()
+                .1
+                / 4
+        };
+        assert_eq!(words[at("count")], 2);
+        assert_eq!(words[at("fields") + 5], 2);
+        assert_eq!(f32::from_bits(words[at("velocity_factor")]), 0.5);
+        assert_eq!(f32::from_bits(words[at("hydro_y")]), -2.0);
+    }
+
+    #[test]
+    fn sample_layouts_pack_fields_in_order() {
+        let d = Domain::from_scene(
+            &cfd_core::examples::channel(),
+            &cfd_core::DomainOptions::default(),
+        )
+        .unwrap();
+        let spec = SampleSpec {
+            fields: vec![
+                OutputField::Pressure,
+                OutputField::Temperature,
+                OutputField::Velocity,
+            ],
+            factor: 3,
+            precision: Precision::F16,
+        };
+        let l = SampleLayout::new(&d, &spec);
+        let (ow, oh) = (d.width.div_ceil(3), d.height.div_ceil(3));
+        // No thermal lattice in the channel: temperature is skipped.
+        assert_eq!(l.fields, [OutputField::Pressure, OutputField::Velocity]);
+        let p_words = (ow * oh).div_ceil(2);
+        assert_eq!(l.params.fields[0], [1, 1, 0, p_words]);
+        assert_eq!(l.params.fields[1], [0, 2, p_words, ow * oh]);
+        assert_eq!(l.words, (p_words + ow * oh) as usize);
+        // Splitting the output drops the padding half-word of an odd count.
+        let s = l.sample(&spec, 7, 0.5, &vec![0x3c00_3c00; l.words]);
+        assert_eq!(s.fields[0].data.len(), (ow * oh) as usize);
+        assert_eq!(s.fields[0].data.to_f32()[0], 1.0);
     }
 }

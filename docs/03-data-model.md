@@ -126,14 +126,31 @@ The direction order (rest, E, N, W, S, NE, NW, SW, SE) is `domain::LINKS`; D2Q5 
 ## 6. Results
 
 ### 6.1 Frame
-Implemented in `crates/cfd-io/src/frame.rs`:
+Implemented in `crates/cfd-io/src/frame.rs` (LFFR v2; v1 frames are still read):
 ```
-magic "LFFR" | version u16 | header length u32 | JSON header | zstd(field data)
-FrameHeader { jobId, frameIndex, step, simTime, width, height, fields: [FieldDesc] }
+magic "LFFR" | version u16 = 2 | header length u32 | JSON header | payload
+FrameHeader { jobId, frameIndex, step, simTime, width, height, codec, fields: [FieldDesc] }
 FieldDesc   { name, components (1|2), dtype (f16|f32) }
+codec       "shuffle+lz4" (written) | "zstd" (every v1 frame; no `codec` field there) | "none"
+payload     shuffle+lz4: per field, in header order: u32 length L | L bytes of lz4 block(shuffle(field bytes))
+            zstd:        zstd(field 0 bytes ‖ field 1 bytes ‖ …)
+            none:        field 0 bytes ‖ field 1 bytes ‖ …
 ```
-- **Stored frames:** f32 at full resolution every output interval (`frames/NNNNNN.bin`); `GET …/frames/{n}?dtype=f16` converts on the fly.
+- **Field bytes:** `width · height · components` little-endian values (f16 or f32), row-major from the bottom-left
+  corner, components interleaved.
+- **Byte shuffle** (as in HDF5/Blosc): the `m` values of `s` bytes of a field are stored as every value's byte 0,
+  then every byte 1, … (`out[b·m + i] = in[i·s + b]`). The sign/exponent bytes of neighbouring values are alike and
+  compress; the low mantissa bytes are noise. Each field is one lz4 *block* (the raw LZ4 block format, no frame
+  header or checksum; its decompressed size is known from the header), compressed in parallel on the server.
+- **Decoding in the browser (Phase 5a):** read the prefix and the JSON header, then per field an LZ4 block
+  decoder into a buffer of the known size (a ≈ 100-line TypeScript function, or `lz4js`'s block decoder), the
+  unshuffle loop, and a `Float32Array`/`Uint16Array` view of the result (f16 is uploaded as-is to a `R16F`/
+  `RG16F` texture). No WASM is needed; v1 (zstd) frames only exist in result directories written before v2 and
+  are not streamed.
+- **Stored frames:** f32 at full resolution every output interval (`frames/NNNNNN.bin`); `GET …/frames/{n}?dtype=f16` converts on the fly. Stored and stream frames are *samples* computed on the GPU when the job runs there ([ADR-028](07-decisions-and-questions.md)): bit-identical to the CPU conversion on CUDA, within ~1e-7 on wgpu.
 - **Stream frames** (WebSocket): **f16**, only the fields the viewer asked for, box-downsampled by the integer factor `k = ceil(max(width, height) / maxSize)` to `ceil(width/k) × ceil(height/k)` (partial blocks at the edges average what they have). `frameIndex` is the output index; a snapshot (a frame taken for a viewer that joined a paused job, or a new stream format) repeats the last output index and carries its own `step`.
+- **Cost** (1024² cavity, 3 fields, f32): 13.6 ms to 63.7% of the raw size, decoded in 17 ms; `ruzstd` (v1) took
+  328 ms for 91% ([benchmarks](benchmarks.md#frame-codec-lffr-v2--amd-ryzen-7-3700x-2026-10-16)).
 
 ### 6.2 Storage
 ```

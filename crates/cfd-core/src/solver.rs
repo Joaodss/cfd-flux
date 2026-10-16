@@ -4,6 +4,7 @@
 //! output fields ([`FieldSet::from_lattice`]) is shared, so every backend reports identical units.
 
 use crate::domain::{flags, Domain};
+use crate::sample::{LatticeSamples, PendingSamples, SampleSpec};
 use crate::scene::OutputField;
 use crate::units::UnitSystem;
 
@@ -361,6 +362,18 @@ pub trait Solver: Send {
         Box::new(ReadyFields {
             step: self.steps_done(),
             fields: Some(self.lattice_fields()),
+        })
+    }
+
+    /// Starts producing output samples (physical fields, optionally downsampled, f32 or f16),
+    /// one per spec, and returns a handle to collect them while stepping goes on. GPU backends
+    /// compute them on the device and copy only the result; the default copies the lattice
+    /// fields ([`request_fields`](Self::request_fields)) and leaves the conversion to whoever
+    /// collects them ([`SampleSet::into_samples`](crate::sample::SampleSet::into_samples)).
+    fn request_samples(&mut self, specs: &[SampleSpec]) -> Box<dyn PendingSamples> {
+        Box::new(LatticeSamples {
+            pending: self.request_fields(),
+            specs: specs.to_vec(),
         })
     }
 

@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 cfd-core.workspace = true
+bytemuck.workspace = true
 cfd-lbm.workspace = true
 cudarc = { workspace = true, optional = true }
 libloading = { workspace = true, optional = true }

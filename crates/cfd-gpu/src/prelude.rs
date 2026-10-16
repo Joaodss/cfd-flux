@@ -9,6 +9,7 @@ pub use cfd_lbm::abi::wgsl_prelude as prelude;
 pub const COMMON_WGSL: &str = include_str!("../shaders/common.wgsl");
 pub const LBM_WGSL: &str = include_str!("../shaders/lbm.wgsl");
 pub const REDUCE_WGSL: &str = include_str!("../shaders/reduce.wgsl");
+pub const SAMPLE_WGSL: &str = include_str!("../shaders/sample.wgsl");
 
 /// The complete source of one shader module: prelude + common types + kernel.
 pub fn source(kernel: &str) -> String {

@@ -27,11 +27,12 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use cfd_core::domain::Domain;
+use cfd_core::sample::{OutputCoefficients, PendingSamples, SampleSpec};
 use cfd_core::solver::{
     BackendKind, Diagnostics, ElementForce, LatticeFields, PendingFields, ReadyFields, Solver,
     SolverError,
 };
-use cfd_lbm::abi::{bc_words, KernelParams};
+use cfd_lbm::abi::{bc_words, KernelParams, SampleCoefficients, SampleLayout};
 use cfd_lbm::shared::{
     diagnostics_from_partials, equilibrium_populations, initial_fields, wall_forces, wall_links,
     WallLink,
@@ -41,7 +42,7 @@ use cudarc::driver::sys::CUevent_flags;
 use cudarc::driver::{CudaEvent, CudaStream, DriverError, PinnedHostSlice};
 
 use crate::raw::{pinned_zeroed, Kernels, Lattice, LatticeInit, REDUCE_BLOCK};
-use crate::readback::{split_fields, CudaFields, Pool, Snapshot};
+use crate::readback::{split_fields, CudaFields, CudaSamples, Pool, SampleBuffer, Snapshot};
 use crate::{CudaDevice, CudaError};
 
 /// Default threads per block of the stream-collide kernel.
@@ -96,6 +97,9 @@ pub struct CudaLbm {
     in_flight: VecDeque<Batch>,
     status_pool: Vec<PinnedHostSlice<f32>>,
     snapshots: Pool<Snapshot>,
+    sample_buffers: Pool<SampleBuffer>,
+    /// `f64` coefficients of the output conversion (constant for a domain).
+    coefficients: SampleCoefficients,
     kernels: Kernels,
     domain: Domain,
     config: LbmConfig,
@@ -178,6 +182,8 @@ impl CudaLbm {
             in_flight: VecDeque::new(),
             status_pool: Vec::new(),
             snapshots: Pool::default(),
+            sample_buffers: Pool::default(),
+            coefficients: SampleCoefficients::new(&OutputCoefficients::new(&domain)),
             kernels,
             domain,
             config,
@@ -237,18 +243,25 @@ impl CudaLbm {
     }
 
     /// Queues `steps` steps, then a copy of the status word and an event. Whole graphs are
-    /// replayed while the populations are in `f[0]`; single launches do the rest.
-    fn submit_batch(&mut self, steps: u32) -> Result<(), DriverError> {
+    /// replayed while the populations are in `f[0]`; single launches do the rest. With
+    /// `skip_macro`, every step skips the macroscopic stores but the last one when `write_last`
+    /// (the last step of a `step` call): one graph per variant, the writing step launched alone.
+    fn submit_batch(&mut self, steps: u32, write_last: bool) -> Result<(), DriverError> {
         let graph = self.options.graph_steps;
+        let skip = self.config.skip_macro;
         let mut left = steps;
         while left > 0 {
-            if graph > 0 && left >= graph && self.steps.is_multiple_of(2) {
+            let write = !skip || (write_last && left == 1);
+            // Steps a graph may take: all but a final writing step.
+            let room = if skip && write_last { left - 1 } else { left };
+            if graph > 0 && room >= graph && self.steps.is_multiple_of(2) {
                 self.lattice.replay_steps(
                     &self.kernels,
                     &self.stream,
                     self.options.block,
                     &self.params,
                     graph,
+                    !skip,
                 )?;
                 self.steps += graph as u64;
                 left -= graph;
@@ -260,6 +273,7 @@ impl CudaLbm {
                     self.options.block,
                     &self.params,
                     parity,
+                    write,
                 )?;
                 self.steps += 1;
                 left -= 1;
@@ -335,6 +349,47 @@ impl CudaLbm {
             thermal: self.thermal,
         })
     }
+
+    /// Queues one sampling kernel per spec on the compute stream (the output buffers are the
+    /// snapshot: the next steps may overwrite `mac` as soon as they have run) and copies the
+    /// outputs to pinned memory on the copy stream.
+    fn start_samples(&mut self, specs: &[SampleSpec]) -> Result<CudaSamples, DriverError> {
+        let mut buffers = Vec::with_capacity(specs.len());
+        for spec in specs {
+            let layout = SampleLayout::new(&self.domain, spec);
+            let words = layout.words.max(1);
+            let mut buffer = match self.sample_buffers.take_where(|b| b.words == words) {
+                Some(b) => b,
+                None => SampleBuffer {
+                    device: self.stream.alloc_zeros(words)?,
+                    host: pinned_zeroed(self.dev.context(), words)?,
+                    words,
+                },
+            };
+            self.lattice.sample(
+                &self.kernels,
+                &self.stream,
+                &layout.params,
+                &self.coefficients,
+                &mut buffer.device,
+            )?;
+            buffers.push((spec.clone(), layout, Some(buffer)));
+        }
+        let sampled = self.stream.record_event(EVENT_FLAGS)?;
+        self.copy_stream.wait(&sampled)?;
+        for (_, _, b) in &mut buffers {
+            let b = b.as_mut().expect("just filled");
+            self.copy_stream.memcpy_dtoh(&b.device, &mut b.host)?;
+        }
+        let done = self.copy_stream.record_event(EVENT_FLAGS)?;
+        Ok(CudaSamples {
+            done,
+            buffers,
+            pool: self.sample_buffers.clone(),
+            step: self.steps,
+            time: self.domain.units.steps_to_time(self.steps),
+        })
+    }
 }
 
 impl Solver for CudaLbm {
@@ -358,7 +413,7 @@ impl Solver for CudaLbm {
         let mut left = n;
         while left > 0 {
             let chunk = left.min(MAX_BATCH);
-            self.submit_batch(chunk).map_err(driver)?;
+            self.submit_batch(chunk, chunk == left).map_err(driver)?;
             left -= chunk;
             while self.in_flight.len() > MAX_IN_FLIGHT {
                 let b = self.in_flight.pop_front().expect("in flight");
@@ -395,6 +450,17 @@ impl Solver for CudaLbm {
                     self.n,
                     self.thermal,
                 )),
+            }),
+        }
+    }
+
+    fn request_samples(&mut self, specs: &[SampleSpec]) -> Box<dyn PendingSamples> {
+        match self.start_samples(specs) {
+            Ok(pending) => Box::new(pending),
+            // Device error: NaN samples, from NaN lattice fields; `step` reports the error.
+            Err(_) => Box::new(cfd_core::sample::LatticeSamples {
+                pending: self.request_fields(),
+                specs: specs.to_vec(),
             }),
         }
     }

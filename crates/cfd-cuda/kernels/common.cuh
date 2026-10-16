@@ -43,3 +43,48 @@ __device__ __forceinline__ bool finite_bits(float v) {
 __device__ __forceinline__ float dot_c(unsigned i, float2 v) {
     return float(LINK_X[i]) * v.x + float(LINK_Y[i]) * v.y;
 }
+
+// One sampling launch: `cfd_lbm::abi::SampleParams` (176 bytes), passed by value.
+struct SampleParams {
+    unsigned w;
+    unsigned h;
+    unsigned n;
+    unsigned periodic;
+    // Box-filter factor (≥ 1) and output size.
+    unsigned factor;
+    unsigned out_w;
+    unsigned out_h;
+    // 1: f16 output (two values per word), 0: f32.
+    unsigned f16;
+    unsigned count;
+    unsigned _pad0[3];
+    // Per field: kind (SAMPLE_*), components, first output word, number of words.
+    uint4 fields[5];
+    // f32 coefficients (used by the WGSL kernel; CUDA uses `SampleCoefficients`).
+    float velocity_factor;
+    float pressure_factor;
+    float rho0;
+    float t_ref;
+    float delta_t;
+    float vorticity_scale;
+    float hydro_a;
+    float hydro_x;
+    float hydro_y;
+    float _pad1[3];
+};
+
+// `cfd_lbm::abi::SampleCoefficients`: the f64 coefficients of `FieldSet::from_lattice` (96 bytes).
+struct SampleCoefficients {
+    double velocity_factor;
+    double cs2;
+    double rho0;
+    double velocity_factor2;
+    double dx;
+    double gravity_x;
+    double gravity_y;
+    double reference_x;
+    double reference_y;
+    double t_ref;
+    double delta_t;
+    double vorticity_scale;
+};

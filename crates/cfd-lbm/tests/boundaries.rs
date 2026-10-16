@@ -11,6 +11,7 @@ use common::*;
 fn bgk() -> LbmConfig {
     LbmConfig {
         collision: Collision::Bgk,
+        ..Default::default()
     }
 }
 

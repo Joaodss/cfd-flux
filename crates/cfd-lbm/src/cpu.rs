@@ -82,7 +82,7 @@ impl CpuLbm {
         self.params.body_force = force.map(|v| v as f32);
     }
 
-    fn step_once(&mut self) {
+    fn step_once(&mut self, write_macro: bool) {
         let (w, n) = (self.params.w, self.params.n);
         let thermal = !self.g.is_empty();
         // ~4 blocks per thread balances the load without much overhead.
@@ -128,11 +128,11 @@ impl CpuLbm {
         if thermal {
             blocks
                 .into_par_iter()
-                .for_each(|b| update_block::<true>(params, &src, b));
+                .for_each(|b| update_block::<true>(params, &src, b, write_macro));
         } else {
             blocks
                 .into_par_iter()
-                .for_each(|b| update_block::<false>(params, &src, b));
+                .for_each(|b| update_block::<false>(params, &src, b, write_macro));
         }
         std::mem::swap(&mut self.f, &mut self.f_next);
         std::mem::swap(&mut self.g, &mut self.g_next);
@@ -163,8 +163,9 @@ impl Solver for CpuLbm {
     }
 
     fn step(&mut self, n: u32) -> Result<(), SolverError> {
-        for _ in 0..n {
-            self.step_once();
+        // With `skip_macro`, only the last step stores ρ, u, θ (they are read only between calls).
+        for s in 0..n {
+            self.step_once(!self.config.skip_macro || s + 1 == n);
             self.steps += 1;
         }
         if self.rho.par_iter().any(|v| !v.is_finite()) {

@@ -13,6 +13,11 @@
 // thermal code is compiled out.
 override WG: u32 = 128u;
 override THERMAL: bool = false;
+// Whether ρ, u and θ are stored (`skip_macro`, design proposal §7: off on every step of a `step` call
+// but the last). u is still stored on cells with a boundary link (`mask != 0`): pressure-outlet links
+// read their cell's u on the next step. A superset of those cells, known before the pull loop: a
+// flag set inside the loop instead made the 256² kernel 20% slower on the RTX 4060.
+override WRITE_MACRO: bool = true;
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read> cell_flags: array<u32>;
@@ -216,9 +221,13 @@ fn stream_collide(
     moving += collide_pair(6u, k, f[6], f[8], drho, rho, u, usq, force, uf);
     // Rest population by difference: Σ f̃* = Δρ exactly (the Guo source sums to zero).
     f_dst[k] = drho - moving;
-    mac[k] = rho;
-    mac[n + k] = u.x;
-    mac[2u * n + k] = u.y;
+    if (WRITE_MACRO) {
+        mac[k] = rho;
+    }
+    if (WRITE_MACRO || mask != 0u) {
+        mac[n + k] = u.x;
+        mac[2u * n + k] = u.y;
+    }
     // Divergence check on values read from memory: GPU compilers may assume that arithmetic
     // results are never NaN/Inf (Vulkan does not require their preservation) and fold the test
     // away, but they cannot assume it of loads. A NaN anywhere in a cell reaches its rest
@@ -231,7 +240,9 @@ fn stream_collide(
         moving_g += collide_thermal_pair(1u, k, g[1], g[3], theta, u);
         moving_g += collide_thermal_pair(2u, k, g[2], g[4], theta, u);
         g_dst[k] = theta - moving_g;
-        mac[3u * n + k] = theta;
+        if (WRITE_MACRO) {
+            mac[3u * n + k] = theta;
+        }
         finite = finite && is_finite(g[0]);
     }
     if (!finite) {

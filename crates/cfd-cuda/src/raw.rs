@@ -12,7 +12,7 @@ use std::ffi::{c_char, CString};
 use std::path::Path;
 use std::sync::Arc;
 
-use cfd_lbm::abi::KernelParams;
+use cfd_lbm::abi::{KernelParams, SampleCoefficients, SampleParams};
 use cudarc::driver::sys as driver_sys;
 use cudarc::driver::{
     CudaContext, CudaFunction, CudaGraph, CudaModule, CudaSlice, CudaStream, CudaViewMut,
@@ -208,6 +208,23 @@ struct ParamsArg(KernelParams);
 // and no pointers, so its bytes are a valid `Params` (checked by the generated `static_assert`s).
 unsafe impl DeviceRepr for ParamsArg {}
 
+/// `SampleParams` and `SampleCoefficients` as kernel arguments (wrapped for the same reason).
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct SampleParamsArg(SampleParams);
+
+// SAFETY: `#[repr(C)]`, only `u32`/`f32` fields with explicit padding, no pointers; checked
+// against the CUDA `SampleParams` by the generated `static_assert`s.
+unsafe impl DeviceRepr for SampleParamsArg {}
+
+#[repr(transparent)]
+#[derive(Clone, Copy)]
+struct CoefficientsArg(SampleCoefficients);
+
+// SAFETY: `#[repr(C)]`, twelve `f64` fields, no padding, no pointers; checked against the CUDA
+// `SampleCoefficients` by the generated `static_assert`s.
+unsafe impl DeviceRepr for CoefficientsArg {}
+
 /// `len` zeroed values of page-locked ("pinned") host memory, for downloads.
 ///
 /// The OS may move or swap out ordinary (pageable) memory, so the GPU cannot write into it
@@ -246,8 +263,11 @@ pub(crate) fn disable_event_tracking(ctx: &CudaContext) {
 pub(crate) struct Kernels {
     stream_collide: CudaFunction,
     stream_collide_thermal: CudaFunction,
+    stream_collide_skip: CudaFunction,
+    stream_collide_thermal_skip: CudaFunction,
     diagnostics: CudaFunction,
     gather_links: CudaFunction,
+    sample: CudaFunction,
 }
 
 impl Kernels {
@@ -255,8 +275,11 @@ impl Kernels {
         Ok(Self {
             stream_collide: module.load_function("stream_collide")?,
             stream_collide_thermal: module.load_function("stream_collide_thermal")?,
+            stream_collide_skip: module.load_function("stream_collide_skip")?,
+            stream_collide_thermal_skip: module.load_function("stream_collide_thermal_skip")?,
             diagnostics: module.load_function("diagnostics")?,
             gather_links: module.load_function("gather_links")?,
+            sample: module.load_function("sample")?,
         })
     }
 }
@@ -305,8 +328,9 @@ unsafe impl Send for StepGraph {}
 /// macroscopic buffers can be read and overwritten through views, but not replaced (their
 /// lengths are fixed).
 pub(crate) struct Lattice {
-    /// Declared first, so it is dropped before the buffers its kernels point to.
-    graph: Option<StepGraph>,
+    /// Declared first, so they are dropped before the buffers their kernels point to. One per
+    /// variant: `[skip_macro, write_macro]`.
+    graphs: [Option<StepGraph>; 2],
     n: usize,
     thermal: bool,
     flags: CudaSlice<u16>,
@@ -351,7 +375,7 @@ impl Lattice {
             init.links
         };
         Ok(Self {
-            graph: None,
+            graphs: [None, None],
             n,
             thermal: init.thermal,
             flags: stream.clone_htod(init.flags)?,
@@ -399,7 +423,9 @@ impl Lattice {
         assert_eq!(p.links as usize, self.link_count, "params for other links");
     }
 
-    /// One stream-collide step from `f[parity]` into `f[1 − parity]` (and the same for `g`).
+    /// One stream-collide step from `f[parity]` into `f[1 − parity]` (and the same for `g`), storing
+    /// the macroscopic fields if `write` (else only what pressure outlets read).
+    #[allow(clippy::too_many_arguments)]
     pub fn stream_collide(
         &mut self,
         k: &Kernels,
@@ -407,6 +433,7 @@ impl Lattice {
         block: u32,
         p: &KernelParams,
         parity: usize,
+        write: bool,
     ) -> Result<(), DriverError> {
         self.check_params(p);
         assert!((1..=1024).contains(&block), "block size");
@@ -414,10 +441,11 @@ impl Lattice {
         let (f_src, f_dst) = if parity == 0 { (&*f0, f1) } else { (&*f1, f0) };
         let [g0, g1] = &mut self.g;
         let (g_src, g_dst) = if parity == 0 { (&*g0, g1) } else { (&*g1, g0) };
-        let func = if self.thermal {
-            &k.stream_collide_thermal
-        } else {
-            &k.stream_collide
+        let func = match (self.thermal, write) {
+            (true, true) => &k.stream_collide_thermal,
+            (false, true) => &k.stream_collide,
+            (true, false) => &k.stream_collide_thermal_skip,
+            (false, false) => &k.stream_collide_skip,
         };
         let cfg = LaunchConfig {
             grid_dim: ((self.n as u32).div_ceil(block), 1, 1),
@@ -437,7 +465,7 @@ impl Lattice {
             .arg(g_dst)
             .arg(&mut self.mac);
         // SAFETY: (1) the arguments are, in order, `Params` by value and the eight pointers of
-        // `stream_collide(_thermal)` in `lbm.cu` (`BcParams*` receives the `bc` words, 32 bytes
+        // `stream_collide(_thermal)(_skip)` in `lbm.cu` (`BcParams*` receives the `bc` words, 32 bytes
         // per record). (2) With `p.n == n == w·h` (checked above) threads `k ≥ n` return; every
         // population index is `i·n + c` with `i < 9` (`< 5` for `g`, which has 5n values when
         // thermal) and `c` a cell index wrapped into `[0, n)`; `mac` indices are `≤ 4n`; `bc` is
@@ -448,8 +476,9 @@ impl Lattice {
     }
 
     /// `steps` stream-collide steps (an even number, starting from `f[0]`, so they end in `f[0]`)
-    /// replayed from a CUDA graph, captured on first use and again whenever the parameters, the
-    /// block size or the number of steps change.
+    /// replayed from a CUDA graph of the `write` variant, captured on first use and again whenever
+    /// the parameters, the block size or the number of steps change.
+    #[allow(clippy::too_many_arguments)]
     pub fn replay_steps(
         &mut self,
         k: &Kernels,
@@ -457,22 +486,24 @@ impl Lattice {
         block: u32,
         p: &KernelParams,
         steps: u32,
+        write: bool,
     ) -> Result<(), DriverError> {
         assert!(
             steps > 0 && steps.is_multiple_of(2),
             "graphs hold whole ping-pong cycles"
         );
-        let current = self
-            .graph
+        let v = write as usize;
+        let current = self.graphs[v]
             .as_ref()
             .is_some_and(|g| g.steps == steps && g.block == block && g.params == *p);
         if !current {
-            self.graph = None;
-            self.graph = Some(self.capture(k, stream, block, p, steps)?);
+            self.graphs[v] = None;
+            self.graphs[v] = Some(self.capture(k, stream, block, p, steps, write)?);
         }
-        self.graph.as_ref().expect("captured").graph.launch()
+        self.graphs[v].as_ref().expect("captured").graph.launch()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn capture(
         &mut self,
         k: &Kernels,
@@ -480,6 +511,7 @@ impl Lattice {
         block: u32,
         p: &KernelParams,
         steps: u32,
+        write: bool,
     ) -> Result<StepGraph, DriverError> {
         // Thread-local mode: only this thread's CUDA calls are restricted during the capture, so
         // solvers on other threads keep working.
@@ -487,7 +519,7 @@ impl Lattice {
             .begin_capture(driver_sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)?;
         let mut launched = Ok(());
         for s in 0..steps {
-            launched = self.stream_collide(k, stream, block, p, (s % 2) as usize);
+            launched = self.stream_collide(k, stream, block, p, (s % 2) as usize, write);
             if launched.is_err() {
                 break;
             }
@@ -562,6 +594,75 @@ impl Lattice {
         // `reduce.cu`. (2) Threads `l ≥ p.links = link_count` return; `links` and `link_out` hold
         // `link_count` values; each link's cell is `< n` and its direction `< 9` (checked in
         // `new`), so `OPPOSITE[d]·n + cell < 9n`. (3) Queued on the compute stream after the steps.
+        unsafe { launch.launch(cfg) }.map(|_| ())
+    }
+
+    /// One output sample (`sample.cu`) into `out`, which must hold `words` words (the total of
+    /// `p.fields`' lengths).
+    pub fn sample(
+        &self,
+        k: &Kernels,
+        stream: &CudaStream,
+        p: &SampleParams,
+        c: &SampleCoefficients,
+        out: &mut CudaSlice<f32>,
+    ) -> Result<(), DriverError> {
+        assert_eq!(p.n as usize, self.n, "sample params for another grid");
+        assert_eq!((p.w * p.h) as usize, self.n, "inconsistent grid size");
+        assert!(
+            p.factor >= 1 && p.out_w == p.w.div_ceil(p.factor) && p.out_h == p.h.div_ceil(p.factor)
+        );
+        let count = p.count as usize;
+        assert!(count <= p.fields.len(), "at most one entry per kind");
+        let mut words = 0u64;
+        let mut widest = 0u32;
+        for &[kind, comps, offset, len] in &p.fields[..count] {
+            let values = p.out_w as u64 * p.out_h as u64 * comps as u64;
+            let expected = if p.f16 == 1 {
+                values.div_ceil(2)
+            } else {
+                values
+            };
+            assert!(
+                kind < 5 && (1..=2).contains(&comps),
+                "field kind and components"
+            );
+            assert!(
+                kind != 3 || self.thermal,
+                "temperature needs the thermal planes"
+            );
+            assert_eq!(len as u64, expected, "field length");
+            assert_eq!(offset as u64, words, "fields are packed in order");
+            words += len as u64;
+            widest = widest.max(len);
+        }
+        assert!(words <= out.len() as u64, "output buffer too small");
+        if count == 0 || widest == 0 {
+            return Ok(());
+        }
+        const BLOCK: u32 = 128;
+        let cfg = LaunchConfig {
+            grid_dim: (widest.div_ceil(BLOCK), count as u32, 1),
+            block_dim: (BLOCK, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let (pa, ca) = (SampleParamsArg(*p), CoefficientsArg(*c));
+        let mut launch = stream.launch_builder(&k.sample);
+        launch
+            .arg(&pa)
+            .arg(&ca)
+            .arg(&self.flags)
+            .arg(&self.mac)
+            .arg(out);
+        // SAFETY: (1) matches `sample(SampleParams, SampleCoefficients, const unsigned short*,
+        // const float*, unsigned*)` in `sample.cu` (the output words are `f32`-sized). (2) Block
+        // `y < count` handles field `y`; threads `t ≥ len` return, the others write
+        // `out[offset + t]`, below `words ≤ out.len()` (fields packed in order, checked above).
+        // Cells read are `y · w + x` with `x < w`, `y < h` (output pixels cover the grid with
+        // `factor`, neighbours are wrapped or bounds-checked), so `< n = flags.len()`; `mac`
+        // planes are read below `4n` (temperature, plane 3, only with the thermal lattice).
+        // (3) Queued on the compute stream after the steps that wrote `mac`; `out` is not used
+        // by other work until the copy that follows on the same stream's event.
         unsafe { launch.launch(cfg) }.map(|_| ())
     }
 }

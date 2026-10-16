@@ -41,6 +41,8 @@ cudarc = { version = "0.19.10", default-features = false, features = [
 ] }
 half = "2.4"
 libloading = "0.9"
+# Frame payloads (Q13): fast block compression; the `unsafe` encoder, the safe decoder.
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "safe-decode", "checked-decode"] }
 naga = { version = "30", features = ["wgsl-in"] }
 png = "0.18"
 pollster = "1"

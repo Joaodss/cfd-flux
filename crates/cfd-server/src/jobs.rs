@@ -26,6 +26,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
+use cfd_core::sample::SampleSpec;
+use cfd_core::scene::OutputField;
 use cfd_engines::{EngineKind, Inventory, SolverChoice};
 use cfd_job::{
     Command, FrameEvent, JobContext, JobObserver, LocalStore, Outcome, Prepared, Progress,
@@ -367,6 +369,15 @@ impl JobObserver for Reporter {
 
     fn wants_frames(&self) -> bool {
         true
+    }
+
+    fn stream_specs(
+        &self,
+        frame_fields: &[OutputField],
+        width: u32,
+        height: u32,
+    ) -> Vec<SampleSpec> {
+        self.job.hub.stream_specs(frame_fields, width, height)
     }
 
     fn frame(&self, f: &FrameEvent) {

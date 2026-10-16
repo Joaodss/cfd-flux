@@ -94,7 +94,16 @@ fn dot(c: [i32; 2], v: [f32; 2]) -> f32 {
     c[0] as f32 * v[0] + c[1] as f32 * v[1]
 }
 
-pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: Block) {
+/// With `write_macro == false` (the `skip_macro` steps, design proposal §7) the macroscopic outputs
+/// are not stored, except u on cells with a boundary link (pressure-outlet links read their cell's
+/// u on the next step): nothing else reads them between two `step` calls, and the last step of a
+/// call always writes them.
+pub(crate) fn update_block<const THERMAL: bool>(
+    p: &StepParams,
+    s: &Source,
+    b: Block,
+    write_macro: bool,
+) {
     let Block {
         y0,
         f: fo,
@@ -222,9 +231,13 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
             }
             // Rest population by difference: Σ f̃* = Δρ exactly (the Guo source sums to zero).
             fo[0][local] = drho - moving;
-            rho_o[local] = rho;
-            ux_o[local] = u[0];
-            uy_o[local] = u[1];
+            if write_macro {
+                rho_o[local] = rho;
+            }
+            if write_macro || mask != 0 {
+                ux_o[local] = u[0];
+                uy_o[local] = u[1];
+            }
 
             if THERMAL {
                 let go = go.as_mut().expect("thermal outputs");
@@ -244,7 +257,9 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
                     moving += gi + go_;
                 }
                 go[0][local] = theta - moving;
-                theta_o[local] = theta;
+                if write_macro {
+                    theta_o[local] = theta;
+                }
             }
         }
     }

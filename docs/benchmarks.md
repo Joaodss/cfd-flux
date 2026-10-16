@@ -22,6 +22,8 @@ cargo run --release -p cfd-cli -- bench --backends cuda,wgpu     # interleaved, 
   queued steps have finished (`Solver::finish`).
 - `--backends a,b` builds one solver per backend for each case, warms each up, then alternates the
   timed repetitions (a, b, a, b, …), so whatever else the machine does affects every column alike.
+- Since 2026-10-16 the GPU and CPU kernels skip the ρ/u/θ stores on all but the last step of each `step` call
+  (`skip_macro`, ADR-029); `--no-skip-macro` measures the previous behaviour.
 - Add a new section per machine/backend; keep old ones for comparison.
 
 ## Run loop and server — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-13
@@ -48,6 +50,115 @@ output thread). Release builds, normal desktop (not quiet).
   0.70 s (2,080 MLUPS) with the default sampling every 6 steps (output interval / 10): batches then end every
   6 steps, and each sample (a reduction, the forces and a copy of the fields for the probes) costs ≈ 0.26 ms
   on this grid.
+
+## `skip_macro` — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-16
+
+Windows 11, driver 617.42 (CUDA 13.4), NVRTC 13.4 (`sm_89` cubin), wgpu 30 on Vulkan, block/workgroup 128, TRT.
+The stream-collide kernel stores ρ, u and θ only on the last step of each `step` call (and u on cells with a
+boundary link, which pressure outlets read; ADR-029); `--no-skip-macro` stores them every step, as before. Two
+interleaved runs back to back on a quiet desktop (re-run; the no-skip column matches the 2026-10-13 table below),
+5 repetitions of ≥ 2 s each, median (min–max) MLUPS.
+
+```bash
+cargo run --release -p cfd-cli -- bench --backends cuda,wgpu --sizes 256,512,1024,2048,4000 --repeat 5
+cargo run --release -p cfd-cli -- bench --backends cuda,wgpu --sizes 256,512,1024,2048,4000 --repeat 5 --no-skip-macro
+```
+
+| Model | Grid | cuda, every step | cuda, `skip_macro` | gain | wgpu, every step | wgpu, `skip_macro` | gain |
+|-------|------|---:|---:|---:|---:|---:|---:|
+| isothermal (D2Q9) | 256² | 9850 (9815–9865) | 11119 (11097–11142) | +12.9% | 9776 (9751–9818) | 10970 (10932–10991) | +12.2% |
+| isothermal (D2Q9) | 512² | 7694 (7682–7696) | 12955 (12923–12968) | +68.4% | 7836 (7832–7891) | 12727 (12697–12740) | +62.4% |
+| isothermal (D2Q9) | 1024² | 2874 (2873–2874) | 3343 (3341–3343) | +16.3% | 2878 (2876–2879) | 3350 (3348–3350) | +16.4% |
+| isothermal (D2Q9) | 2048² | 2858 (2858–2859) | 3336 (3334–3336) | +16.7% | 2867 (2867–2868) | 3348 (3347–3349) | +16.8% |
+| isothermal (D2Q9) | 4000² | 2883 (2883–2883) | 3367 (3367–3367) | +16.8% | 2881 (2880–2881) | 3365 (3364–3365) | +16.8% |
+| thermal (D2Q9 + D2Q5) | 256² | 6464 (6451–6478) | 7222 (7216–7231) | +11.7% | 5482 (5342–5503) | 5746 (5611–5764) | +4.8% |
+| thermal (D2Q9 + D2Q5) | 512² | 1977 (1976–1977) | 2774 (2773–2774) | +40.3% | 1952 (1951–1953) | 2544 (2515–2555) | +30.3% |
+| thermal (D2Q9 + D2Q5) | 1024² | 1881 (1881–1881) | 2154 (2154–2154) | +14.5% | 1883 (1883–1883) | 2157 (2155–2157) | +14.6% |
+| thermal (D2Q9 + D2Q5) | 2048² | 1872 (1871–1872) | 2149 (2148–2149) | +14.8% | 1872 (1872–1872) | 2148 (2148–2149) | +14.7% |
+| thermal (D2Q9 + D2Q5) | 4000² | 1900 (1894–1900) | 2178 (2178–2178) | +14.6% | 1900 (1895–1900) | 2178 (2177–2178) | +14.6% |
+
+- **≥ 1024² (bandwidth-bound):** +16.3–16.8% isothermal and +14.5–14.8% thermal, as the bytes per update predict
+  (84 → 72 B: 1.167; 130 → 114 B: 1.14). At 3,340–3,370 MLUPS the isothermal kernel moves ≈ 241 GB/s of the
+  RTX 4060's 272 GB/s. (A first run with a video playing gave +16.5% / +12%.)
+- **512²:** the whole lattice (22 MB with the macroscopic planes, 19 MB without) fits in the 32 MB L2 cache much
+  better without the planes: +62–68% isothermal.
+- **The first version stored u where a flag set inside the pull loop said a pressure-outlet link had read it;**
+  that made wgpu's 256² kernel 20% *slower* than storing every step (7,657 vs 9,601 MLUPS) while CUDA gained. Storing
+  u on every cell with a boundary link (`mask != 0`, known before the loop, a superset of those cells) fixed it
+  everywhere (10,970 on a quiet desktop) and is what all three backends do now.
+
+## On-device output sampling — NVIDIA GeForce RTX 4060 (8 GB) / Ryzen 7 3700X, 2026-10-16
+
+One output frame of a lid-driven cavity as a server job takes it: the stored frame (velocity, pressure,
+vorticity; f32, full resolution) and one stream format (the same fields, f16, box-downsampled to ≤ 1024 cells
+per side), produced by `Solver::request_samples` (ADR-028) or by the CPU path it replaces (`request_fields`,
+`FieldSet::from_lattice`, the box filter and the f16 conversion on the output thread). Medians of 7 frames,
+release build, nothing queued on the GPU; "copy" is the wait for the device's work and the transfer (in a job it
+overlaps with the next batch of steps), "conversion" is the output thread's work before encoding.
+
+```bash
+cargo run --release -p cfd-cli --example sampling -- cuda,wgpu,cpu 1024,2048
+```
+
+| Engine | Grid | Path | Copy (wait) | Conversion | Encoding (2 frames) | Total |
+|---|---|---|---:|---:|---:|---:|
+| cuda | 1024×1025 | `request_samples` (device) | 7.29 ms | 0.00 ms | 5.90 ms | 13.19 ms |
+| cuda | 1024×1025 | CPU conversion | 4.49 ms | 32.52 ms | 6.24 ms | 43.25 ms |
+| wgpu | 1024×1025 | `request_samples` (device) | 9.60 ms | 0.00 ms | 6.05 ms | 15.65 ms |
+| wgpu | 1024×1025 | CPU conversion | 7.35 ms | 32.70 ms | 6.37 ms | 46.42 ms |
+| cpu | 1024×1025 | `request_samples` (CPU default) | 1.76 ms | 34.84 ms | 5.86 ms | 42.46 ms |
+| cuda | 2048×2049 | `request_samples` (device) | 26.80 ms | 0.00 ms | 19.27 ms | 46.07 ms |
+| cuda | 2048×2049 | CPU conversion | 17.38 ms | 121.43 ms | 20.39 ms | 159.20 ms |
+| wgpu | 2048×2049 | `request_samples` (device) | 33.82 ms | 0.00 ms | 19.33 ms | 53.15 ms |
+| wgpu | 2048×2049 | CPU conversion | 27.62 ms | 121.75 ms | 20.57 ms | 169.94 ms |
+| cpu | 2048×2049 | `request_samples` (CPU default) | 7.19 ms | 126.36 ms | 20.49 ms | 154.04 ms |
+
+- The output thread's work per frame drops 3.3× (1024²) to 3.5× (2048²); what is left is encoding (byte shuffle +
+  lz4 of 25 MB at 2048²). The device copy is longer than the lattice copy: the samples are 1.5× the bytes (16 B
+  per cell f32 + 8 B f16 stream vs 16 B of ρ, u, θ) plus the kernel.
+- **Server stream of the cylinder** (`cfd-cli submit scenes/cylinder-re100.json --cancel-after 3`, two runs): CUDA
+  194–222 frames/s (codec only: 162–187; a quiet-desktop re-run with `skip_macro`: 214–215), wgpu 96–118, CPU 51–53. At 442 × 84 the output thread no longer sets
+  the pace; the run loop does (its diagnostics, forces and probe samples every 6 steps end the batches).
+
+## Frame codec (LFFR v2) — AMD Ryzen 7 3700X, 2026-10-16
+
+Release build, `cfd-cli`'s `frame_codec` example on stored frames (velocity, pressure, vorticity = 4 values per
+cell) of the cylinder at t = 0.5 s (442 × 84) and of a Re = 100 lid-driven cavity at 1024 × 1025 (CUDA). Median
+times; encoding runs the per-field lz4 blocks on rayon's pool (one thread in brackets).
+
+```bash
+cargo run --release -p cfd-cli --example frame_codec -- cavity-scene cavity-1024.json
+cargo run --release -p cfd-cli -- run cavity-1024.json --out cavity --backend cuda
+cargo run --release -p cfd-cli --example frame_codec -- bench cyl/frames/000050.bin cavity/frames/000004.bin
+```
+
+| Frame | v1: `ruzstd` fastest | v2: shuffle + `lz4_flex` | Decode v1 → v2 |
+|-------|---------------------:|-------------------------:|---------------:|
+| Cylinder f32 (594 kB raw) | 96.7%, 13.3 ms | 76.4%, 0.47 ms (0.59) | 1.16 → 0.39 ms |
+| Cylinder f16 (297 kB raw) | 96.3%, 7.3 ms | 71.3%, 0.32 ms (0.40) | 0.42 → 0.45 ms |
+| 1024² f32 (16.8 MB raw) | 91.3%, 328 ms | 63.7%, 13.6 ms (21.9) | 34 → 17 ms |
+| 1024² f16 (8.4 MB raw) | 80.7%, 158 ms | 49.9%, 10.2 ms (14.9) | 30 → 17 ms |
+
+- **The shuffle:** a blocked loop (64 values per block, fixed inner trip counts, no bounds checks) takes 4.8 ms for
+  the 1024² f32 fields into a reused buffer (6.8 ms with a fresh allocation, whose page faults cost ≈ 2 ms) against
+  13.8 ms for the plain indexed loop. Baseline x86-64 has no byte-shuffle instruction (`pshufb` is SSSE3), so LLVM
+  cannot do much better: with `-C target-cpu=x86-64-v3` the same loop takes 3.0 ms, and a SWAR variant (4 values →
+  one `u32` per byte plane) 3.3 ms at baseline. At ≈ 10 GB/s of memory traffic the rest is bandwidth.
+- Packing the values (f32 → bytes, or f32 → f16 with `half`'s F16C path) adds 0.04–0.3 ms on the cylinder and
+  6–7 ms at 1024² (allocation included).
+
+**Server stream** (`cfd-cli submit scenes/cylinder-re100.json --cancel-after 3`, frames every 60 steps, stored as
+f32 and streamed as f16; two runs):
+
+| Engine | Frames/s v1 (2026-10-13) | Frames/s v2 | First frame | Cancel took effect after |
+|--------|---:|---:|---:|---:|
+| CUDA | 37.5 | 162–187 | 0.05 s | 19–26 ms |
+| wgpu | 38.6 | 99–111 | 0.03 s | 17–21 ms |
+| CPU (16 threads) | 29.4 | 50 | 0.04 s | 112–164 ms |
+
+Encoding no longer sets the pace: the output thread's remaining work per frame is the conversion to physical
+fields (`FieldSet::from_lattice`), the f16 conversion and the box filter on the CPU — the on-device sampling
+kernels' job (Phase 3).
 
 ## Frame encoding (open question Q13) — AMD Ryzen 7 3700X, 2026-10-13
 

@@ -9,6 +9,8 @@ rust-version.workspace = true
 
 [dependencies]
 base64.workspace = true
+bytemuck.workspace = true
+half.workspace = true
 ruzstd.workspace = true
 schemars.workspace = true
 serde.workspace = true
