@@ -77,3 +77,4 @@ with everything tested and committed.
 - Benchmarks re-run on a quiet desktop: `skip_macro` +16.3–16.8% isothermal, +14.5–14.8% thermal at ≥ 1024²
   (2,874 → 3,343 MLUPS on CUDA); sampling, codec and stream results unchanged within a few percent (CUDA stream
   214–215 frames/s).
+- Next session: [prompt-phase4.md](prompt-phase4.md) (housekeeping, then the Phase 4 editor design proposal).
