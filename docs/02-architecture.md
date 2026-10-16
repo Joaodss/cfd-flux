@@ -22,7 +22,7 @@
 │                 │               └── CPU backend (rayon + SIMD)            │
 │                 ├── ProjectionSolver (Phase 7)                            │
 │                 └── ... (FLIP, compressible FV, AI surrogate)             │
-│  Output: field sampling → encoding (f16 + zstd) → stream/disk             │
+│  Output: field sampling → encoding (f16, shuffle + lz4) → stream/disk     │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -124,7 +124,7 @@ Shared by the CLI and the server (ADR-024):
 | CPU parallelism | **rayon** + `std::simd`/`wide` | OpenMP via C++ |
 | HTTP/WS | **axum** | actix-web |
 | Serialisation | **serde** (JSON) + custom binary / MessagePack | Protobuf/FlatBuffers |
-| Compression | **zstd** (pure-Rust `ruzstd`) | lz4 |
+| Compression | **byte shuffle + lz4** (pure-Rust `lz4_flex`) for frames (Q13); zstd (`ruzstd`) for scene layers | zstd for frames (v1: 20–25× slower, 25–35% larger without a shuffle) |
 | Database | SQLite → Postgres (`sqlx`) | — |
 | Frontend | **TypeScript + Vite + React** | Svelte, SolidJS |
 | Result rendering | WebGL2 → WebGPU | Canvas2D (slow) |

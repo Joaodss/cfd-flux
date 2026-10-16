@@ -119,7 +119,7 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 - [x] M — Job manager: in-memory queue, states (`queued/running/paused/completed/failed/cancelled`), per-device semaphore, cooperative cancellation. *(One semaphore per physical device; `interrupted` on restart; ADR-025.)*
 - [x] M — Worker loop on a dedicated thread (the solver never blocks the tokio runtime); channel for frames. The loop processes **commands** (`Step`, `Pause`, `Resume`, `Cancel`, `PatchCells`, `SetParam`) between batches of steps — the foundation of interactive mode ([ADR-011](07-decisions-and-questions.md)). *(`cfd_job::run`: batches of at most ≈ 50 ms, an output thread for frames, `Snapshot` for viewers; stepping is the loop itself rather than a `Step` command; `PatchCells`/`SetParam` answer "not supported" until 5b; ADR-025.)*
 - [x] M — WebSocket: progress (JSON) + frames (binary); backpressure (if the client is slow, drop intermediate *streaming* frames but keep all of them on disk).
-- [ ] S — Frame codec (Q13): LFFR v2 with a `codec` field; byte shuffle + `lz4_flex` for stored f32 and streamed f16 frames (12× faster than `ruzstd` and 25–35% smaller on 1024² fields), v1 (zstd) frames still readable; a vectorised shuffle.
+- [x] S — Frame codec (Q13): LFFR v2 with a `codec` field; byte shuffle + `lz4_flex` for stored f32 and streamed f16 frames (12× faster than `ruzstd` and 25–35% smaller on 1024² fields), v1 (zstd) frames still readable; a vectorised shuffle.
 - [ ] M — *(moved from Phase 2a)* GPU sampling kernel: physical output fields and f16 conversion on the device before the copy, so streamed frames cross the bus at half size.
 - [ ] M — Macroscopic fields only when needed: the stream-collide kernel writes ρ, ux, uy (and θ) only on steps whose fields are read (frames, probes, diagnostics), through a second kernel variant (`write_macro`), so the other steps move 72 instead of 84 B per cell (≈ +15% MLUPS on every GPU backend; parity stays exact, since only stores are skipped). Issues and solutions:
   - Pressure outlets read the cell's velocity from the previous step (`mac`) → keep writing u for the cells that have an anti-bounce-back link (a few columns), or recompute it from the cell's own populations.
@@ -154,7 +154,7 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 
 **Goal:** view and analyse results.
 
-- [ ] M — WebSocket client, frame decoding (zstd via WASM or `fzstd`), frame buffer in memory/IndexedDB.
+- [ ] M — WebSocket client, frame decoding (LFFR v2: LZ4 block decoding + unshuffle in TypeScript, 03 §6.1), frame buffer in memory/IndexedDB.
 - [ ] M — WebGL2 rendering: float16 textures, colour maps (viridis, coolwarm, …), automatic/manual scale, legend, solid mask.
 - [ ] M — Field selector (velocity, pressure, temperature, vorticity), vectors, streamlines (RK4 on the client).
 - [ ] M — Animated tracer particles/smoke (GPU on the client).
@@ -292,7 +292,7 @@ Only starts once 2D is complete and validated. It is practically a second projec
 |------|--------|------------|
 | LBM instability at high Re | Simulations blow up | TRT/MRT, LES, stability warnings, automatic resolution increase |
 | Buffer limits in wgpu/WebGPU (e.g. 128 MB–2 GB per binding) | Large domains fail | Split `f_i` across several buffers; query adapter limits |
-| Bandwidth for streaming frames | Sluggish UI | f16 + zstd + downsampling + dropping intermediate frames |
+| Bandwidth for streaming frames | Sluggish UI | f16 + shuffle + lz4 + downsampling + dropping intermediate frames |
 | GPU/CPU numerical differences | Flaky tests | Relative tolerances, tests on aggregated quantities |
 | Kernel rewrites in three languages (f16 storage, Esoteric Pull, free surface) | Effort multiplied by 3, bugs in one backend | Order the rewrites (Phase 8a after 6a/5b), constants and helpers generated from Rust, shared parity harness, bit-identical tests where the arithmetic does not change |
 | Cards with little memory or bandwidth | Small grids or slow runs for some users | Memory-lean storage (Phase 8a) and capability-based defaults from `/api/capabilities` |

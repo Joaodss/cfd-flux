@@ -49,6 +49,46 @@ output thread). Release builds, normal desktop (not quiet).
   6 steps, and each sample (a reduction, the forces and a copy of the fields for the probes) costs ≈ 0.26 ms
   on this grid.
 
+## Frame codec (LFFR v2) — AMD Ryzen 7 3700X, 2026-10-16
+
+Release build, `cfd-cli`'s `frame_codec` example on stored frames (velocity, pressure, vorticity = 4 values per
+cell) of the cylinder at t = 0.5 s (442 × 84) and of a Re = 100 lid-driven cavity at 1024 × 1025 (CUDA). Median
+times; encoding runs the per-field lz4 blocks on rayon's pool (one thread in brackets).
+
+```bash
+cargo run --release -p cfd-cli --example frame_codec -- cavity-scene cavity-1024.json
+cargo run --release -p cfd-cli -- run cavity-1024.json --out cavity --backend cuda
+cargo run --release -p cfd-cli --example frame_codec -- bench cyl/frames/000050.bin cavity/frames/000004.bin
+```
+
+| Frame | v1: `ruzstd` fastest | v2: shuffle + `lz4_flex` | Decode v1 → v2 |
+|-------|---------------------:|-------------------------:|---------------:|
+| Cylinder f32 (594 kB raw) | 96.7%, 13.3 ms | 76.4%, 0.47 ms (0.59) | 1.16 → 0.39 ms |
+| Cylinder f16 (297 kB raw) | 96.3%, 7.3 ms | 71.3%, 0.32 ms (0.40) | 0.42 → 0.45 ms |
+| 1024² f32 (16.8 MB raw) | 91.3%, 328 ms | 63.7%, 13.6 ms (21.9) | 34 → 17 ms |
+| 1024² f16 (8.4 MB raw) | 80.7%, 158 ms | 49.9%, 10.2 ms (14.9) | 30 → 17 ms |
+
+- **The shuffle:** a blocked loop (64 values per block, fixed inner trip counts, no bounds checks) takes 4.8 ms for
+  the 1024² f32 fields into a reused buffer (6.8 ms with a fresh allocation, whose page faults cost ≈ 2 ms) against
+  13.8 ms for the plain indexed loop. Baseline x86-64 has no byte-shuffle instruction (`pshufb` is SSSE3), so LLVM
+  cannot do much better: with `-C target-cpu=x86-64-v3` the same loop takes 3.0 ms, and a SWAR variant (4 values →
+  one `u32` per byte plane) 3.3 ms at baseline. At ≈ 10 GB/s of memory traffic the rest is bandwidth.
+- Packing the values (f32 → bytes, or f32 → f16 with `half`'s F16C path) adds 0.04–0.3 ms on the cylinder and
+  6–7 ms at 1024² (allocation included).
+
+**Server stream** (`cfd-cli submit scenes/cylinder-re100.json --cancel-after 3`, frames every 60 steps, stored as
+f32 and streamed as f16; two runs):
+
+| Engine | Frames/s v1 (2026-10-13) | Frames/s v2 | First frame | Cancel took effect after |
+|--------|---:|---:|---:|---:|
+| CUDA | 37.5 | 162–187 | 0.05 s | 19–26 ms |
+| wgpu | 38.6 | 99–111 | 0.03 s | 17–21 ms |
+| CPU (16 threads) | 29.4 | 50 | 0.04 s | 112–164 ms |
+
+Encoding no longer sets the pace: the output thread's remaining work per frame is the conversion to physical
+fields (`FieldSet::from_lattice`), the f16 conversion and the box filter on the CPU — the on-device sampling
+kernels' job (Phase 3).
+
 ## Frame encoding (open question Q13) — AMD Ryzen 7 3700X, 2026-10-13
 
 One thread, release build, a throwaway benchmark on two real frames (velocity, pressure, vorticity = 4 values
