@@ -81,6 +81,8 @@ pub struct EngineOptions {
     pub fmad: bool,
     /// Steps replayed per CUDA graph launch (even; 0 launches every step on its own).
     pub graph_steps: u32,
+    /// Skip the ρ/u/θ stores on steps whose fields are not read (`LbmConfig::skip_macro`).
+    pub skip_macro: bool,
 }
 
 impl Default for EngineOptions {
@@ -91,6 +93,7 @@ impl Default for EngineOptions {
             allow_software: false,
             fmad: false,
             graph_steps: DEFAULT_GRAPH_STEPS,
+            skip_macro: true,
         }
     }
 }
@@ -289,6 +292,7 @@ impl SolverChoice {
             threads: rayon::current_num_threads(),
             config: LbmConfig {
                 collision: opts.collision,
+                skip_macro: opts.skip_macro,
             },
             engine,
             workgroup: opts.workgroup,

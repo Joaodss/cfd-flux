@@ -13,6 +13,9 @@
 // thermal code is compiled out.
 override WG: u32 = 128u;
 override THERMAL: bool = false;
+// Whether ρ, u and θ are stored (`skip_macro`, design proposal §7: off on every step of a `step` call
+// but the last; u is still stored where a pressure-outlet link reads it on the next step).
+override WRITE_MACRO: bool = true;
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var<storage, read> cell_flags: array<u32>;
@@ -158,6 +161,8 @@ fn stream_collide(
 
     // ---- Flow pull ----
     var f: array<f32, 9>;
+    // Set when a pressure-outlet link reads this cell's velocity of the previous step.
+    var reads_u = false;
     if (mask == 0u) {
         for (var i = 0u; i < 9u; i++) {
             f[i] = f_src[i * n + ys[i] * w + xs[i]];
@@ -179,6 +184,7 @@ fn stream_collide(
                 }
                 // Anti-bounce-back with the outlet density and this cell's velocity (previous step).
                 case PRESSURE: {
+                    reads_u = true;
                     let u = vec2<f32>(mac[n + k], mac[2u * n + k]);
                     let cu = dot_c(i, u);
                     let usq = u.x * u.x + u.y * u.y;
@@ -216,9 +222,13 @@ fn stream_collide(
     moving += collide_pair(6u, k, f[6], f[8], drho, rho, u, usq, force, uf);
     // Rest population by difference: Σ f̃* = Δρ exactly (the Guo source sums to zero).
     f_dst[k] = drho - moving;
-    mac[k] = rho;
-    mac[n + k] = u.x;
-    mac[2u * n + k] = u.y;
+    if (WRITE_MACRO) {
+        mac[k] = rho;
+    }
+    if (WRITE_MACRO || reads_u) {
+        mac[n + k] = u.x;
+        mac[2u * n + k] = u.y;
+    }
     // Divergence check on values read from memory: GPU compilers may assume that arithmetic
     // results are never NaN/Inf (Vulkan does not require their preservation) and fold the test
     // away, but they cannot assume it of loads. A NaN anywhere in a cell reaches its rest
@@ -231,7 +241,9 @@ fn stream_collide(
         moving_g += collide_thermal_pair(1u, k, g[1], g[3], theta, u);
         moving_g += collide_thermal_pair(2u, k, g[2], g[4], theta, u);
         g_dst[k] = theta - moving_g;
-        mac[3u * n + k] = theta;
+        if (WRITE_MACRO) {
+            mac[3u * n + k] = theta;
+        }
         finite = finite && is_finite(g[0]);
     }
     if (!finite) {

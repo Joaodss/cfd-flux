@@ -68,6 +68,10 @@ pub struct EngineArgs {
     /// Steps replayed per CUDA graph launch (even; 0 launches every step on its own).
     #[arg(long, default_value_t = cfd_engines::DEFAULT_GRAPH_STEPS)]
     pub graph_steps: u32,
+    /// Store ρ, u and θ on every step instead of only on the last step of each batch (the
+    /// results are identical; for comparisons and benchmarks).
+    #[arg(long)]
+    pub no_skip_macro: bool,
 }
 
 impl SolverArgs {
@@ -102,6 +106,7 @@ impl EngineArgs {
             allow_software: self.allow_software,
             fmad: self.fmad,
             graph_steps: self.graph_steps,
+            skip_macro: !self.no_skip_macro,
         }
     }
 

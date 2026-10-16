@@ -1245,7 +1245,13 @@ mod tests {
     }
 
     fn cpu(collision: Collision) -> impl Fn(Domain) -> anyhow::Result<Box<dyn Solver>> + Sync {
-        move |d| Ok(Box::new(CpuLbm::new(d, LbmConfig { collision })) as Box<dyn Solver>)
+        move |d| {
+            let config = LbmConfig {
+                collision,
+                ..Default::default()
+            };
+            Ok(Box::new(CpuLbm::new(d, config)) as Box<dyn Solver>)
+        }
     }
 
     fn engine<'a>(label: &str, factory: SolverFactory<'a>) -> Engine<'a> {

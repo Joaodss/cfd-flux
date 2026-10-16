@@ -56,6 +56,7 @@ macro_rules! parity_tests {
             asynchronous_readback_matches_synchronous,
             sampling_matches_the_cpu_conversion,
             thermal_sampling_matches_the_cpu_conversion,
+            skipping_macro_stores_changes_nothing,
         );
     };
     (@cases $factory:path; $($case:ident),* $(,)?) => {
@@ -252,6 +253,7 @@ pub fn taylor_green_with_bgk(make: &Factory) {
     let d = domain(&scenes::periodic_box(48, 1e-3), 0.05);
     let config = LbmConfig {
         collision: Collision::Bgk,
+        ..Default::default()
     };
     check(
         "taylor-green bgk",
@@ -647,4 +649,68 @@ pub fn sampling_matches_the_cpu_conversion(make: &Factory) {
 pub fn thermal_sampling_matches_the_cpu_conversion(make: &Factory) {
     let d = domain(&scenes::heated_cavity(40, 1e5, 0.71), 0.08);
     check_sampling("sampling heated cavity", make, d, None, 800);
+}
+
+// ---- Macroscopic stores only when needed (design proposal §7) ----
+
+/// `skip_macro` stores ρ, u and θ only on the last step of each `step` call (and u on cells with
+/// a pressure-outlet link, which read it on the next step). Only stores are skipped, so a solver
+/// with it must give **exactly** (`==`) the fields, diagnostics and forces of one that stores
+/// them every step, after calls of every length — including the odd ones that end outside a CUDA
+/// graph. Runs on the cylinder (velocity inlet, pressure outlet), the thermal channel (every
+/// boundary kind, θ) and a periodic box.
+pub fn skipping_macro_stores_changes_nothing(make: &Factory) {
+    let cases = [
+        (
+            "cylinder",
+            domain(&scenes::schafer_turek(20, 1.5), 0.1),
+            None,
+        ),
+        ("thermal channel", thermal_channel(), None),
+        (
+            "periodic box",
+            domain(&scenes::periodic_box(32, 1e-3), 0.05),
+            Some(taylor_green(32, 0.05)),
+        ),
+    ];
+    for (name, d, initial) in cases {
+        let write_all = LbmConfig {
+            skip_macro: false,
+            ..Default::default()
+        };
+        let mut skip = make(d.clone(), LbmConfig::default());
+        let mut all = make(d, write_all);
+        if let Some(f) = &initial {
+            skip.set_equilibrium(f).unwrap();
+            all.set_equilibrium(f).unwrap();
+        }
+        for n in [1, 2, 7, 51, 100, 1203, 3] {
+            skip.step(n).unwrap();
+            all.step(n).unwrap();
+            let (a, b) = (skip.lattice_fields(), all.lattice_fields());
+            assert!(
+                a == b,
+                "{name} ({:?}): fields differ after a {n}-step call",
+                skip.backend()
+            );
+            assert_eq!(skip.diagnostics(), all.diagnostics(), "{name}: diagnostics");
+            assert_eq!(skip.forces(), all.forces(), "{name}: forces");
+        }
+        eprintln!(
+            "{name} ({:?}): skip_macro identical to storing every step over {} steps",
+            skip.backend(),
+            skip.steps_done()
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The CPU reference follows the same rule (no GPU needed).
+    #[test]
+    fn cpu_skip_macro_changes_nothing() {
+        skipping_macro_stores_changes_nothing(&|d, c| Box::new(CpuLbm::new(d, c)));
+    }
 }

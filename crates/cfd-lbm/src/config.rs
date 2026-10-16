@@ -20,9 +20,22 @@ impl Default for Collision {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LbmConfig {
     pub collision: Collision,
+    /// Store ρ, u and θ only on the last step of each `step(n)` call, when they can be read
+    /// (design proposal §7; on by default). Results are identical either way: only stores are
+    /// skipped. Off writes them every step (for comparisons and benchmarks).
+    pub skip_macro: bool,
+}
+
+impl Default for LbmConfig {
+    fn default() -> Self {
+        Self {
+            collision: Collision::default(),
+            skip_macro: true,
+        }
+    }
 }
 
 /// Relaxation rates `(ω⁺, ω⁻)` for the flow lattice, where `τ` sets the viscosity

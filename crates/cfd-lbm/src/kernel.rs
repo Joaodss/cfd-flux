@@ -94,7 +94,15 @@ fn dot(c: [i32; 2], v: [f32; 2]) -> f32 {
     c[0] as f32 * v[0] + c[1] as f32 * v[1]
 }
 
-pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: Block) {
+/// With `write_macro == false` (the `skip_macro` steps, design proposal §7) the macroscopic outputs
+/// are not stored, except u on cells that read it (a pressure-outlet link): nothing else reads them
+/// between two `step` calls, and the last step of a call always writes them.
+pub(crate) fn update_block<const THERMAL: bool>(
+    p: &StepParams,
+    s: &Source,
+    b: Block,
+    write_macro: bool,
+) {
     let Block {
         y0,
         f: fo,
@@ -152,6 +160,8 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
 
             // ---- Flow pull ----
             let mut f = [0.0f32; 9];
+            // Set when a pressure-outlet link reads this cell's velocity of the previous step.
+            let mut reads_u = false;
             if mask == 0 {
                 for i in 0..9 {
                     f[i] = s.f[i * n + ys[i] * w + xs[i]];
@@ -172,6 +182,7 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
                         flags::BOUNCE_BACK => out + 6.0 * W9[i] * dot(LINKS[i], bc.velocity),
                         // Anti-bounce-back with the outlet density and this cell's velocity.
                         flags::PRESSURE => {
+                            reads_u = true;
                             let u = [ux_o[local], uy_o[local]];
                             let cu = dot(LINKS[i], u);
                             let usq = u[0] * u[0] + u[1] * u[1];
@@ -222,9 +233,13 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
             }
             // Rest population by difference: Σ f̃* = Δρ exactly (the Guo source sums to zero).
             fo[0][local] = drho - moving;
-            rho_o[local] = rho;
-            ux_o[local] = u[0];
-            uy_o[local] = u[1];
+            if write_macro {
+                rho_o[local] = rho;
+            }
+            if write_macro || reads_u {
+                ux_o[local] = u[0];
+                uy_o[local] = u[1];
+            }
 
             if THERMAL {
                 let go = go.as_mut().expect("thermal outputs");
@@ -244,7 +259,9 @@ pub(crate) fn update_block<const THERMAL: bool>(p: &StepParams, s: &Source, b: B
                     moving += gi + go_;
                 }
                 go[0][local] = theta - moving;
-                theta_o[local] = theta;
+                if write_macro {
+                    theta_o[local] = theta;
+                }
             }
         }
     }

@@ -243,18 +243,25 @@ impl CudaLbm {
     }
 
     /// Queues `steps` steps, then a copy of the status word and an event. Whole graphs are
-    /// replayed while the populations are in `f[0]`; single launches do the rest.
-    fn submit_batch(&mut self, steps: u32) -> Result<(), DriverError> {
+    /// replayed while the populations are in `f[0]`; single launches do the rest. With
+    /// `skip_macro`, every step skips the macroscopic stores but the last one when `write_last`
+    /// (the last step of a `step` call): one graph per variant, the writing step launched alone.
+    fn submit_batch(&mut self, steps: u32, write_last: bool) -> Result<(), DriverError> {
         let graph = self.options.graph_steps;
+        let skip = self.config.skip_macro;
         let mut left = steps;
         while left > 0 {
-            if graph > 0 && left >= graph && self.steps.is_multiple_of(2) {
+            let write = !skip || (write_last && left == 1);
+            // Steps a graph may take: all but a final writing step.
+            let room = if skip && write_last { left - 1 } else { left };
+            if graph > 0 && room >= graph && self.steps.is_multiple_of(2) {
                 self.lattice.replay_steps(
                     &self.kernels,
                     &self.stream,
                     self.options.block,
                     &self.params,
                     graph,
+                    !skip,
                 )?;
                 self.steps += graph as u64;
                 left -= graph;
@@ -266,6 +273,7 @@ impl CudaLbm {
                     self.options.block,
                     &self.params,
                     parity,
+                    write,
                 )?;
                 self.steps += 1;
                 left -= 1;
@@ -405,7 +413,7 @@ impl Solver for CudaLbm {
         let mut left = n;
         while left > 0 {
             let chunk = left.min(MAX_BATCH);
-            self.submit_batch(chunk).map_err(driver)?;
+            self.submit_batch(chunk, chunk == left).map_err(driver)?;
             left -= chunk;
             while self.in_flight.len() > MAX_IN_FLIGHT {
                 let b = self.in_flight.pop_front().expect("in flight");

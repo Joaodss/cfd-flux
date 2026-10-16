@@ -263,6 +263,8 @@ pub(crate) fn disable_event_tracking(ctx: &CudaContext) {
 pub(crate) struct Kernels {
     stream_collide: CudaFunction,
     stream_collide_thermal: CudaFunction,
+    stream_collide_skip: CudaFunction,
+    stream_collide_thermal_skip: CudaFunction,
     diagnostics: CudaFunction,
     gather_links: CudaFunction,
     sample: CudaFunction,
@@ -273,6 +275,8 @@ impl Kernels {
         Ok(Self {
             stream_collide: module.load_function("stream_collide")?,
             stream_collide_thermal: module.load_function("stream_collide_thermal")?,
+            stream_collide_skip: module.load_function("stream_collide_skip")?,
+            stream_collide_thermal_skip: module.load_function("stream_collide_thermal_skip")?,
             diagnostics: module.load_function("diagnostics")?,
             gather_links: module.load_function("gather_links")?,
             sample: module.load_function("sample")?,
@@ -324,8 +328,9 @@ unsafe impl Send for StepGraph {}
 /// macroscopic buffers can be read and overwritten through views, but not replaced (their
 /// lengths are fixed).
 pub(crate) struct Lattice {
-    /// Declared first, so it is dropped before the buffers its kernels point to.
-    graph: Option<StepGraph>,
+    /// Declared first, so they are dropped before the buffers their kernels point to. One per
+    /// variant: `[skip_macro, write_macro]`.
+    graphs: [Option<StepGraph>; 2],
     n: usize,
     thermal: bool,
     flags: CudaSlice<u16>,
@@ -370,7 +375,7 @@ impl Lattice {
             init.links
         };
         Ok(Self {
-            graph: None,
+            graphs: [None, None],
             n,
             thermal: init.thermal,
             flags: stream.clone_htod(init.flags)?,
@@ -418,7 +423,9 @@ impl Lattice {
         assert_eq!(p.links as usize, self.link_count, "params for other links");
     }
 
-    /// One stream-collide step from `f[parity]` into `f[1 − parity]` (and the same for `g`).
+    /// One stream-collide step from `f[parity]` into `f[1 − parity]` (and the same for `g`), storing
+    /// the macroscopic fields if `write` (else only what pressure outlets read).
+    #[allow(clippy::too_many_arguments)]
     pub fn stream_collide(
         &mut self,
         k: &Kernels,
@@ -426,6 +433,7 @@ impl Lattice {
         block: u32,
         p: &KernelParams,
         parity: usize,
+        write: bool,
     ) -> Result<(), DriverError> {
         self.check_params(p);
         assert!((1..=1024).contains(&block), "block size");
@@ -433,10 +441,11 @@ impl Lattice {
         let (f_src, f_dst) = if parity == 0 { (&*f0, f1) } else { (&*f1, f0) };
         let [g0, g1] = &mut self.g;
         let (g_src, g_dst) = if parity == 0 { (&*g0, g1) } else { (&*g1, g0) };
-        let func = if self.thermal {
-            &k.stream_collide_thermal
-        } else {
-            &k.stream_collide
+        let func = match (self.thermal, write) {
+            (true, true) => &k.stream_collide_thermal,
+            (false, true) => &k.stream_collide,
+            (true, false) => &k.stream_collide_thermal_skip,
+            (false, false) => &k.stream_collide_skip,
         };
         let cfg = LaunchConfig {
             grid_dim: ((self.n as u32).div_ceil(block), 1, 1),
@@ -456,7 +465,7 @@ impl Lattice {
             .arg(g_dst)
             .arg(&mut self.mac);
         // SAFETY: (1) the arguments are, in order, `Params` by value and the eight pointers of
-        // `stream_collide(_thermal)` in `lbm.cu` (`BcParams*` receives the `bc` words, 32 bytes
+        // `stream_collide(_thermal)(_skip)` in `lbm.cu` (`BcParams*` receives the `bc` words, 32 bytes
         // per record). (2) With `p.n == n == w·h` (checked above) threads `k ≥ n` return; every
         // population index is `i·n + c` with `i < 9` (`< 5` for `g`, which has 5n values when
         // thermal) and `c` a cell index wrapped into `[0, n)`; `mac` indices are `≤ 4n`; `bc` is
@@ -467,8 +476,9 @@ impl Lattice {
     }
 
     /// `steps` stream-collide steps (an even number, starting from `f[0]`, so they end in `f[0]`)
-    /// replayed from a CUDA graph, captured on first use and again whenever the parameters, the
-    /// block size or the number of steps change.
+    /// replayed from a CUDA graph of the `write` variant, captured on first use and again whenever
+    /// the parameters, the block size or the number of steps change.
+    #[allow(clippy::too_many_arguments)]
     pub fn replay_steps(
         &mut self,
         k: &Kernels,
@@ -476,22 +486,24 @@ impl Lattice {
         block: u32,
         p: &KernelParams,
         steps: u32,
+        write: bool,
     ) -> Result<(), DriverError> {
         assert!(
             steps > 0 && steps.is_multiple_of(2),
             "graphs hold whole ping-pong cycles"
         );
-        let current = self
-            .graph
+        let v = write as usize;
+        let current = self.graphs[v]
             .as_ref()
             .is_some_and(|g| g.steps == steps && g.block == block && g.params == *p);
         if !current {
-            self.graph = None;
-            self.graph = Some(self.capture(k, stream, block, p, steps)?);
+            self.graphs[v] = None;
+            self.graphs[v] = Some(self.capture(k, stream, block, p, steps, write)?);
         }
-        self.graph.as_ref().expect("captured").graph.launch()
+        self.graphs[v].as_ref().expect("captured").graph.launch()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn capture(
         &mut self,
         k: &Kernels,
@@ -499,6 +511,7 @@ impl Lattice {
         block: u32,
         p: &KernelParams,
         steps: u32,
+        write: bool,
     ) -> Result<StepGraph, DriverError> {
         // Thread-local mode: only this thread's CUDA calls are restricted during the capture, so
         // solvers on other threads keep working.
@@ -506,7 +519,7 @@ impl Lattice {
             .begin_capture(driver_sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_THREAD_LOCAL)?;
         let mut launched = Ok(());
         for s in 0..steps {
-            launched = self.stream_collide(k, stream, block, p, (s % 2) as usize);
+            launched = self.stream_collide(k, stream, block, p, (s % 2) as usize, write);
             if launched.is_err() {
                 break;
             }

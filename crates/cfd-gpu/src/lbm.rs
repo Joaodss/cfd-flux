@@ -102,7 +102,8 @@ pub struct WgpuLbm {
     f: [wgpu::Buffer; 2],
     g: [wgpu::Buffer; 2],
     mac: wgpu::Buffer,
-    step_pipeline: wgpu::ComputePipeline,
+    /// `[skip_macro, write_macro]` variants of the stream-collide kernel.
+    step_pipelines: [wgpu::ComputePipeline; 2],
     static_group: wgpu::BindGroup,
     step_groups: [wgpu::BindGroup; 2],
 
@@ -274,19 +275,26 @@ impl WgpuLbm {
             label: Some("lbm.wgsl"),
             source: wgpu::ShaderSource::Wgsl(source(LBM_WGSL).into()),
         });
-        let step_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("stream_collide"),
-            layout: Some(&layout),
-            module: &lbm_module,
-            entry_point: Some("stream_collide"),
-            compilation_options: wgpu::PipelineCompilationOptions {
-                constants: &[
-                    ("WG", workgroup as f64),
-                    ("THERMAL", if thermal { 1.0 } else { 0.0 }),
-                ],
-                ..Default::default()
-            },
-            cache: None,
+        let step_pipelines = [false, true].map(|write| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(if write {
+                    "stream_collide"
+                } else {
+                    "stream_collide (skip_macro)"
+                }),
+                layout: Some(&layout),
+                module: &lbm_module,
+                entry_point: Some("stream_collide"),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: &[
+                        ("WG", workgroup as f64),
+                        ("THERMAL", if thermal { 1.0 } else { 0.0 }),
+                        ("WRITE_MACRO", if write { 1.0 } else { 0.0 }),
+                    ],
+                    ..Default::default()
+                },
+                cache: None,
+            })
         });
         let bind = |layout: &wgpu::BindGroupLayout, label: &str, buffers: &[&wgpu::Buffer]| {
             let entries: Vec<wgpu::BindGroupEntry> = buffers
@@ -397,7 +405,7 @@ impl WgpuLbm {
             f,
             g,
             mac,
-            step_pipeline,
+            step_pipelines,
             static_group,
             step_groups,
             diag_pipeline,
@@ -498,8 +506,11 @@ impl WgpuLbm {
         Ok(())
     }
 
-    /// Records and submits up to `MAX_BATCH` steps, followed by a copy of the status word.
-    fn submit_batch(&mut self, steps: u32) {
+    /// Records and submits up to `MAX_BATCH` steps, followed by a copy of the status word. With
+    /// `skip_macro`, the steps use the variant that skips the macroscopic stores, except the last
+    /// one when `write_last` (the last step of a `step` call).
+    fn submit_batch(&mut self, steps: u32, write_last: bool) {
+        let skip = self.config.skip_macro;
         let device = &self.ctx.device;
         let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("steps"),
@@ -509,9 +520,13 @@ impl WgpuLbm {
                 label: Some("stream_collide"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.step_pipeline);
+            pass.set_pipeline(&self.step_pipelines[!skip as usize]);
             pass.set_bind_group(0, &self.static_group, &[]);
             for s in 0..steps as u64 {
+                if skip && write_last && s + 1 == steps as u64 {
+                    // Both pipelines share one layout, so the bind groups stay bound.
+                    pass.set_pipeline(&self.step_pipelines[1]);
+                }
                 let parity = ((self.steps + s) % 2) as usize;
                 pass.set_bind_group(1, &self.step_groups[parity], &[]);
                 pass.dispatch_workgroups(self.dispatch[0], self.dispatch[1], 1);
@@ -683,7 +698,7 @@ impl Solver for WgpuLbm {
         let mut left = n;
         while left > 0 {
             let chunk = left.min(MAX_BATCH);
-            self.submit_batch(chunk);
+            self.submit_batch(chunk, chunk == left);
             left -= chunk;
             while self.in_flight.len() > MAX_IN_FLIGHT {
                 let b = self.in_flight.pop_front().expect("in flight");

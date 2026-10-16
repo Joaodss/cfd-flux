@@ -109,6 +109,7 @@ fn advected_sine_error(n: usize, config: LbmConfig) -> f64 {
 fn advection_diffusion_is_second_order() {
     let bgk = LbmConfig {
         collision: Collision::Bgk,
+        ..Default::default()
     };
     for config in [LbmConfig::default(), bgk] {
         let e: Vec<f64> = [16, 32, 64]
