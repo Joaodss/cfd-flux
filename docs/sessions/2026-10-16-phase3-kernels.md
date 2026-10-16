@@ -9,8 +9,8 @@ with everything tested and committed.
 | D | Designs for the codec, on-device sampling and `skip_macro` proposed and approved | ✅ as proposed |
 | 1 | LFFR v2 (`codec` field), byte shuffle + `lz4_flex`, v1 still read; measurements; ADR-007, 03 §6.1, decoder plan | ✅ |
 | 2 | On-device sampling (WGSL + CUDA), `Solver::request_samples`, parity cases, wired into `cfd-job` and the stream | ✅ ADR-028 |
-| 3 | `skip_macro` kernel variant (CPU, WGSL, CUDA), parity case, benchmark | ⏳ |
-| 4 | Docs (04, 02, ADRs), plan checkboxes, final check | ⏳ |
+| 3 | `skip_macro` kernel variant (CPU, WGSL, CUDA), parity case, benchmark | ✅ ADR-029 |
+| 4 | Docs (04, 02, ADRs), plan checkboxes, final check | ✅ ADR-007 revised, ADR-028, ADR-029 |
 
 ## Decisions taken with the author
 
@@ -31,6 +31,11 @@ with everything tested and committed.
 - **Not obvious:** the samples are fused (fields computed inside the box filter, one thread per output word), so
   no full-resolution scratch buffer is needed (it would be 400 MB at 4096²); f16 values are written two per
   32-bit word on both GPU backends (WGSL has no 16-bit storage), padded at an odd count.
+- **`skip_macro`:** +16.5% at ≥ 1024² isothermal on both GPU engines (exactly 84/72 B), +12% thermal, +65–74% at
+  512² (the lattice then fits the L2 cache). Storing u only where a flag set inside the pull loop said a
+  pressure outlet had read it made wgpu's 256² kernel 20% slower than storing every step; storing it on every
+  cell with a boundary link (`mask != 0`, known before the loop) is faster everywhere. A mutation (no u store on
+  those cells) makes the parity case fail on all three backends.
 
 ## Small deviations from the design proposal
 
@@ -40,3 +45,21 @@ with everything tested and committed.
   the snapshot that subscribing already triggers fills the gap.
 - Colour ranges come from the samples (the stored full-resolution frame when frames are stored, else the
   downsampled stream samples).
+- `skip_macro` stores u on every cell with a boundary link, a superset of the pressure-outlet cells of §7 (faster;
+  see above). It is an `LbmConfig` field (on by default, `--no-skip-macro`) so the parity case can build both.
+
+## Final check
+
+- `cargo fmt --check`; `cargo clippy --workspace --all-targets -D warnings` (with CUDA, the default) and
+  `cargo clippy -p cfd-cli -p cfd-cuda -p cfd-engines -p cfd-job -p cfd-server --all-targets --no-default-features
+  -D warnings`: clean.
+- `CFD_REQUIRE_GPU=1 CFD_REQUIRE_CUDA=1 cargo test --workspace`: **199 tests pass** (was 180): 6 new frame-format
+  tests (codecs, v1 compatibility, raw fields, shuffle, corrupt lz4), 3 `cfd_core::sample`, 2 `abi` layout tests, a
+  WGSL layout test, the `pack2x16float` probe test, 3 parity cases × 2 GPU backends (sampling, thermal sampling,
+  `skip_macro`) and the CPU `skip_macro` case; the stream tests were rewritten for samples. Without the `cuda`
+  feature the CLI, server, job and engine tests pass (60).
+- Measurements: frame codec and server stream, on-device sampling, `skip_macro` (all in
+  [benchmarks](../benchmarks.md)).
+- Not done / follow-ups: CI has not run on this branch (not pushed); the WGSL `pack2x16float` rounding was only
+  checked on the RTX 4060 (Vulkan) — other drivers stay held to one ulp; the run loop's sampling every 6 steps now
+  limits small-grid streaming (on-device probe sampling would help, as noted in the Phase 3 server session).

@@ -57,7 +57,7 @@ Given `dx` (= `cellSize`), a characteristic physical velocity `U` and viscosity 
 **As implemented (CUDA, Phase 2b):** the same buffers (the `u16` flags read directly, a 1-value dummy instead of `g` without the thermal lattice), plus one device snapshot of the four macroscopic planes (16 B/cell) per field copy in flight ([ADR-021](07-decisions-and-questions.md)). Throughput: see [benchmarks](benchmarks.md).
 
 ### 3.5 Implementation notes (shared by every backend)
-- SoA populations `f[i·n + cell]`, pull scheme, ping-pong buffers; one fused kernel per step also writes ρ, u (with the `F/2` correction) and θ.
+- SoA populations `f[i·n + cell]`, pull scheme, ping-pong buffers; one fused kernel per step also writes ρ, u (with the `F/2` correction) and θ — on the last step of each `step(n)` call only (`skip_macro`, [ADR-029](07-decisions-and-questions.md)): the other steps skip those stores, except u on cells with a boundary link (pressure outlets read their cell's u of the previous step). Results are bit-identical either way.
 - **Shifted populations** `f̃ᵢ = fᵢ − wᵢ` in f32, and rest populations computed as the remainder (`f̃₀ = Δρ − Σ`, `g₀ = θ − Σ`), which conserves mass and heat by construction ([ADR-015](07-decisions-and-questions.md)).
 - TRT with Guo forcing split into symmetric/antisymmetric parts, each scaled by its own `(1 − ω±/2)`; BGK is the special case `ω⁺ = ω⁻`.
 - Only Boussinesq buoyancy is applied as a force; the hydrostatic pressure is added at sampling time ([ADR-016](07-decisions-and-questions.md)).

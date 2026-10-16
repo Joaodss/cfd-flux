@@ -22,6 +22,8 @@ cargo run --release -p cfd-cli -- bench --backends cuda,wgpu     # interleaved, 
   queued steps have finished (`Solver::finish`).
 - `--backends a,b` builds one solver per backend for each case, warms each up, then alternates the
   timed repetitions (a, b, a, b, …), so whatever else the machine does affects every column alike.
+- Since 2026-10-16 the GPU and CPU kernels skip the ρ/u/θ stores on all but the last step of each `step` call
+  (`skip_macro`, ADR-029); `--no-skip-macro` measures the previous behaviour.
 - Add a new section per machine/backend; keep old ones for comparison.
 
 ## Run loop and server — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-13
@@ -48,6 +50,42 @@ output thread). Release builds, normal desktop (not quiet).
   0.70 s (2,080 MLUPS) with the default sampling every 6 steps (output interval / 10): batches then end every
   6 steps, and each sample (a reduction, the forces and a copy of the fields for the probes) costs ≈ 0.26 ms
   on this grid.
+
+## `skip_macro` — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-16
+
+Windows 11, driver 617.42 (CUDA 13.4), NVRTC 13.4 (`sm_89` cubin), wgpu 30 on Vulkan, block/workgroup 128, TRT.
+The stream-collide kernel stores ρ, u and θ only on the last step of each `step` call (and u on cells with a
+boundary link, which pressure outlets read; ADR-029); `--no-skip-macro` stores them every step, as before. Two
+interleaved runs back to back, 5 repetitions of ≥ 2 s each, median (min–max) MLUPS. The desktop was not fully
+idle (the no-skip run is ≈ 2% below the 2026-10-13 table below).
+
+```bash
+cargo run --release -p cfd-cli -- bench --backends cuda,wgpu --sizes 256,512,1024,2048,4000 --repeat 5
+cargo run --release -p cfd-cli -- bench --backends cuda,wgpu --sizes 256,512,1024,2048,4000 --repeat 5 --no-skip-macro
+```
+
+| Model | Grid | cuda, every step | cuda, `skip_macro` | gain | wgpu, every step | wgpu, `skip_macro` | gain |
+|-------|------|---:|---:|---:|---:|---:|---:|
+| isothermal (D2Q9) | 256² | 9885 (9534–9954) | 10924 (10897–10969) | +10.5% | 9571 (9558–9598) | 10803 (10777–10814) | +12.9% |
+| isothermal (D2Q9) | 512² | 7704 (7700–7751) | 12710 (12698–12721) | +65.0% | 7000 (6992–7018) | 12165 (12124–12198) | +73.8% |
+| isothermal (D2Q9) | 1024² | 2803 (2789–2805) | 3267 (3250–3269) | +16.6% | 2817 (2814–2820) | 3275 (3265–3283) | +16.3% |
+| isothermal (D2Q9) | 2048² | 2771 (2771–2787) | 3230 (3221–3235) | +16.6% | 2807 (2802–2814) | 3268 (3261–3274) | +16.4% |
+| isothermal (D2Q9) | 4000² | 2810 (2804–2814) | 3275 (3271–3283) | +16.5% | 2823 (2818–2824) | 3289 (3284–3292) | +16.5% |
+| thermal (D2Q9 + D2Q5) | 256² | 6294 (6274–6379) | 7043 (7021–7064) | +11.9% | 5363 (5273–5408) | 5634 (5537–5648) | +5.1% |
+| thermal (D2Q9 + D2Q5) | 512² | 1985 (1939–1987) | 2693 (2690–2695) | +35.7% | 1946 (1946–1947) | 2494 (2447–2495) | +28.2% |
+| thermal (D2Q9 + D2Q5) | 1024² | 1881 (1881–1881) | 2099 (2094–2117) | +11.6% | 1883 (1883–1883) | 2108 (2101–2137) | +11.9% |
+| thermal (D2Q9 + D2Q5) | 2048² | 1877 (1876–1877) | 2104 (2087–2107) | +12.1% | 1871 (1871–1871) | 2103 (2100–2105) | +12.4% |
+| thermal (D2Q9 + D2Q5) | 4000² | 1900 (1899–1900) | 2110 (2106–2118) | +11.1% | 1899 (1899–1900) | 2122 (2110–2127) | +11.7% |
+
+- **≥ 1024² (bandwidth-bound):** +16.5% isothermal, as the bytes per update predict (84 → 72 B: 84/72 = 1.167), and
+  +11–12% thermal (130 → 114 B would give +14%; an earlier run of the first version measured +14.6%). At
+  3,270–3,290 MLUPS the isothermal kernel moves ≈ 236 GB/s of the RTX 4060's 272 GB/s.
+- **512²:** the whole lattice (22 MB with the macroscopic planes, 19 MB without) fits in the 32 MB L2 cache much
+  better without the planes: +65–74% isothermal.
+- **The first version stored u where a flag set inside the pull loop said a pressure-outlet link had read it;**
+  that made wgpu's 256² kernel 20% *slower* than storing every step (7,657 vs 9,601 MLUPS) while CUDA gained. Storing
+  u on every cell with a boundary link (`mask != 0`, known before the loop, a superset of those cells) fixed it
+  everywhere (10,803) and is what all three backends do now.
 
 ## On-device output sampling — NVIDIA GeForce RTX 4060 (8 GB) / Ryzen 7 3700X, 2026-10-16
 

@@ -159,6 +159,26 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   - Jobs ask the observer for its stream specs at every frame (`JobObserver::stream_specs`); `FrameEvent` carries the samples and `cfd_job::encode_sample` writes their values into LFFR frames as they are (f16 bits included).
 - **Consequences:** a 1024² frame (stored f32 + one f16 stream format) costs the output thread 13 ms instead of 43, 46 instead of 159 ms at 2048² (CUDA; the conversion disappears from the CPU, the copy grows by 1.5× the bytes and the kernel). Parity cases (`cfd_verify::parity`, full resolution and two box factors, f32 and f16, thermal, periodic, gravity): CUDA bit-identical; wgpu within 1e-5 of the field maximum and one f16 ulp, and its f16 is exactly RNE of its own f32 — a probe test of ties, subnormals and overflow shows `pack2x16float` rounds to nearest-even on the RTX 4060 (Vulkan), which the WGSL spec does not guarantee elsewhere. Stored wgpu frames now come from the GPU's f32 arithmetic (within ~1e-7 of the CPU conversion); colour ranges come from the samples. A stream format added between a request and its frame waits for the next frame (subscribing triggers a snapshot).
 
+### ADR-029 — `skip_macro`: macroscopic stores only on the last step of each `step` call · *Accepted (2026-10-16)*
+- **Context:** the fused stream-collide kernel stored ρ, ux, uy (and θ) every step — 12 (16) of the 84 (130) bytes
+  each update moves on the bandwidth-bound GPUs — although they are read only by frames, probes and diagnostics
+  between `step` calls, and inside the kernel only by pressure outlets, which read their own cell's velocity of the
+  previous step (design proposal §7).
+- **Decision:** every backend's kernel takes a `write_macro` switch (CPU: an argument; CUDA: a template argument,
+  four entry points; WGSL: a pipeline-overridable constant, two pipelines). `step(n)` runs n−1 steps without the
+  stores and one with them, so every read between calls sees fresh fields and the `Solver` trait does not change.
+  Skipping steps still store u on every cell with a boundary link (`mask != 0`, a superset of the pressure-outlet
+  cells, known before the pull loop) and the divergence status word. CUDA captures one graph per variant (the
+  final writing step is launched alone). `LbmConfig::skip_macro` (on by default; `--no-skip-macro` in the CLI)
+  turns it off.
+- **Consequences:** results are bit-identical to storing every step — a parity case compares fields, diagnostics
+  and forces with `==` after calls of 1–1203 steps on the CPU, CUDA and wgpu, and fails on all three if the
+  boundary-cell u store is removed. `bench --backends cuda,wgpu`: +16.5% at ≥ 1024² isothermal (2,803 → 3,267 MLUPS
+  on CUDA, as 84/72 B predicts), +12% thermal, +65–74% at 512² (the lattice fits in the 32 MB L2), +10–13% at 256².
+  A first version stored u where a flag set inside the unrolled pull loop marked a pressure-outlet read: wgpu's
+  256² kernel became 20% slower than storing every step; the mask-based rule is faster everywhere. A `step(1)` loop
+  gains nothing (every step is a last step): the run loop's batches are what benefit.
+
 ## Open questions
 
 Answers to these questions can change priorities. Record the answer and the date here.
