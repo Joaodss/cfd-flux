@@ -103,7 +103,7 @@ Shared by the CLI and the server (ADR-024):
 
 ### 2.6 Jobs and streaming
 - **Command loop** (`cfd_job::run`, ADR-011, ADR-025): between batches the loop drains commands (`Pause`, `Resume`, `Cancel`, `Snapshot`; `PatchCells`/`SetParam` are answered "not supported" until Phase 5b); while paused it blocks on the channel. Each batch runs up to the next sample/output event and at most ≈ 50 ms of measured work (the batch size follows the measured step rate), which bounds the latency of every command; batching never changes results (tested byte for byte).
-- **Output thread:** frames are converted to physical fields, encoded and written on a second thread fed by a bounded channel (2 frames): stored frames are never dropped — if the disk or the encoder is slower, the solver waits. A cancel drops the frames still queued. Every frame also goes to the job's observer (the server's stream hub).
+- **Output thread:** for each output event the job requests one *sample* per spec — the stored frame (full resolution, f32) and every stream format viewers watch (f16, box-downsampled) — with `Solver::request_samples`; GPU backends compute them on the device and copy only the result (ADR-028). The samples are encoded and written on a second thread fed by a bounded channel (2 frames): stored frames are never dropped — if the disk or the encoder is slower, the solver waits. A cancel drops the frames still queued. Every frame's samples also go to the job's observer (the server's stream hub, which encodes the sample of each format).
 - **Streaming** (ADR-026): per job, a `tokio::sync::broadcast` channel carries events (`status`, `progress` at most 10 Hz, `log`, `done`) and, for every stream format a viewer asked for (fields, maximum size), a `tokio::sync::watch` channel holds the **latest** encoded frame (f16, box-downsampled). Each viewer's task sends the latest frame and waits for the socket: a slow viewer skips frames, the job never waits for viewers, and the final frame is always delivered before `done`.
 
 ## 3. Request flow
@@ -112,7 +112,7 @@ Shared by the CLI and the server (ADR-024):
 2. `POST /api/simulations` → the server validates the format, consistency and stability (`Scene → Domain` on tokio's blocking pool), its limits and an engine that can hold the domain; estimates memory, stored bytes and time (from the throughput of earlier jobs).
 3. Job created (`queued`, a row in SQLite, `results/{id}/`) → `201` with the job; a task waits for the engine's device slot.
 4. The client opens `WS /api/simulations/{id}/stream` → `hello` (job, grid, stream format, field ranges so far).
-5. Slot acquired → the job's thread makes the solver and runs the command loop: samples (diagnostics, forces, probes → CSV, `progress` events), frames (→ output thread: stored f32 frame, then f16 stream frames), commands between batches.
+5. Slot acquired → the job's thread makes the solver and runs the command loop: samples (diagnostics, forces, probes → CSV, `progress` events), frames (samples on the device → output thread: stored f32 frame, f16 stream frames), commands between batches.
 6. End (`completed` / `failed` with `diverged`, `error` or `interrupted` / `cancelled`) → `meta.json`, the SQLite row, a `done` event; the device slot passes to the next job.
 
 ## 4. Technology stack

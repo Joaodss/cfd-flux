@@ -49,6 +49,39 @@ output thread). Release builds, normal desktop (not quiet).
   6 steps, and each sample (a reduction, the forces and a copy of the fields for the probes) costs ≈ 0.26 ms
   on this grid.
 
+## On-device output sampling — NVIDIA GeForce RTX 4060 (8 GB) / Ryzen 7 3700X, 2026-10-16
+
+One output frame of a lid-driven cavity as a server job takes it: the stored frame (velocity, pressure,
+vorticity; f32, full resolution) and one stream format (the same fields, f16, box-downsampled to ≤ 1024 cells
+per side), produced by `Solver::request_samples` (ADR-028) or by the CPU path it replaces (`request_fields`,
+`FieldSet::from_lattice`, the box filter and the f16 conversion on the output thread). Medians of 7 frames,
+release build, nothing queued on the GPU; "copy" is the wait for the device's work and the transfer (in a job it
+overlaps with the next batch of steps), "conversion" is the output thread's work before encoding.
+
+```bash
+cargo run --release -p cfd-cli --example sampling -- cuda,wgpu,cpu 1024,2048
+```
+
+| Engine | Grid | Path | Copy (wait) | Conversion | Encoding (2 frames) | Total |
+|---|---|---|---:|---:|---:|---:|
+| cuda | 1024×1025 | `request_samples` (device) | 7.29 ms | 0.00 ms | 5.90 ms | 13.19 ms |
+| cuda | 1024×1025 | CPU conversion | 4.49 ms | 32.52 ms | 6.24 ms | 43.25 ms |
+| wgpu | 1024×1025 | `request_samples` (device) | 9.60 ms | 0.00 ms | 6.05 ms | 15.65 ms |
+| wgpu | 1024×1025 | CPU conversion | 7.35 ms | 32.70 ms | 6.37 ms | 46.42 ms |
+| cpu | 1024×1025 | `request_samples` (CPU default) | 1.76 ms | 34.84 ms | 5.86 ms | 42.46 ms |
+| cuda | 2048×2049 | `request_samples` (device) | 26.80 ms | 0.00 ms | 19.27 ms | 46.07 ms |
+| cuda | 2048×2049 | CPU conversion | 17.38 ms | 121.43 ms | 20.39 ms | 159.20 ms |
+| wgpu | 2048×2049 | `request_samples` (device) | 33.82 ms | 0.00 ms | 19.33 ms | 53.15 ms |
+| wgpu | 2048×2049 | CPU conversion | 27.62 ms | 121.75 ms | 20.57 ms | 169.94 ms |
+| cpu | 2048×2049 | `request_samples` (CPU default) | 7.19 ms | 126.36 ms | 20.49 ms | 154.04 ms |
+
+- The output thread's work per frame drops 3.3× (1024²) to 3.5× (2048²); what is left is encoding (byte shuffle +
+  lz4 of 25 MB at 2048²). The device copy is longer than the lattice copy: the samples are 1.5× the bytes (16 B
+  per cell f32 + 8 B f16 stream vs 16 B of ρ, u, θ) plus the kernel.
+- **Server stream of the cylinder** (`cfd-cli submit scenes/cylinder-re100.json --cancel-after 3`, two runs): CUDA
+  194–222 frames/s (codec only: 162–187), wgpu 101–110, CPU 51–52. At 442 × 84 the output thread no longer sets
+  the pace; the run loop does (its diagnostics, forces and probe samples every 6 steps end the batches).
+
 ## Frame codec (LFFR v2) — AMD Ryzen 7 3700X, 2026-10-16
 
 Release build, `cfd-cli`'s `frame_codec` example on stored frames (velocity, pressure, vorticity = 4 values per

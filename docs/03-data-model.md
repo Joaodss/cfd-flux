@@ -147,7 +147,7 @@ payload     shuffle+lz4: per field, in header order: u32 length L | L bytes of l
   unshuffle loop, and a `Float32Array`/`Uint16Array` view of the result (f16 is uploaded as-is to a `R16F`/
   `RG16F` texture). No WASM is needed; v1 (zstd) frames only exist in result directories written before v2 and
   are not streamed.
-- **Stored frames:** f32 at full resolution every output interval (`frames/NNNNNN.bin`); `GET …/frames/{n}?dtype=f16` converts on the fly.
+- **Stored frames:** f32 at full resolution every output interval (`frames/NNNNNN.bin`); `GET …/frames/{n}?dtype=f16` converts on the fly. Stored and stream frames are *samples* computed on the GPU when the job runs there ([ADR-028](07-decisions-and-questions.md)): bit-identical to the CPU conversion on CUDA, within ~1e-7 on wgpu.
 - **Stream frames** (WebSocket): **f16**, only the fields the viewer asked for, box-downsampled by the integer factor `k = ceil(max(width, height) / maxSize)` to `ceil(width/k) × ceil(height/k)` (partial blocks at the edges average what they have). `frameIndex` is the output index; a snapshot (a frame taken for a viewer that joined a paused job, or a new stream format) repeats the last output index and carries its own `step`.
 - **Cost** (1024² cavity, 3 fields, f32): 13.6 ms to 63.7% of the raw size, decoded in 17 ms; `ruzstd` (v1) took
   328 ms for 91% ([benchmarks](benchmarks.md#frame-codec-lffr-v2--amd-ryzen-7-3700x-2026-10-16)).
