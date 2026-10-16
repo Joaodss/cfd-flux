@@ -10,7 +10,9 @@
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
+use cfd_core::sample::{PendingSamples, SampleSet, SampleSpec};
 use cfd_core::solver::{LatticeFields, PendingFields};
+use cfd_lbm::abi::SampleLayout;
 
 use crate::GpuContext;
 
@@ -160,5 +162,46 @@ impl PendingFields for GpuFields {
             m.wait(&self.ctx);
         }
         self.collect()
+    }
+}
+
+/// Samples being copied (see `Solver::request_samples`): one staging buffer per spec, all
+/// filled by one submission (the sampling dispatches and the copies of their outputs).
+pub(crate) struct GpuSamples {
+    pub ctx: Arc<GpuContext>,
+    pub items: Vec<SampleCopy>,
+    pub step: u64,
+    pub time: f64,
+}
+
+pub(crate) struct SampleCopy {
+    pub spec: SampleSpec,
+    pub layout: SampleLayout,
+    pub mapping: Mapping,
+    pub pool: Pool,
+}
+
+impl PendingSamples for GpuSamples {
+    fn step(&self) -> u64 {
+        self.step
+    }
+
+    fn wait(self: Box<Self>) -> SampleSet {
+        let samples = self
+            .items
+            .into_iter()
+            .map(|c| {
+                c.mapping.wait(&self.ctx);
+                let mut raw = Vec::new();
+                match c.mapping.read(&mut raw) {
+                    Some(buffer) => c.pool.give(buffer),
+                    // Device lost: NaN samples rather than a panic; `step` reports the error.
+                    None => raw = vec![f32::NAN; c.layout.words],
+                }
+                let words: &[u32] = bytemuck::cast_slice(&raw);
+                c.layout.sample(&c.spec, self.step, self.time, words)
+            })
+            .collect();
+        SampleSet::Ready(samples)
     }
 }

@@ -21,10 +21,11 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use cfd_core::domain::Domain;
+use cfd_core::sample::{PendingSamples, SampleSpec};
 use cfd_core::solver::{
     BackendKind, Diagnostics, ElementForce, LatticeFields, PendingFields, Solver, SolverError,
 };
-use cfd_lbm::abi::{bc_words, KernelParams};
+use cfd_lbm::abi::{bc_words, KernelParams, SampleLayout};
 use cfd_lbm::shared::{
     diagnostics_from_partials, equilibrium_populations, initial_fields, wall_forces, wall_links,
     WallLink, DIAGNOSTIC_PARTIALS,
@@ -32,8 +33,8 @@ use cfd_lbm::shared::{
 use cfd_lbm::LbmConfig;
 use wgpu::util::DeviceExt;
 
-use crate::prelude::{source, LBM_WGSL, REDUCE_WGSL};
-use crate::readback::{GpuFields, Mapping, Pool};
+use crate::prelude::{source, LBM_WGSL, REDUCE_WGSL, SAMPLE_WGSL};
+use crate::readback::{GpuFields, GpuSamples, Mapping, Pool, SampleCopy};
 use crate::{GpuContext, GpuError};
 
 /// Default invocations per workgroup of the stream-collide kernel.
@@ -64,6 +65,18 @@ pub(crate) fn flag_bytes(flags: &[u16]) -> Vec<u8> {
     let mut bytes = bytemuck::cast_slice::<u16, u8>(flags).to_vec();
     bytes.resize(bytes.len().next_multiple_of(4), 0);
     bytes
+}
+
+/// Invocations per workgroup of the sampling kernel (`SAMPLE_WG` in `sample.wgsl`).
+const SAMPLE_WG: u32 = 128;
+
+/// The buffers of the `i`-th spec of a sample request, reused while its output size stays the same.
+struct SampleSlot {
+    words: usize,
+    params: wgpu::Buffer,
+    out: wgpu::Buffer,
+    group: wgpu::BindGroup,
+    staging: Pool,
 }
 
 /// A submitted batch of steps and the copy of its status word.
@@ -101,6 +114,10 @@ pub struct WgpuLbm {
     links: Vec<WallLink>,
     /// Gather of the outgoing populations, one bind group per `f` buffer; `None` without links.
     link_gather: Option<(wgpu::ComputePipeline, [wgpu::BindGroup; 2], wgpu::Buffer)>,
+
+    flags: wgpu::Buffer,
+    sample_pipeline: wgpu::ComputePipeline,
+    sample_slots: Vec<SampleSlot>,
 
     in_flight: VecDeque<Batch>,
     status_pool: Pool,
@@ -349,6 +366,19 @@ impl WgpuLbm {
             Some((pipeline, groups, out))
         };
 
+        let sample_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sample.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(source(SAMPLE_WGSL).into()),
+        });
+        let sample_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("sample"),
+            layout: None,
+            module: &sample_module,
+            entry_point: Some("sample"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+
         let small = partial_bytes.max(links.len() as u64 * 4).max(16);
         let mut solver = Self {
             status_pool: Pool::new(16),
@@ -376,6 +406,9 @@ impl WgpuLbm {
             partials,
             links,
             link_gather,
+            flags,
+            sample_pipeline,
+            sample_slots: Vec::new(),
             in_flight: VecDeque::new(),
         };
         let initial = initial_fields(&solver.domain);
@@ -520,6 +553,106 @@ impl WgpuLbm {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
     }
+
+    /// The buffers of the `i`-th spec, (re)built when its output size changes.
+    fn sample_slot(&mut self, i: usize, words: usize) -> &SampleSlot {
+        if self.sample_slots.get(i).is_none_or(|s| s.words != words) {
+            let device = &self.ctx.device;
+            let bytes = (words * 4) as u64;
+            let params = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("sample params"),
+                size: std::mem::size_of::<cfd_lbm::abi::SampleParams>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let out = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("sample out"),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let entries = [&params, &self.flags, &self.mac, &out]
+                .into_iter()
+                .enumerate()
+                .map(|(binding, b)| wgpu::BindGroupEntry {
+                    binding: binding as u32,
+                    resource: b.as_entire_binding(),
+                })
+                .collect::<Vec<_>>();
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("sample"),
+                layout: &self.sample_pipeline.get_bind_group_layout(0),
+                entries: &entries,
+            });
+            let slot = SampleSlot {
+                words,
+                params,
+                out,
+                group,
+                staging: Pool::new(bytes),
+            };
+            if i < self.sample_slots.len() {
+                self.sample_slots[i] = slot;
+            } else {
+                self.sample_slots.push(slot);
+            }
+        }
+        &self.sample_slots[i]
+    }
+
+    /// One sampling dispatch per spec and the copies of their outputs, in one submission.
+    fn start_samples(&mut self, specs: &[SampleSpec]) -> GpuSamples {
+        let max_dim = self.ctx.limits().max_compute_workgroups_per_dimension;
+        let mut enc = self.encoder();
+        let mut copies = Vec::with_capacity(specs.len());
+        for (i, spec) in specs.iter().enumerate() {
+            let layout = SampleLayout::new(&self.domain, spec);
+            let words = layout.words.max(1);
+            let params = layout.params.to_words();
+            // `sample_slot` borrows `self` mutably; the pipeline is cloned out first
+            // (a reference-counted handle, like most wgpu objects).
+            let pipeline = self.sample_pipeline.clone();
+            let ctx = self.ctx.clone();
+            let slot = self.sample_slot(i, words);
+            ctx.queue
+                .write_buffer(&slot.params, 0, bytemuck::cast_slice(&params));
+            let count = layout.params.count;
+            let widest = layout.params.fields[..count as usize]
+                .iter()
+                .map(|f| f[3])
+                .max()
+                .unwrap_or(0);
+            if widest > 0 {
+                let groups = widest.div_ceil(SAMPLE_WG);
+                let gx = groups.min(max_dim);
+                let mut pass = enc.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("sample"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &slot.group, &[]);
+                pass.dispatch_workgroups(gx, groups.div_ceil(gx), count);
+            }
+            let staging = slot.staging.take(&ctx);
+            enc.copy_buffer_to_buffer(&slot.out, 0, &staging, 0, (words * 4) as u64);
+            copies.push((spec.clone(), layout, staging, slot.staging.clone()));
+        }
+        let index = self.ctx.queue.submit([enc.finish()]);
+        GpuSamples {
+            ctx: self.ctx.clone(),
+            items: copies
+                .into_iter()
+                .map(|(spec, layout, staging, pool)| SampleCopy {
+                    spec,
+                    layout,
+                    mapping: Mapping::start(staging, index.clone()),
+                    pool,
+                })
+                .collect(),
+            step: self.steps,
+            time: self.domain.units.steps_to_time(self.steps),
+        }
+    }
 }
 
 impl From<GpuError> for SolverError {
@@ -590,6 +723,10 @@ impl Solver for WgpuLbm {
             n: self.n,
             thermal: self.thermal,
         })
+    }
+
+    fn request_samples(&mut self, specs: &[SampleSpec]) -> Box<dyn PendingSamples> {
+        Box::new(self.start_samples(specs))
     }
 
     fn diagnostics(&mut self) -> Diagnostics {

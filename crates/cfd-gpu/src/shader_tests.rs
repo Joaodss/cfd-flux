@@ -3,12 +3,12 @@
 
 use cfd_core::domain::BcParams;
 use cfd_core::DomainOptions;
-use cfd_lbm::abi::{bc_fields, params_fields, KernelParams};
+use cfd_lbm::abi::{bc_fields, params_fields, sample_params_fields, KernelParams, SampleParams};
 use cfd_lbm::LbmConfig;
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 
 use crate::lbm::{flag_bytes, params_words};
-use crate::prelude::{source, LBM_WGSL, REDUCE_WGSL};
+use crate::prelude::{source, LBM_WGSL, REDUCE_WGSL, SAMPLE_WGSL};
 
 fn module(kernel: &str) -> naga::Module {
     let src = source(kernel);
@@ -43,6 +43,7 @@ fn layout(m: &naga::Module, name: &str) -> (u32, Vec<(String, u32)>) {
 fn every_shader_module_validates() {
     module(LBM_WGSL);
     module(REDUCE_WGSL);
+    module(SAMPLE_WGSL);
 }
 
 #[test]
@@ -83,4 +84,15 @@ fn flags_are_packed_little_endian() {
     let unpack = |c: usize| (words[c >> 1] >> ((c & 1) * 16)) & 0xffff;
     assert_eq!([unpack(0), unpack(1), unpack(2)], [0x1234, 0xabcd, 0x0001]);
     assert_eq!(bytes.len(), 8);
+}
+
+#[test]
+fn sample_params_layout_matches_the_rust_struct() {
+    let m = module(SAMPLE_WGSL);
+    let (size, members) = layout(&m, "SampleParams");
+    assert_eq!(size as usize, std::mem::size_of::<SampleParams>());
+    for (name, offset) in sample_params_fields() {
+        let off = members.iter().find(|(n, _)| n == name).unwrap().1;
+        assert_eq!(off as usize, offset, "{name}");
+    }
 }
