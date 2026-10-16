@@ -97,28 +97,29 @@ fn sample_cell(kind: u32, comp: u32, x: u32, y: u32) -> f32 {
     let n = S.n;
     let c = y * S.w + x;
     let fluid = sample_fluid(c);
-    switch (kind) {
-        case SAMPLE_VELOCITY: {
-            if (!fluid) { return 0.0; }
-            return mac[(1u + comp) * n + c] / S.velocity_factor;
-        }
-        case SAMPLE_PRESSURE: {
-            if (!fluid) { return 0.0; }
-            return (mac[c] - 1.0) * S.pressure_factor + (S.hydro_a + S.hydro_x * f32(x) + S.hydro_y * f32(y));
-        }
-        case SAMPLE_DENSITY: {
-            if (!fluid) { return 0.0; }
-            return mac[c] * S.rho0;
-        }
-        case SAMPLE_TEMPERATURE: {
-            let t = select(0.0, mac[3u * n + c], fluid);
-            return S.t_ref + t * S.delta_t;
-        }
-        default: { // SAMPLE_VORTICITY: ω = ∂v/∂x − ∂u/∂y
-            if (!fluid) { return 0.0; }
-            return (sample_deriv(2u, x, y, true) - sample_deriv(1u, x, y, false)) * S.vorticity_scale;
+    // One result and a single return: with a `return` in every case, DX12's FXC compiler (after
+    // naga's translation to HLSL) rejects the function ("not all control paths return a value").
+    var value = 0.0;
+    if (kind == SAMPLE_TEMPERATURE) {
+        let t = select(0.0, mac[3u * n + c], fluid);
+        value = S.t_ref + t * S.delta_t;
+    } else if (fluid) {
+        switch (kind) {
+            case SAMPLE_VELOCITY: {
+                value = mac[(1u + comp) * n + c] / S.velocity_factor;
+            }
+            case SAMPLE_PRESSURE: {
+                value = (mac[c] - 1.0) * S.pressure_factor + (S.hydro_a + S.hydro_x * f32(x) + S.hydro_y * f32(y));
+            }
+            case SAMPLE_DENSITY: {
+                value = mac[c] * S.rho0;
+            }
+            default: { // SAMPLE_VORTICITY: ω = ∂v/∂x − ∂u/∂y
+                value = (sample_deriv(2u, x, y, true) - sample_deriv(1u, x, y, false)) * S.vorticity_scale;
+            }
         }
     }
+    return value;
 }
 
 // Output value `v` (pixel v / components, component v % components) of field `kind`.

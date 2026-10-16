@@ -654,11 +654,14 @@ pub fn thermal_sampling_matches_the_cpu_conversion(make: &Factory) {
 // ---- Macroscopic stores only when needed (design proposal §7) ----
 
 /// `skip_macro` stores ρ, u and θ only on the last step of each `step` call (and u on cells with
-/// a pressure-outlet link, which read it on the next step). Only stores are skipped, so a solver
-/// with it must give **exactly** (`==`) the fields, diagnostics and forces of one that stores
-/// them every step, after calls of every length — including the odd ones that end outside a CUDA
-/// graph. Runs on the cylinder (velocity inlet, pressure outlet), the thermal channel (every
-/// boundary kind, θ) and a periodic box.
+/// a boundary link, which pressure outlets read on the next step). Only stores are skipped, so on
+/// the CPU and CUDA a solver with it must give **exactly** (`==`) the fields, diagnostics and forces
+/// of one that stores them every step, after calls of every length — including the odd ones that
+/// end outside a CUDA graph. wgpu compiles the two variants as two pipelines, and a driver may
+/// round them differently: DX12's FXC changes a few values by ~1e-8 (Vulkan on the RTX 4060 is
+/// exact), so wgpu is held to exact or [`TOLERANCE`] (velocity relative to the run's peak
+/// speed) — a missing store gives errors many orders larger (the solution diverges). Runs on the cylinder (velocity inlet, pressure outlet), the
+/// thermal channel (every boundary kind, θ) and a periodic box.
 pub fn skipping_macro_stores_changes_nothing(make: &Factory) {
     let cases = [
         (
@@ -684,21 +687,46 @@ pub fn skipping_macro_stores_changes_nothing(make: &Factory) {
             skip.set_equilibrium(f).unwrap();
             all.set_equilibrium(f).unwrap();
         }
+        let exact = skip.backend() != BackendKind::Wgpu;
+        // Velocity scale: the largest speed of the run (initial state included).
+        let speed_of = |f: &LatticeFields| max_abs(&f.ux).max(max_abs(&f.uy));
+        let mut peak = speed_of(&skip.lattice_fields());
+        let mut worst = 0.0f64;
         for n in [1, 2, 7, 51, 100, 1203, 3] {
             skip.step(n).unwrap();
             all.step(n).unwrap();
             let (a, b) = (skip.lattice_fields(), all.lattice_fields());
+            peak = peak.max(speed_of(&b));
+            if a == b {
+                assert_eq!(skip.diagnostics(), all.diagnostics(), "{name}: diagnostics");
+                assert_eq!(skip.forces(), all.forces(), "{name}: forces");
+                continue;
+            }
             assert!(
-                a == b,
+                !exact,
                 "{name} ({:?}): fields differ after a {n}-step call",
                 skip.backend()
             );
-            assert_eq!(skip.diagnostics(), all.diagnostics(), "{name}: diagnostics");
-            assert_eq!(skip.forces(), all.forces(), "{name}: forces");
+            // Velocity relative to the run's peak speed: the box's vortex decays to ~1e-8, where
+            // round-off alone is a large share of the field's own maximum.
+            let e = differences(&a, &b);
+            let du = max_diff(&a.ux, &b.ux).max(max_diff(&a.uy, &b.uy)) / peak;
+            let d = e.rho.max(du).max(e.theta);
+            assert!(
+                d < TOLERANCE,
+                "{name} ({:?}): fields differ by {d:e} after a {n}-step call",
+                skip.backend()
+            );
+            worst = worst.max(d);
         }
         eprintln!(
-            "{name} ({:?}): skip_macro identical to storing every step over {} steps",
+            "{name} ({:?}): skip_macro {} storing every step over {} steps",
             skip.backend(),
+            if worst == 0.0 {
+                "identical to".to_string()
+            } else {
+                format!("within {worst:.1e} of")
+            },
             skip.steps_done()
         );
     }

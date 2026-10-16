@@ -63,3 +63,17 @@ with everything tested and committed.
 - Not done / follow-ups: CI has not run on this branch (not pushed); the WGSL `pack2x16float` rounding was only
   checked on the RTX 4060 (Vulkan) — other drivers stay held to one ulp; the run loop's sampling every 6 steps now
   limits small-grid streaming (on-device probe sampling would help, as noted in the Phase 3 server session).
+
+## After the PR was opened
+
+- **CI (Windows, wgpu on DX12) failed:** FXC rejected `sample.wgsl` ("not all control paths return a value" for a
+  `switch` with a `return` in every case, after naga's translation to HLSL). Rewritten with one return. Locally
+  reproduced and checked with `WGPU_BACKEND=dx12`, which also showed:
+  - `pack2x16float` rounds **toward zero** on DX12 (124 of 334 probes one ulp lower than RNE), RNE on Vulkan: the
+    one-ulp bound of the wgpu sampling parity is needed.
+  - The two `skip_macro` pipelines round slightly differently on DX12 (≤ 8e-7 of the run's peak speed; Vulkan is
+    exact), so the parity case holds wgpu to the 04 §7 tolerance, measured against the run's peak speed (the
+    periodic box's vortex decays to ~1e-8, where a relative metric only measures round-off).
+- Benchmarks re-run on a quiet desktop: `skip_macro` +16.3–16.8% isothermal, +14.5–14.8% thermal at ≥ 1024²
+  (2,874 → 3,343 MLUPS on CUDA); sampling, codec and stream results unchanged within a few percent (CUDA stream
+  214–215 frames/s).
