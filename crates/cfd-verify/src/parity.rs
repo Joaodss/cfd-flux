@@ -13,10 +13,12 @@
 use std::f64::consts::PI;
 
 use cfd_core::examples::Canvas;
+use cfd_core::sample::{f16_bits, Precision, Sample, SampleData, SampleSpec};
+use cfd_core::scene::OutputField;
 use cfd_core::scene::{
     CellType, Element, ElementKind, InletVelocity, OutletBc, ThermalBc, WallVelocity,
 };
-use cfd_core::solver::{LatticeFields, Solver, SolverError};
+use cfd_core::solver::{BackendKind, LatticeFields, Solver, SolverError};
 use cfd_core::{Domain, DomainOptions, Scene};
 use cfd_lbm::{Collision, CpuLbm, LbmConfig};
 
@@ -52,6 +54,8 @@ macro_rules! parity_tests {
             rayleigh_benard,
             divergence_is_reported,
             asynchronous_readback_matches_synchronous,
+            sampling_matches_the_cpu_conversion,
+            thermal_sampling_matches_the_cpu_conversion,
         );
     };
     (@cases $factory:path; $($case:ident),* $(,)?) => {
@@ -446,4 +450,201 @@ pub fn asynchronous_readback_matches_synchronous(make: &Factory) {
     assert!(pending.try_take().is_none());
     gpu.finish().unwrap();
     assert_ne!(gpu.lattice_fields(), snapshot_sync);
+}
+
+// ---- On-device sampling (design proposal §6) ----
+
+/// The specs every sampling case requests at once: full resolution and two box filters (one that
+/// leaves partial blocks at the edges), f32 and f16, fields in different orders.
+fn sample_specs() -> Vec<SampleSpec> {
+    use OutputField::*;
+    let all = vec![Velocity, Pressure, Density, Temperature, Vorticity];
+    vec![
+        SampleSpec::full(all.clone(), Precision::F32),
+        SampleSpec::full(all.clone(), Precision::F16),
+        SampleSpec {
+            fields: vec![Vorticity, Velocity, Temperature],
+            factor: 3,
+            precision: Precision::F32,
+        },
+        SampleSpec {
+            fields: vec![Vorticity, Velocity, Temperature],
+            factor: 3,
+            precision: Precision::F16,
+        },
+        SampleSpec {
+            fields: all,
+            factor: 4,
+            precision: Precision::F16,
+        },
+    ]
+}
+
+/// Distance in units in the last place between two f16 bit patterns (on the ordered line of
+/// values, so +0 and −0 are one apart).
+fn f16_ulps(a: u16, b: u16) -> u32 {
+    let ordered = |v: u16| -> i32 {
+        if v & 0x8000 != 0 {
+            -((v & 0x7fff) as i32) - 1
+        } else {
+            v as i32
+        }
+    };
+    (ordered(a) - ordered(b)).unsigned_abs()
+}
+
+/// Compares one backend sample with the reference: bit-identical when `exact`; otherwise f32
+/// values within [`TOLERANCE`] of the field's largest value, and f16 values within one ulp (or
+/// within that tolerance, for values near zero, where an f16 ulp is far below it).
+fn compare_sample(name: &str, got: &Sample, want: &Sample, exact: bool) {
+    assert_eq!(got.spec, want.spec, "{name}: spec");
+    assert_eq!(
+        (got.step, got.width, got.height),
+        (want.step, want.width, want.height),
+        "{name}: step and size"
+    );
+    assert!(
+        (got.time - want.time).abs() <= 1e-12 * want.time.abs(),
+        "{name}: time"
+    );
+    let kinds = |s: &Sample| {
+        s.fields
+            .iter()
+            .map(|f| (f.field, f.components))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(kinds(got), kinds(want), "{name}: fields");
+    if exact {
+        for (g, w) in got.fields.iter().zip(&want.fields) {
+            let (gv, wv) = (g.data.to_f32(), w.data.to_f32());
+            let first = (0..gv.len()).find(|&i| gv[i].to_bits() != wv[i].to_bits());
+            if let Some(i) = first {
+                panic!(
+                    "{name} ({:?}): {:?}[{i}] = {:e} vs {:e}: not bit-identical",
+                    got.spec, g.field, gv[i], wv[i]
+                );
+            }
+        }
+        assert!(got == want, "{name}: not bit-identical");
+        return;
+    }
+    for (g, w) in got.fields.iter().zip(&want.fields) {
+        let (gv, wv) = (g.data.to_f32(), w.data.to_f32());
+        let scale = max_abs(&wv);
+        match (&g.data, &w.data) {
+            (SampleData::F32(_), SampleData::F32(_)) => {
+                let d = max_diff(&gv, &wv) / scale;
+                assert!(d < TOLERANCE, "{name}: {:?} differs by {d:e}", g.field);
+            }
+            (SampleData::F16(a), SampleData::F16(b)) => {
+                for (i, (&x, &y)) in a.iter().zip(b).enumerate() {
+                    let close = ((gv[i] - wv[i]).abs() as f64) < TOLERANCE * scale;
+                    assert!(
+                        f16_ulps(x, y) <= 1 || close,
+                        "{name}: {:?}[{i}] = {} vs {} ({} f16 ulps)",
+                        g.field,
+                        gv[i],
+                        wv[i],
+                        f16_ulps(x, y)
+                    );
+                }
+            }
+            _ => panic!("{name}: precision differs"),
+        }
+    }
+}
+
+/// Requests every spec of [`sample_specs`] after `steps` steps, keeps stepping while the copy is
+/// in flight, and compares each sample with [`Sample::from_lattice`] applied to the backend's own
+/// lattice fields of that step: this isolates the sampling kernel from the stream-collide kernel
+/// (whose parity the other cases check). CUDA must be bit-identical (f64 conversions, no FMA,
+/// round-to-nearest-even f16); wgpu (f32 arithmetic, the driver's FMA contraction) is held to
+/// [`TOLERANCE`] in f32 and one f16 ulp, and its f16 output must be its own f32 output rounded
+/// to nearest-even within one ulp (`pack2x16float`'s rounding; the number of values one ulp off
+/// is printed).
+pub fn check_sampling(
+    name: &str,
+    make: &Factory,
+    d: Domain,
+    initial: Option<LatticeFields>,
+    steps: u32,
+) {
+    let mut s = make(d, LbmConfig::default());
+    if let Some(f) = &initial {
+        s.set_equilibrium(f).unwrap();
+    }
+    s.step(steps).unwrap();
+    let specs = sample_specs();
+    let pending = s.request_samples(&specs);
+    assert_eq!(pending.step(), steps as u64);
+    let lf = s.lattice_fields();
+    // Stepping goes on while the samples are copied; they keep the state they were taken at.
+    s.step(10).unwrap();
+    let got = pending.wait().into_samples(s.domain());
+    s.finish().unwrap();
+    assert_eq!(got.len(), specs.len());
+    let exact = s.backend() != BackendKind::Wgpu;
+    for (spec, g) in specs.iter().zip(&got) {
+        let want = Sample::from_lattice(s.domain(), &lf, steps as u64, spec);
+        eprintln!(
+            "{name} ({:?}): k = {}, {:?}, {} fields{}",
+            s.backend(),
+            spec.factor,
+            spec.precision,
+            g.fields.len(),
+            if *g == want { " (bit-identical)" } else { "" }
+        );
+        compare_sample(name, g, &want, exact);
+    }
+    // f16 = RNE(f32) of the same backend, at full resolution and with the box filter.
+    for (i32_, i16_) in [(0, 1), (2, 3)] {
+        let (a, b) = (&got[i32_], &got[i16_]);
+        let mut off = 0usize;
+        let mut total = 0usize;
+        for (fa, fb) in a.fields.iter().zip(&b.fields) {
+            let SampleData::F16(bits) = &fb.data else {
+                panic!("{name}: f16 expected")
+            };
+            let rounded = f16_bits(&fa.data.to_f32());
+            for (&x, &y) in bits.iter().zip(&rounded) {
+                assert!(
+                    f16_ulps(x, y) <= 1,
+                    "{name}: f16 conversion off by more than one ulp"
+                );
+                off += (x != y) as usize;
+                total += 1;
+            }
+        }
+        eprintln!(
+            "{name} ({:?}): f16 vs RNE(f32), k = {}: {off} of {total} values one ulp off",
+            s.backend(),
+            a.spec.factor
+        );
+        assert!(
+            !exact || off == 0,
+            "{name}: f16 is not round-to-nearest-even"
+        );
+    }
+}
+
+/// Velocity inlet, pressure outlet and the cylinder, with gravity for the hydrostatic pressure;
+/// then a periodic box (the vorticity's differences wrap around).
+pub fn sampling_matches_the_cpu_conversion(make: &Factory) {
+    let mut d = domain(&scenes::schafer_turek(20, 1.5), 0.1);
+    d.hydrostatic.gravity = [1.0, -cfd_core::units::STANDARD_GRAVITY];
+    check_sampling("sampling cylinder", make, d, None, 600);
+    let d = domain(&scenes::periodic_box(30, 1e-3), 0.05);
+    check_sampling(
+        "sampling periodic",
+        make,
+        d,
+        Some(taylor_green(30, 0.05)),
+        50,
+    );
+}
+
+/// The thermal lattice: temperature.
+pub fn thermal_sampling_matches_the_cpu_conversion(make: &Factory) {
+    let d = domain(&scenes::heated_cavity(40, 1e5, 0.71), 0.08);
+    check_sampling("sampling heated cavity", make, d, None, 800);
 }

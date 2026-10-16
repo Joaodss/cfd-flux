@@ -17,7 +17,9 @@
 
 use std::sync::{Arc, Mutex};
 
+use cfd_core::sample::{PendingSamples, SampleSet, SampleSpec};
 use cfd_core::solver::{LatticeFields, PendingFields};
+use cfd_lbm::abi::SampleLayout;
 use cudarc::driver::{CudaEvent, CudaSlice, PinnedHostSlice};
 
 /// A device snapshot of the four macroscopic planes and the pinned buffer it is copied into.
@@ -50,6 +52,13 @@ impl<T> Default for Pool<T> {
 impl<T> Pool<T> {
     pub fn take(&self) -> Option<T> {
         self.free.lock().unwrap_or_else(|p| p.into_inner()).pop()
+    }
+
+    /// A free object that satisfies `keep`, if any.
+    pub fn take_where(&self, keep: impl Fn(&T) -> bool) -> Option<T> {
+        let mut free = self.free.lock().unwrap_or_else(|p| p.into_inner());
+        let i = free.iter().position(keep)?;
+        Some(free.swap_remove(i))
     }
 
     pub fn give(&self, item: T) {
@@ -120,6 +129,68 @@ impl Drop for CudaFields {
         if let Some(snapshot) = self.snapshot.take() {
             let _ = self.done.synchronize();
             self.pool.give(snapshot);
+        }
+    }
+}
+
+/// The output buffer of one sample on the device and the pinned buffer it is copied into
+/// (`words` 32-bit words, held as `f32`s).
+pub(crate) struct SampleBuffer {
+    pub device: CudaSlice<f32>,
+    pub host: PinnedHostSlice<f32>,
+    pub words: usize,
+}
+
+/// Samples being copied (see `Solver::request_samples`): the sampling kernels ran on the compute
+/// stream, the copies to pinned memory on the copy stream, which records `done`.
+pub(crate) struct CudaSamples {
+    pub done: CudaEvent,
+    /// One per spec, with its layout.
+    pub buffers: Vec<(SampleSpec, SampleLayout, Option<SampleBuffer>)>,
+    pub pool: Pool<SampleBuffer>,
+    pub step: u64,
+    pub time: f64,
+}
+
+impl PendingSamples for CudaSamples {
+    fn step(&self) -> u64 {
+        self.step
+    }
+
+    fn wait(mut self: Box<Self>) -> SampleSet {
+        let _ = self.done.synchronize();
+        let (step, time) = (self.step, self.time);
+        let samples = self
+            .buffers
+            .iter_mut()
+            .map(|(spec, layout, buffer)| {
+                let buffer = buffer.take().expect("samples taken once");
+                let sample = match buffer.host.as_slice() {
+                    Ok(raw) => layout.sample(spec, step, time, bytemuck::cast_slice(raw)),
+                    // Device error: NaN samples rather than a panic; `step` reports the error.
+                    Err(_) => {
+                        let nan = vec![f32::NAN.to_bits(); layout.words];
+                        layout.sample(spec, step, time, &nan)
+                    }
+                };
+                self.pool.give(buffer);
+                sample
+            })
+            .collect();
+        SampleSet::Ready(samples)
+    }
+}
+
+impl Drop for CudaSamples {
+    fn drop(&mut self) {
+        // Dropped before being collected: the copies may still be writing the buffers.
+        if self.buffers.iter().any(|(_, _, b)| b.is_some()) {
+            let _ = self.done.synchronize();
+            for (_, _, b) in &mut self.buffers {
+                if let Some(b) = b.take() {
+                    self.pool.give(b);
+                }
+            }
         }
     }
 }

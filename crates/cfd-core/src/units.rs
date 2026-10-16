@@ -47,7 +47,7 @@ pub struct UnitSystem {
 
 impl UnitSystem {
     /// Lattice velocity per physical velocity: `dt / dx`.
-    fn velocity_factor(&self) -> f64 {
+    pub fn velocity_factor(&self) -> f64 {
         self.dt / self.dx
     }
 

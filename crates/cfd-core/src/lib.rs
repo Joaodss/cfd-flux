@@ -10,6 +10,7 @@
 pub mod domain;
 pub mod examples;
 pub mod layers;
+pub mod sample;
 pub mod scene;
 pub mod solver;
 pub mod units;

@@ -328,6 +328,8 @@ name = "cfd-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bytemuck",
+ "half",
  "ruzstd",
  "schemars",
  "serde",
@@ -339,6 +341,7 @@ dependencies = [
 name = "cfd-cuda"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "cfd-core",
  "cfd-lbm",
  "cfd-verify",
@@ -409,6 +412,7 @@ dependencies = [
 name = "cfd-lbm"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "cfd-core",
  "rayon",
 ]
