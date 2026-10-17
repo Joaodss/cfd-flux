@@ -136,12 +136,22 @@ fn spawn(
     (tx, handle)
 }
 
+/// The cancel-latency bound. The Phase 3 acceptance (< 1 s) is for a release build (30–46 ms
+/// measured); an unoptimised build encodes and writes the frames still queued at the cancel much
+/// more slowly, and on a small shared CI runner (2 vCPUs, other tests running in parallel) the
+/// flush alone can pass a second, so debug builds get more room.
+const CANCEL_BOUND: Duration = if cfg!(debug_assertions) {
+    Duration::from_secs(5)
+} else {
+    Duration::from_secs(1)
+};
+
 fn meta(dir: &Path) -> serde_json::Value {
     serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap()
 }
 
 #[test]
-fn cancel_stops_a_long_run_within_a_second() {
+fn cancel_stops_a_long_run_promptly() {
     let dir = temp_dir("cancel");
     // The full-size channel example (400 × 100) for 100 s of flow: minutes of work.
     let opts = RunOptions {
@@ -157,7 +167,7 @@ fn cancel_stops_a_long_run_within_a_second() {
     let outcome = handle.join().unwrap().unwrap();
     let latency = sent.elapsed();
     assert_eq!(outcome.status, Status::Cancelled);
-    assert!(latency < Duration::from_secs(1), "cancelled in {latency:?}");
+    assert!(latency < CANCEL_BOUND, "cancelled in {latency:?}");
     eprintln!("cancel latency: {latency:?} at step {}", outcome.steps_done);
     assert!(outcome.steps_done < 100_000);
 
