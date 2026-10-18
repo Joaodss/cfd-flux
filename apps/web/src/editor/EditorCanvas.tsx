@@ -42,6 +42,33 @@ function drawOverlay(ctx: CanvasRenderingContext2D, s: EditorState, dpr: number)
     ctx.lineDashOffset = 0
     ctx.setLineDash([])
   }
+  // Probes: a ring with a cross at the cell centre, the name next to it.
+  ctx.font = '11px system-ui, sans-serif'
+  ;(s.table.probes ?? []).forEach((p, i) => {
+    const [cx, cy] = cellToScreen(s.view, H, p.position[0] + 0.5, p.position[1] + 0.5)
+    const r = Math.max(5, s.view.zoom * 0.6)
+    const selected = s.selectedProbe === i
+    ctx.lineWidth = selected ? 2.5 : 1.5
+    for (const [colour, width] of [
+      ['rgba(0, 0, 0, 0.7)', ctx.lineWidth + 2],
+      [selected ? '#facc15' : '#a855f7', ctx.lineWidth],
+    ] as const) {
+      ctx.strokeStyle = colour
+      ctx.lineWidth = width
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, 0, 2 * Math.PI)
+      ctx.moveTo(cx - r - 3, cy)
+      ctx.lineTo(cx + r + 3, cy)
+      ctx.moveTo(cx, cy - r - 3)
+      ctx.lineTo(cx, cy + r + 3)
+      ctx.stroke()
+    }
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)'
+    const w = ctx.measureText(p.name).width
+    ctx.fillRect(cx + r + 4, cy - r - 15, w + 6, 14)
+    ctx.fillStyle = '#fff'
+    ctx.fillText(p.name, cx + r + 7, cy - r - 4)
+  })
   const brushTool = s.tool === 'pencil' || s.tool === 'eraser'
   if (brushTool && s.cursor && s.view.zoom >= 2) {
     const spans = brushSpans(s.brush)

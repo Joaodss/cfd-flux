@@ -1,9 +1,12 @@
 // The editor's store (Zustand): the scene table, the view and UI state. Pixel layers are only
 // referenced here; tools and the renderer read and write them directly (ADR-005).
+import type { Draft } from 'immer'
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { newDocument } from '../scene/defaults.ts'
 import type { Document, SceneTable } from '../scene/io.ts'
+import type { ElementKind } from './colours.ts'
+import { defaultElement, nextElementId, type PaletteKind } from './elements.ts'
 import { History, type Entry } from './history.ts'
 import { CellType, type Layers } from './layers.ts'
 import type { Brush } from './tools/raster.ts'
@@ -24,8 +27,17 @@ export interface EditorState {
   /** The cell under the pointer, or null when the pointer is off the canvas. */
   cursor: [number, number] | null
   tool: ToolId
-  /** What the drawing tools write (the palette chooses it from step 3). */
-  paint: Paint
+  /** The palette's choice: what the drawing tools paint (probes have their own tool). */
+  palette: PaletteKind
+  /**
+   * The element each kind paints with; null (or an id that no longer exists) means the next
+   * stroke of that kind creates a new element.
+   */
+  activeElement: Record<ElementKind, number | null>
+  /** The element shown in the properties panel. */
+  selectedElement: number | null
+  /** Index in `table.probes` of the selected probe. */
+  selectedProbe: number | null
   brush: Brush
   /** Rectangles and ellipses filled, or outlined with the brush width. */
   filled: boolean
@@ -45,14 +57,29 @@ export interface EditorState {
   fit(): void
   setCursor(cell: [number, number] | null): void
   setTool(tool: ToolId): void
-  setPaint(paint: Paint): void
+  setPalette(kind: PaletteKind): void
+  /** Makes `id` the active element of its kind (null: the next stroke creates a new one). */
+  setActiveElement(kind: ElementKind, id: number | null): void
+  selectElement(id: number | null): void
+  selectProbe(index: number | null): void
+  /**
+   * Adds a new element of `kind` with the default properties and makes it active and selected;
+   * no history entry (the stroke that paints it records the table change). Null when ids run out.
+   */
+  createElement(kind: ElementKind): number | null
+  /** Changes the table without a history entry (live edits during a drag). */
+  editTable(recipe: (t: Draft<SceneTable>) => void): void
+  /** Puts back a table taken earlier, without a history entry. */
+  restoreTable(table: SceneTable): void
+  /** Records a table change made since `before` (with `editTable`) as one history entry. */
+  commitTable(label: string, before: SceneTable): void
   setBrush(brush: Partial<Brush>): void
   setFilled(filled: boolean): void
   setSelection(selection: Selection | null, floating: boolean): void
   setDragSize(size: [number, number] | null): void
   layersChanged(): void
-  /** Records a tool's operation in the history. */
-  commit(op: Operation): void
+  /** Records a tool's operation in the history, with the table change it made, if any. */
+  commit(op: Operation & Pick<Entry, 'table'>): void
   undo(): void
   redo(): void
 }
@@ -88,7 +115,10 @@ export const useEditor = create<EditorState>()(
       viewport: { width: 0, height: 0 },
       cursor: null,
       tool: 'pencil',
-      paint: { cellType: CellType.Solid, elementId: 0 },
+      palette: 'wall',
+      activeElement: { wall: null, inlet: null, outlet: null, heatSource: null },
+      selectedElement: null,
+      selectedProbe: null,
       brush: { size: 1, round: false },
       filled: true,
       selection: null,
@@ -106,6 +136,10 @@ export const useEditor = create<EditorState>()(
           s.cursor = null
           s.selection = null
           s.floating = false
+          s.activeElement = { wall: null, inlet: null, outlet: null, heatSource: null }
+          s.selectedElement = null
+          s.selectedProbe = null
+          if (s.palette === 'empty' && !doc.table.physics.freeSurface) s.palette = 'fluid'
           const { width, height } = s.viewport
           if (width > 0) s.view = fitView(doc.layers.width, doc.layers.height, width, height)
         }),
@@ -135,7 +169,34 @@ export const useEditor = create<EditorState>()(
         set({ cursor: cell })
       },
       setTool: (tool) => set({ tool }),
-      setPaint: (paint) => set({ paint }),
+      setPalette: (palette) => set({ palette }),
+      setActiveElement: (kind, id) =>
+        set((s) => {
+          s.activeElement[kind] = id
+          if (id !== null) s.selectedElement = id
+        }),
+      selectElement: (id) => set({ selectedElement: id }),
+      selectProbe: (index) => set({ selectedProbe: index }),
+      createElement: (kind) => {
+        const { table } = get()
+        const id = nextElementId(table.elements)
+        if (id === null) return null
+        const element = defaultElement(table, kind, id)
+        set((s) => {
+          s.table.elements.push(element)
+          s.activeElement[kind] = id
+          s.selectedElement = id
+        })
+        return id
+      },
+      editTable: (recipe) => set((s) => void recipe(s.table)),
+      restoreTable: (table) => set({ table }),
+      commitTable: (label, before) =>
+        set((s) => {
+          if (s.table === before) return
+          s.history.push({ label, tiles: new Map(), table: { before, after: s.table } })
+          s.historyVersion++
+        }),
       setBrush: (brush) =>
         set((s) => {
           if (brush.size !== undefined) {
@@ -153,7 +214,7 @@ export const useEditor = create<EditorState>()(
       layersChanged: () => set((s) => void s.layersVersion++),
       commit: (op) =>
         set((s) => {
-          s.history.push({ label: op.label, tiles: op.tiles })
+          s.history.push({ label: op.label, tiles: op.tiles, table: op.table })
           s.historyVersion++
           s.layersVersion++
         }),

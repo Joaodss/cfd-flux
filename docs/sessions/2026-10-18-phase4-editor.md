@@ -12,6 +12,7 @@ Stop after the first two implementation steps if the session gets long, with eve
 | D | Phase 4 design proposal, open questions answered | ✅ every proposal of §14 accepted |
 | 1 | Shell and canvas: layers, WebGL2 renderer, zoom/pan, status bar | ✅ |
 | 2 | Drawing tools and history | ✅ |
+| 3 | Palette and elements: active elements, automatic creation, eyedropper, element list, probes | ✅ |
 
 ## Found along the way
 
@@ -30,7 +31,16 @@ Stop after the first two implementation steps if the session gets long, with eve
 - **CI (`cfd-job`):** `cancel_stops_a_long_run_promptly` compared the frame files with `run.frames` (output
   events) instead of `run.framesStored`; a cancel drops frames still queued for the output thread, so it failed
   when one was queued (first seen on ubuntu-26.04). Fixed in the test; the runner behaves as documented.
-- **Until step 3** the tools paint solid cells without an element (id 0); the palette replaces this default.
+- **Palette (step 3):** the paint is derived from the palette's kind and that kind's active element; a painting
+  stroke with no (existing) active element creates one first, and the creation rides on the stroke's history entry
+  (table before/after + tiles), so one undo removes both; a stroke that changes nothing removes the element again.
+  Undo can remove an active element: the next stroke then creates a new one (ids are max + 1, so it gets the same
+  id back). Probes are table-only history entries. Cell counts per element are recomputed per history change (one
+  pass over the id layer), not per pointer move.
+- **CI:** one run on ubuntu-26.04 failed the wgpu parity case `taylor_green_vortex` with `status readback failed`
+  (no Rust change on the branch; an earlier run of the same code passed). Probable cause: `Mapping::wait` ignores
+  the result of `device.poll(Wait)`, so a poll that returns before the map callback leaves the staging buffer
+  unmapped. Job re-run; a separate task was proposed to make the readback wait robust.
 
 ## Decisions taken with the author
 

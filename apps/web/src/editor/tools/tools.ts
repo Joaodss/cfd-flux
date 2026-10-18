@@ -18,7 +18,16 @@ import {
 } from './raster.ts'
 
 export type ToolId =
-  'hand' | 'pencil' | 'eraser' | 'line' | 'rect' | 'ellipse' | 'bucket' | 'select'
+  | 'hand'
+  | 'pencil'
+  | 'eraser'
+  | 'line'
+  | 'rect'
+  | 'ellipse'
+  | 'bucket'
+  | 'select'
+  | 'picker'
+  | 'probe'
 
 /** What a tool writes into a cell: its type and element id (0 for fluid and empty). */
 export interface Paint {
