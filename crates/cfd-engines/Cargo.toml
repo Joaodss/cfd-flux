@@ -1,6 +1,6 @@
 [package]
 name = "cfd-engines"
-description = "Engine selection for live-fluids: which backends exist, opening them, and making solvers"
+description = "Engine selection for cfd-flux: which backends exist, opening them, and making solvers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

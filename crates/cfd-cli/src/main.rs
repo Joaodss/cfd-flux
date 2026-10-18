@@ -16,7 +16,7 @@ use cfd_core::Scene;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "cfd-cli", version, about = "live-fluids command-line tool")]
+#[command(name = "cfd-cli", version, about = "cfd-flux command-line tool")]
 struct Cli {
     #[command(subcommand)]
     command: Command,

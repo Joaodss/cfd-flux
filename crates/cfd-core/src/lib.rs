@@ -1,4 +1,4 @@
-//! Core types shared by every part of live-fluids.
+//! Core types shared by every part of cfd-flux.
 //!
 //! - [`scene`]: the `Scene` exchange format (what the web editor sends to the server).
 //! - [`layers`]: encoding/decoding of the per-pixel layers.

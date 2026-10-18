@@ -1,4 +1,4 @@
-//! `cfd-server`: the live-fluids API on `127.0.0.1:7878` (local-first, no authentication; ADR-010).
+//! `cfd-server`: the cfd-flux API on `127.0.0.1:7878` (local-first, no authentication; ADR-010).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -10,7 +10,7 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "cfd-server", version, about = "live-fluids simulation server")]
+#[command(name = "cfd-server", version, about = "cfd-flux simulation server")]
 struct Args {
     /// Address and port to listen on. Anything but a loopback address exposes the server, which
     /// has no authentication, to the network.

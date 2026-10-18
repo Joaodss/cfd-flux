@@ -44,8 +44,8 @@ rustup default stable-x86_64-pc-windows-msvc
 ### Alternative: WSL (Ubuntu)
 
 ```bash
-cd /mnt/c/Users/<user>/Desktop/GithubProjects/live-fluids
-CARGO_TARGET_DIR=$HOME/.cache/live-fluids-target cargo test --workspace
+cd /mnt/c/Users/<user>/Desktop/GithubProjects/cfd-flux
+CARGO_TARGET_DIR=$HOME/.cache/cfd-flux-target cargo test --workspace
 ```
 (A `CARGO_TARGET_DIR` outside `/mnt/c` avoids mixing Windows/Linux artefacts and is much faster.)
 
@@ -110,7 +110,7 @@ npm run typecheck && npm run lint && npm run format:check && npm run build
 - `cfd-server` opens every engine once at start-up (CUDA, a hardware wgpu adapter, the CPU) and logs what it
   found; `--allow-software` lets jobs that ask for wgpu use WARP/lavapipe. `RUST_LOG=cfd_server=debug,tower_http=debug`
   shows every request. No authentication: keep the default loopback address unless the network is trusted.
-- Data: `<data>/live-fluids.db` (SQLite: jobs and saved scenes) and `<data>/results/<job id>/` (the
+- Data: `<data>/cfd-flux.db` (SQLite: jobs and saved scenes) and `<data>/results/<job id>/` (the
   [03 §6.2](03-data-model.md#62-storage) layout; `cfd-cli render <dir>` makes PNGs from it). Jobs active when the
   server stops become `failed/interrupted`.
 - The API and the WebSocket messages are in [03 §7](03-data-model.md#7-api). Quick checks with `curl`:

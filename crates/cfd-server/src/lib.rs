@@ -1,4 +1,4 @@
-//! HTTP/WebSocket API, job manager and result storage of live-fluids.
+//! HTTP/WebSocket API, job manager and result storage of cfd-flux.
 //!
 //! One process (ADR-006, ADR-010): axum on the tokio runtime handles I/O, and every running job
 //! has its own OS threads for the solver and its output (`cfd-job`), so a solver never blocks the

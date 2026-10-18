@@ -1,6 +1,6 @@
 [package]
 name = "cfd-io"
-description = "Binary result formats for live-fluids (frames streamed to the browser and stored on disk)"
+description = "Binary result formats for cfd-flux (frames streamed to the browser and stored on disk)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

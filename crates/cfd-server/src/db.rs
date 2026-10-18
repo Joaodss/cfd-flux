@@ -71,7 +71,7 @@ pub struct Db {
 
 impl Db {
     /// Opens (creating it if needed) and migrates the database at `url`, e.g.
-    /// `sqlite://data/live-fluids.db?mode=rwc` or `sqlite::memory:`.
+    /// `sqlite://data/cfd-flux.db?mode=rwc` or `sqlite::memory:`.
     pub async fn connect(url: &str) -> Result<Self> {
         let options = SqliteConnectOptions::from_str(url)
             .with_context(|| format!("invalid database URL {url:?}"))?

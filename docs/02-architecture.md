@@ -134,7 +134,7 @@ Shared by the CLI and the server (ADR-024):
 ## 5. Repository layout (monorepo)
 
 ```
-live-fluids/
+cfd-flux/
 ├── README.md, CLAUDE.md, docs/
 ├── Cargo.toml                 # Rust workspace
 ├── crates/

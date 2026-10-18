@@ -15,7 +15,7 @@ export default function App() {
 
   return (
     <main>
-      <h1>live-fluids</h1>
+      <h1>cfd-flux</h1>
       <p>CFD simulator in the browser — under construction (Phase 0 done).</p>
       <h2>Example scenes</h2>
       <ul>

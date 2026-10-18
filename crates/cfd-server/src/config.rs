@@ -58,7 +58,7 @@ pub struct Config {
     pub listen: SocketAddr,
     /// Results go to `<data_dir>/results/<job id>/`.
     pub data_dir: PathBuf,
-    /// sqlx URL of the database; default `sqlite://<data_dir>/live-fluids.db`.
+    /// sqlx URL of the database; default `sqlite://<data_dir>/cfd-flux.db`.
     pub database_url: Option<String>,
     /// CPU jobs that may run at the same time (they share one rayon thread pool).
     pub cpu_jobs: usize,
@@ -96,7 +96,7 @@ impl Config {
         self.database_url.clone().unwrap_or_else(|| {
             format!(
                 "sqlite://{}?mode=rwc",
-                self.data_dir.join("live-fluids.db").display()
+                self.data_dir.join("cfd-flux.db").display()
             )
         })
     }

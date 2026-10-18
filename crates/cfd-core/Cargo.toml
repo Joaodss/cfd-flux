@@ -1,6 +1,6 @@
 [package]
 name = "cfd-core"
-description = "Core types for live-fluids: scene format, layers and validation"
+description = "Core types for cfd-flux: scene format, layers and validation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
