@@ -174,12 +174,14 @@ fn cancel_stops_a_long_run_promptly() {
     let m = meta(&dir);
     assert_eq!(m["run"]["status"], "cancelled");
     assert_eq!(m["run"]["stepsDone"], outcome.steps_done);
-    // Every frame counted in meta.json is on disk.
-    let frames = m["run"]["frames"].as_u64().unwrap() as usize;
+    // Every frame meta.json counts as stored is on disk. A cancel drops the frames still queued
+    // for the output thread, so output events (`frames`) may exceed the files.
+    let stored = m["run"]["framesStored"].as_u64().unwrap() as usize;
     assert_eq!(
         std::fs::read_dir(dir.join("frames")).unwrap().count(),
-        frames
+        stored
     );
+    assert!(stored as u64 <= m["run"]["frames"].as_u64().unwrap());
     assert_eq!(rec.events().last(), Some(&Ev::Finished(Status::Cancelled)));
     let _ = std::fs::remove_dir_all(&dir);
 }
