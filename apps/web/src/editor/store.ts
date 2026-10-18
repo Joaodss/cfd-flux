@@ -12,6 +12,7 @@ import { CellType, type Layers } from './layers.ts'
 import type { Brush } from './tools/raster.ts'
 import type { Selection } from './tools/select.ts'
 import type { Operation, Paint, ToolId } from './tools/tools.ts'
+import { resizeLayers, resizeTable, scaleLayers, scaleTable } from './resize.ts'
 import { clampZoom, fitView, stepZoom, zoomAt, type View } from './view.ts'
 
 export interface EditorState {
@@ -38,6 +39,8 @@ export interface EditorState {
   selectedElement: number | null
   /** Index in `table.probes` of the selected probe. */
   selectedProbe: number | null
+  /** The properties panel's tab. */
+  panelTab: PanelTab
   brush: Brush
   /** Rectangles and ellipses filled, or outlined with the brush width. */
   filled: boolean
@@ -62,6 +65,7 @@ export interface EditorState {
   setActiveElement(kind: ElementKind, id: number | null): void
   selectElement(id: number | null): void
   selectProbe(index: number | null): void
+  setPanelTab(tab: PanelTab): void
   /**
    * Adds a new element of `kind` with the default properties and makes it active and selected;
    * no history entry (the stroke that paints it records the table change). Null when ids run out.
@@ -73,6 +77,12 @@ export interface EditorState {
   restoreTable(table: SceneTable): void
   /** Records a table change made since `before` (with `editTable`) as one history entry. */
   commitTable(label: string, before: SceneTable): void
+  /** Changes the table as one history entry (a property edit). */
+  updateTable(label: string, recipe: (t: Draft<SceneTable>) => void): void
+  /** Crops or extends the grid, anchored at the bottom-left cell (one history entry). */
+  resizeGrid(width: number, height: number): void
+  /** Refines the drawing: each cell becomes k × k cells of 1/k the size (one history entry). */
+  scaleDrawing(k: number): void
   setBrush(brush: Partial<Brush>): void
   setFilled(filled: boolean): void
   setSelection(selection: Selection | null, floating: boolean): void
@@ -86,6 +96,8 @@ export interface EditorState {
 
 export const MAX_BRUSH = 64
 
+export type PanelTab = 'element' | 'scene' | 'run'
+
 /** What erasing paints: fluid, or empty cells (gas) in a free-surface scene. */
 export function background(table: SceneTable): Paint {
   return {
@@ -97,11 +109,29 @@ export function background(table: SceneTable): Paint {
 export const useEditor = create<EditorState>()(
   immer((set, get) => {
     const initial = newDocument()
+    /** Replaces the grid (layers and table) as one history entry. */
+    const replaceGrid = (label: string, table: SceneTable, after: Layers) => {
+      const { history, table: before, layers } = get()
+      history.push({
+        label,
+        tiles: new Map(),
+        table: { before, after: table },
+        layers: { before: layers, after },
+      })
+      set((s) => {
+        s.table = table
+        s.layers = after
+        s.selectedProbe = null
+        s.historyVersion++
+        s.layersVersion++
+      })
+    }
     /** Applies an undone or redone entry's table side and tells subscribers. */
     const applied = (e: Entry | null, table: 'before' | 'after') =>
       set((s) => {
         if (!e) return
         if (e.table) s.table = e.table[table]
+        if (e.layers) s.layers = e.layers[table]
         s.historyVersion++
         s.layersVersion++
       })
@@ -119,6 +149,7 @@ export const useEditor = create<EditorState>()(
       activeElement: { wall: null, inlet: null, outlet: null, heatSource: null },
       selectedElement: null,
       selectedProbe: null,
+      panelTab: 'scene',
       brush: { size: 1, round: false },
       filled: true,
       selection: null,
@@ -173,10 +204,18 @@ export const useEditor = create<EditorState>()(
       setActiveElement: (kind, id) =>
         set((s) => {
           s.activeElement[kind] = id
-          if (id !== null) s.selectedElement = id
+          if (id !== null) {
+            s.selectedElement = id
+            s.panelTab = 'element'
+          }
         }),
-      selectElement: (id) => set({ selectedElement: id }),
+      selectElement: (id) =>
+        set((s) => {
+          s.selectedElement = id
+          if (id !== null) s.panelTab = 'element'
+        }),
       selectProbe: (index) => set({ selectedProbe: index }),
+      setPanelTab: (panelTab) => set({ panelTab }),
       createElement: (kind) => {
         const { table } = get()
         const id = nextElementId(table.elements)
@@ -186,17 +225,35 @@ export const useEditor = create<EditorState>()(
           s.table.elements.push(element)
           s.activeElement[kind] = id
           s.selectedElement = id
+          s.panelTab = 'element'
         })
         return id
       },
       editTable: (recipe) => set((s) => void recipe(s.table)),
       restoreTable: (table) => set({ table }),
-      commitTable: (label, before) =>
-        set((s) => {
-          if (s.table === before) return
-          s.history.push({ label, tiles: new Map(), table: { before, after: s.table } })
-          s.historyVersion++
-        }),
+      updateTable: (label, recipe) => {
+        const before = get().table
+        set((s) => void recipe(s.table))
+        get().commitTable(label, before)
+      },
+      resizeGrid: (width, height) => {
+        const { table, layers } = get()
+        if (width === layers.width && height === layers.height) return
+        const after = resizeLayers(layers, width, height, background(table))
+        replaceGrid('Resize grid', resizeTable(table, width, height), after)
+      },
+      scaleDrawing: (k) => {
+        const { table, layers } = get()
+        replaceGrid(`Scale ×${k}`, scaleTable(table, k), scaleLayers(layers, k))
+      },
+      commitTable: (label, before) => {
+        // Read the table outside a recipe: inside one, `s.table` is an immer draft (a proxy
+        // that is revoked when the recipe ends), not the immutable value the history must keep.
+        const { table, history } = get()
+        if (table === before) return
+        history.push({ label, tiles: new Map(), table: { before, after: table } })
+        set((s) => void s.historyVersion++)
+      },
       setBrush: (brush) =>
         set((s) => {
           if (brush.size !== undefined) {

@@ -162,11 +162,16 @@ export class Stroke {
   }
 }
 
-/** One undoable operation: pixel tiles, scene-table changes, or both. */
+/** One undoable operation: pixel tiles, scene-table changes, a replaced grid, or a mix. */
 export interface Entry {
   label: string
   tiles: Map<number, TileData>
   table?: { before: SceneTable; after: SceneTable }
+  /**
+   * A new grid (resize, scale): the whole layers object is replaced, and undo puts the old one
+   * back. Tile entries before it refer to the old layers, which is right: undo replays in order.
+   */
+  layers?: { before: Layers; after: Layers }
 }
 
 export const HISTORY_BUDGET_BYTES = 256 * 2 ** 20
@@ -174,6 +179,10 @@ export const HISTORY_MAX_ENTRIES = 200
 
 function entryBytes(e: Entry): number {
   let n = 256
+  // Both grids are kept; one of them is the document's current one, so count the larger.
+  if (e.layers) {
+    n += 3 * Math.max(e.layers.before.cellType.length, e.layers.after.cellType.length)
+  }
   for (const t of e.tiles.values()) n += tileBytes(t)
   return n
 }

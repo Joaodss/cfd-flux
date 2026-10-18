@@ -9,9 +9,11 @@
     /* Bundler mode */
     "module": "nodenext",
     "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
     "noEmit": true,
+    "jsx": "react-jsx",
 
     /* Linting */
     "noUnusedLocals": true,

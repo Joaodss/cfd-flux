@@ -2,6 +2,7 @@
 import { Layers } from '../editor/layers.ts'
 import { SCHEMA_VERSION } from './version.ts'
 import type { Document } from './io.ts'
+import { FLUID_PRESETS, presetFluid } from './library.ts'
 
 export const NEW_SCENE = { width: 400, height: 200, cellSize: 0.005 }
 
@@ -21,18 +22,11 @@ export function newDocument(
         cellSize,
         edges: { left: 'wall', right: 'wall', bottom: 'wall', top: 'wall' },
       },
-      // Air at 20 °C; the preset library replaces this literal in step 4.
       fluids: [
-        {
-          id: 1,
-          name: 'Air',
-          preset: 'air',
-          density: 1.204,
-          kinematicViscosity: 1.516e-5,
-          thermalConductivity: 0.0257,
-          specificHeat: 1005,
-          thermalExpansion: 3.43e-3,
-        },
+        presetFluid(
+          FLUID_PRESETS.find((f) => f.key === 'air')!,
+          1,
+        ),
       ],
       solidMaterials: [],
       elements: [],

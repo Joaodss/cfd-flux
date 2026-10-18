@@ -13,6 +13,7 @@ Stop after the first two implementation steps if the session gets long, with eve
 | 1 | Shell and canvas: layers, WebGL2 renderer, zoom/pan, status bar | ✅ |
 | 2 | Drawing tools and history | ✅ |
 | 3 | Palette and elements: active elements, automatic creation, eyedropper, element list, probes | ✅ |
+| 4 | Properties panels (Element, Scene, Run) and the fluid/material library (`cfd_core::library`) | ✅ |
 
 ## Found along the way
 
@@ -41,6 +42,16 @@ Stop after the first two implementation steps if the session gets long, with eve
   (no Rust change on the branch; an earlier run of the same code passed). Probable cause: `Mapping::wait` ignores
   the result of `device.poll(Wait)`, so a poll that returns before the map callback leaves the staging buffer
   unmapped. Job re-run; a separate task was proposed to make the readback wait robust.
+
+- **Properties (step 4):** fields commit on Enter/blur (one history entry per edit, so no merging of
+  keystrokes was needed); while unfocused they show the store's value, so undo needs no synchronisation code.
+  A grid resize or refinement replaces the layers object; its history entry keeps both grids and undo swaps
+  them, while tile entries recorded before it still apply to the old grid (undo replays in order).
+- **Bug found by the new tests:** `commitTable` read `s.table` inside an immer recipe, so the history kept a
+  draft proxy (revoked when the recipe ends) and every edit looked like a change; it now reads the table with
+  `get()` outside the recipe. Earlier probe undo tests passed only because they never redid a probe edit.
+- Component tests (Testing Library on happy-dom) cover the number field, the inlet and thermal forms and the
+  Run tab; the tests' tsconfig gained the DOM and Vite types, JSX and JSON modules.
 
 ## Decisions taken with the author
 
