@@ -147,46 +147,67 @@ pub fn check_stability(input: &StabilityInput, report: &mut Report) {
 
     let mach = input.u_max * CS2.sqrt().recip();
     if mach > MACH_MAX {
-        report.error(
-            "stability.mach",
-            format!("lattice Mach number {mach:.3} exceeds {MACH_MAX}: lower the lattice velocity"),
-        );
+        report
+            .error(
+                "stability.mach",
+                format!(
+                    "lattice Mach number {mach:.3} exceeds {MACH_MAX}: lower the lattice velocity"
+                ),
+            )
+            .param("mach", mach)
+            .param("limit", MACH_MAX);
     } else if mach > MACH_WARN {
-        report.warning(
-            "stability.mach",
-            format!(
+        report
+            .warning(
+                "stability.mach",
+                format!(
                 "lattice Mach number {mach:.3} exceeds {MACH_WARN}: expect compressibility errors"
             ),
-        );
+            )
+            .param("mach", mach)
+            .param("limit", MACH_WARN);
     }
 
     let grid_re = input.u_max / input.nu;
     if grid_re > GRID_RE_WARN {
-        report.warning(
-            "stability.gridRe",
-            format!("grid Reynolds number U·dx/ν = {grid_re:.1} is high: {HINT}"),
-        );
+        report
+            .warning(
+                "stability.gridRe",
+                format!("grid Reynolds number U·dx/ν = {grid_re:.1} is high: {HINT}"),
+            )
+            .param("gridRe", grid_re)
+            .param("limit", GRID_RE_WARN);
     }
 }
 
 fn check_tau(tau: f64, code: &'static str, what: &str, hint: &str, report: &mut Report) {
     if tau.is_nan() || tau < TAU_MIN {
-        report.error(
-            code,
-            format!("{what} relaxation time τ = {tau:.4} is below {TAU_MIN}: {hint}"),
-        );
+        report
+            .error(
+                code,
+                format!("{what} relaxation time τ = {tau:.4} is below {TAU_MIN}: {hint}"),
+            )
+            .param("tau", tau)
+            .param("limit", TAU_MIN);
     } else if tau < TAU_WARN_LOW {
-        report.warning(
-            code,
-            format!("{what} relaxation time τ = {tau:.4} is close to 0.5: the run may be unstable"),
-        );
+        report
+            .warning(
+                code,
+                format!(
+                    "{what} relaxation time τ = {tau:.4} is close to 0.5: the run may be unstable"
+                ),
+            )
+            .param("tau", tau)
+            .param("limit", TAU_WARN_LOW);
     } else if tau > TAU_WARN_HIGH {
         report.warning(
             code,
             format!(
                 "{what} relaxation time τ = {tau:.3} is large: accuracy drops; use a coarser grid or a higher lattice velocity"
             ),
-        );
+        )
+        .param("tau", tau)
+        .param("limit", TAU_WARN_HIGH);
     }
 }
 

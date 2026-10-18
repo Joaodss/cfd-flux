@@ -118,6 +118,33 @@ fn paint(scene: &mut Scene, x: u32, y: u32, ct: u8, element: u16) {
     scene.layers.element_id = LayerData::encode_u16(&element_id, LayerEncoding::RawBase64);
 }
 
+/// Issues carry their values and cell for the editor (localised messages, markers).
+#[test]
+fn issues_carry_params_and_cells() {
+    let mut s = examples::channel();
+    paint(&mut s, 200, 50, CellType::Solid as u8, 2); // a solid cell with the inlet's id
+    let report = validate(&s);
+    let issue = report
+        .issues
+        .iter()
+        .find(|i| i.code == "cell.element")
+        .unwrap();
+    assert_eq!(issue.at, Some([200, 50]));
+    assert_eq!(issue.params["problem"], "kindMismatch");
+    assert_eq!(issue.params["element"], 2);
+
+    let mut s = examples::channel();
+    s.fluids[0].id = 7; // the initial fluid (1) and the inlet's fluid are now missing
+    let report = validate(&s);
+    let issue = report
+        .issues
+        .iter()
+        .find(|i| i.code == "initial.fluid")
+        .unwrap();
+    assert_eq!(issue.params["fluid"], 1);
+    assert_eq!(issue.at, None);
+}
+
 #[test]
 fn detects_cell_element_mismatches() {
     // Solid cell without element.

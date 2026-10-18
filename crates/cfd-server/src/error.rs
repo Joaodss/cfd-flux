@@ -14,12 +14,17 @@ use cfd_core::validate::{Issue, Severity};
 use serde::Serialize;
 use serde_json::json;
 
-/// A validation issue as the API reports it (stable codes for the UI's translations).
+/// A validation issue as the API reports it: a stable code, the English message, the values in
+/// it (`params`, for the UI's own wording) and the cell it is about, if any.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct IssueDto {
     pub code: &'static str,
     pub severity: &'static str,
     pub message: String,
+    #[serde(skip_serializing_if = "serde_json::Map::is_empty")]
+    pub params: serde_json::Map<String, serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<[u32; 2]>,
 }
 
 impl From<&Issue> for IssueDto {
@@ -31,6 +36,8 @@ impl From<&Issue> for IssueDto {
                 Severity::Warning => "warning",
             },
             message: i.message.clone(),
+            params: i.params.clone(),
+            at: i.at,
         }
     }
 }

@@ -177,7 +177,7 @@ Implemented by `cfd-server` (Phase 3). All JSON is camelCase like the scene form
 | Method | Route | Body / query | Response |
 |--------|-------|--------------|----------|
 | `GET` | `/api/capabilities` | — | engines (kind, availability or `reason`, device, memory, `physicalDevice`), `auto`, limits, stream defaults |
-| `POST` | `/api/scenes/validate` | `Scene` | `{ ok, code?, message?, issues: [{ code, severity, message }], estimate }` — a scene that cannot run is `ok: false`, not an error status |
+| `POST` | `/api/scenes/validate` | `Scene` | `{ ok, code?, message?, issues: [{ code, severity, message, params?, at? }], estimate }` — a scene that cannot run is `ok: false`, not an error status; the estimate is `null` only when the scene could not be prepared (format or consistency errors) |
 | `POST` | `/api/simulations` | `{ scene \| sceneId, options? }` | `201` + `Location` with the job (status, backend, device, estimate, warnings, notes); `422` with `issues`; `429` when the queue is full |
 | `GET` | `/api/simulations` | `?status=&limit=` | jobs, newest first |
 | `GET` | `/api/simulations/{id}` | — | the job: status, reason, message, progress, frames, timings |
@@ -189,6 +189,14 @@ Implemented by `cfd-server` (Phase 3). All JSON is camelCase like the scene form
 | `GET` · `POST` | `/api/scenes` | `Scene` | list (id, name, times) · save (`201 { id, name }`) |
 | `GET` · `PUT` · `DELETE` | `/api/scenes/{id}` | — · `Scene` · — | the scene JSON · `{ id, name }` (replaced; `404` if unknown) · `204` |
 
+- **Issues:** `code` is stable; `message` is English; `params` holds the values in the message (element, fluid
+  and probe ids, Mach number, τ, limits, and for `cell.element` a `problem`: `noElement`, `missingElement`,
+  `kindMismatch`, `noFluidNeighbour`, `unexpectedElement`) so a UI can word it itself; `at` is the cell
+  `[x, y]` an issue is about (per-cell issues, at most 5 per kind).
+- **Estimate:** `cells`, `fluidCells`, `steps`, `frames`, `thermal`, `memoryBytes`, `storedBytes`, `engine`
+  (`null` when none can run it), `seconds` (once a job has measured that engine's throughput) and `numbers`:
+  the characteristic `velocity` and `length`, `reynolds`, `mach`, `prandtl?`, `rayleigh?`, `tau`, `tauThermal?`,
+  `dx`, `dt` and `latticeVelocity`. A scene over a server limit or with no engine still gets its estimate.
 - **Options** (`options` of a submission; the same overrides as `cfd-cli run`): `backend` (`auto|cpu|wgpu|cuda`; default: the scene's `run.backend`), `latticeVelocity`, `endTime`, `outputInterval`, `sampleInterval` (s), `storeFrames` (default `true`; streaming works either way). Unknown options are a `400`.
 - **Job status:** `queued → running ⇄ paused → completed | failed | cancelled`; `failed` carries `reason`: `diverged` (the frames before stay valid), `error` (backend or I/O) or `interrupted` (the server stopped; jobs are not resumed).
 - **Errors:** `{ "error": { "code", "message", "issues"? } }` with stable codes: `request.json` (400, not JSON or not the expected shape), `scene.format` (400, not a scene), `scene.invalid` (422, with the validation `issues`), `limits.cells` / `limits.steps` (422), `engine.unavailable` / `engine.memory` (422), `request.tooLarge` (413: send layers as `zstd+base64`), `queue.full` (429), `notFound`, `conflict`, `internal`.

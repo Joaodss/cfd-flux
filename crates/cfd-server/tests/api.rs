@@ -52,6 +52,68 @@ async fn a_valid_scene_gets_an_estimate() {
     assert_eq!(e["memoryBytes"], 64 * 18 * 94);
     assert!(e["steps"].as_u64().unwrap() > 0);
     assert!(e.get("seconds").is_none(), "no throughput measured yet");
+    // The numbers derived from the scene, in physical and lattice units.
+    let n = &e["numbers"];
+    for key in [
+        "velocity",
+        "length",
+        "reynolds",
+        "mach",
+        "tau",
+        "dx",
+        "dt",
+        "latticeVelocity",
+    ] {
+        assert!(n[key].as_f64().unwrap() > 0.0, "{key}: {n}");
+    }
+    assert!(n.get("prandtl").is_none(), "isothermal");
+    let re = n["velocity"].as_f64().unwrap() * n["length"].as_f64().unwrap() / 1.516e-5;
+    assert!(
+        (n["reynolds"].as_f64().unwrap() / re - 1.0).abs() < 1e-9,
+        "{n}"
+    );
+    s.stop().await;
+}
+
+#[tokio::test]
+async fn issues_carry_params_and_cells() {
+    let s = TestServer::start("validate-params").await;
+    let mut scene = small_channel();
+    let n = scene.grid.cell_count();
+    let mut ct = scene.layers.cell_type.decode_u8(n).unwrap();
+    ct[5 * 64 + 30] = 1; // a solid cell without an element at (30, 5)
+    scene.layers.cell_type =
+        cfd_core::layers::LayerData::encode_u8(&ct, cfd_core::layers::LayerEncoding::RawBase64);
+    let v: Value = client()
+        .post(s.url("/api/scenes/validate"))
+        .json(&scene)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let issue = v["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["code"] == "cell.element")
+        .unwrap_or_else(|| panic!("{v}"));
+    assert_eq!(issue["at"], serde_json::json!([30, 5]));
+    assert_eq!(issue["params"]["problem"], "noElement");
+    // Issues without values or a cell leave the fields out.
+    let v: Value = client()
+        .post(s.url("/api/scenes/validate"))
+        .json(&small_channel())
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    for i in v["issues"].as_array().unwrap() {
+        assert!(i.get("at").is_none(), "{i}");
+    }
     s.stop().await;
 }
 
@@ -171,6 +233,9 @@ async fn limits_are_enforced() {
         .await
         .unwrap();
     assert_eq!(v["code"], "limits.cells", "{v}");
+    // The estimate still says why (and what the scene would need).
+    assert_eq!(v["estimate"]["cells"], 64 * 18, "{v}");
+    assert!(v["estimate"]["engine"].is_null());
     s.stop().await;
 }
 

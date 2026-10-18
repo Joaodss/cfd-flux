@@ -22,7 +22,27 @@ pub struct Issue {
     pub severity: Severity,
     /// Stable machine-readable code, e.g. `layer.length` (used by the UI for translations).
     pub code: &'static str,
+    /// English text, also the fallback for codes a UI does not translate.
     pub message: String,
+    /// The values in the message (element ids, numbers, limits), so a UI can word it in its own
+    /// language (ADR-027).
+    pub params: serde_json::Map<String, serde_json::Value>,
+    /// The cell the issue is about, when there is one (the editor marks it).
+    pub at: Option<[u32; 2]>,
+}
+
+impl Issue {
+    /// Adds a value of the message.
+    pub fn param(&mut self, key: &str, value: impl Into<serde_json::Value>) -> &mut Self {
+        self.params.insert(key.to_string(), value.into());
+        self
+    }
+
+    /// Sets the cell the issue is about.
+    pub fn at(&mut self, x: usize, y: usize) -> &mut Self {
+        self.at = Some([x as u32, y as u32]);
+        self
+    }
 }
 
 #[derive(Debug, Default)]
@@ -39,20 +59,25 @@ impl Report {
         self.issues.iter().filter(|i| i.severity == Severity::Error)
     }
 
-    pub fn error(&mut self, code: &'static str, message: impl Into<String>) {
-        self.issues.push(Issue {
-            severity: Severity::Error,
-            code,
-            message: message.into(),
-        });
+    /// Adds an error; returns it, to add `param`s and a cell (`at`).
+    pub fn error(&mut self, code: &'static str, message: impl Into<String>) -> &mut Issue {
+        self.push(Severity::Error, code, message.into())
     }
 
-    pub fn warning(&mut self, code: &'static str, message: impl Into<String>) {
+    /// Adds a warning; returns it, to add `param`s and a cell (`at`).
+    pub fn warning(&mut self, code: &'static str, message: impl Into<String>) -> &mut Issue {
+        self.push(Severity::Warning, code, message.into())
+    }
+
+    fn push(&mut self, severity: Severity, code: &'static str, message: String) -> &mut Issue {
         self.issues.push(Issue {
-            severity: Severity::Warning,
+            severity,
             code,
-            message: message.into(),
+            message,
+            params: serde_json::Map::new(),
+            at: None,
         });
+        self.issues.last_mut().expect("just pushed")
     }
 }
 
@@ -70,7 +95,9 @@ pub fn validate(scene: &Scene) -> Report {
                 "schemaVersion {} is not supported (expected {SCHEMA_VERSION})",
                 scene.schema_version
             ),
-        );
+        )
+        .param("version", scene.schema_version)
+        .param("expected", SCHEMA_VERSION);
     }
     if grid.width == 0 || grid.height == 0 {
         r.error("grid.empty", "grid width and height must be at least 1");
@@ -80,7 +107,8 @@ pub fn validate(scene: &Scene) -> Report {
         r.error(
             "grid.tooLarge",
             format!("grid sides must be at most {MAX_GRID_SIDE} cells"),
-        );
+        )
+        .param("max", MAX_GRID_SIDE);
         return r;
     }
     if !(grid.cell_size.is_finite() && grid.cell_size > 0.0) {
@@ -108,7 +136,8 @@ pub fn validate(scene: &Scene) -> Report {
             r.error(
                 "fluid.properties",
                 format!("fluid {} needs positive density and viscosity", f.id),
-            );
+            )
+            .param("fluid", f.id);
         }
         if scene.physics.thermal && (f.thermal_conductivity.is_none() || f.specific_heat.is_none())
         {
@@ -118,7 +147,8 @@ pub fn validate(scene: &Scene) -> Report {
                     "fluid {} needs thermalConductivity and specificHeat when thermal is on",
                     f.id
                 ),
-            );
+            )
+            .param("fluid", f.id);
         }
         if scene.physics.buoyancy == crate::scene::Buoyancy::Boussinesq
             && f.thermal_expansion.is_none()
@@ -126,14 +156,16 @@ pub fn validate(scene: &Scene) -> Report {
             r.error(
                 "fluid.expansion",
                 format!("fluid {} needs thermalExpansion for Boussinesq", f.id),
-            );
+            )
+            .param("fluid", f.id);
         }
     }
     if !fluid_ids.contains(&(scene.initial.fluid as u32)) {
         r.error(
             "initial.fluid",
             format!("initial fluid {} does not exist", scene.initial.fluid),
-        );
+        )
+        .param("fluid", scene.initial.fluid);
     }
 
     // Elements.
@@ -156,13 +188,17 @@ pub fn validate(scene: &Scene) -> Report {
             r.error(
                 "element.fluid",
                 format!("element {} references missing fluid {f}", el.id),
-            );
+            )
+            .param("element", el.id)
+            .param("fluid", f);
         }
         if let Some(m) = material.filter(|m| !solid_ids.contains(&(*m as u32))) {
             r.error(
                 "element.material",
                 format!("element {} references missing material {m}", el.id),
-            );
+            )
+            .param("element", el.id)
+            .param("material", m);
         }
     }
 
@@ -202,7 +238,9 @@ pub fn validate(scene: &Scene) -> Report {
                     );
                 }
             }
-            Err(e) => r.error("layer.fluidId", format!("fluidId layer: {e}")),
+            Err(e) => {
+                r.error("layer.fluidId", format!("fluidId layer: {e}"));
+            }
         }
     }
 
@@ -221,7 +259,9 @@ pub fn validate(scene: &Scene) -> Report {
                     r.error(
                         "cell.type",
                         format!("cell ({x}, {y}) has unknown cellType {v}"),
-                    );
+                    )
+                    .at(x, y)
+                    .param("value", v);
                 }
                 cell_errors += 1;
                 continue;
@@ -235,7 +275,8 @@ pub fn validate(scene: &Scene) -> Report {
                     r.error(
                         "cell.empty",
                         format!("cell ({x}, {y}) is empty but freeSurface is off"),
-                    );
+                    )
+                    .at(x, y);
                 }
                 cell_errors += 1;
             }
@@ -248,31 +289,44 @@ pub fn validate(scene: &Scene) -> Report {
             ct,
             CellType::Solid | CellType::Inlet | CellType::Outlet | CellType::HeatSource
         );
+        // (the `problem` param for a UI, the English message)
         let problem = match (needs_element, eid) {
-            (true, 0) => Some(format!("cell ({x}, {y}) of type {ct:?} has no element")),
+            (true, 0) => Some((
+                "noElement",
+                format!("cell ({x}, {y}) of type {ct:?} has no element"),
+            )),
             (true, id) => match kinds.get(&id) {
-                None => Some(format!("cell ({x}, {y}) references missing element {id}")),
-                Some(k) if *k != ct => Some(format!(
-                    "cell ({x}, {y}) is {ct:?} but element {id} is {k:?}"
+                None => Some((
+                    "missingElement",
+                    format!("cell ({x}, {y}) references missing element {id}"),
+                )),
+                Some(k) if *k != ct => Some((
+                    "kindMismatch",
+                    format!("cell ({x}, {y}) is {ct:?} but element {id} is {k:?}"),
                 )),
                 Some(_)
                     if matches!(ct, CellType::Inlet | CellType::Outlet)
                         && !touches_fluid(&cell_type, w, h, x, y) =>
                 {
-                    Some(format!(
-                        "{ct:?} cell ({x}, {y}) does not touch any fluid cell"
+                    Some((
+                        "noFluidNeighbour",
+                        format!("{ct:?} cell ({x}, {y}) does not touch any fluid cell"),
                     ))
                 }
                 Some(_) => None,
             },
             (false, 0) => None,
-            (false, id) => Some(format!(
-                "cell ({x}, {y}) of type {ct:?} must not have element {id}"
+            (false, id) => Some((
+                "unexpectedElement",
+                format!("cell ({x}, {y}) of type {ct:?} must not have element {id}"),
             )),
         };
-        if let Some(msg) = problem {
+        if let Some((kind, msg)) = problem {
             if cell_errors < MAX_CELL_ERRORS {
-                r.error("cell.element", msg);
+                let issue = r.error("cell.element", msg).at(x, y).param("problem", kind);
+                if eid != 0 {
+                    issue.param("element", eid);
+                }
             }
             cell_errors += 1;
         }
@@ -281,7 +335,8 @@ pub fn validate(scene: &Scene) -> Report {
         r.error(
             "cell.more",
             format!("{} more cell errors omitted", cell_errors - MAX_CELL_ERRORS),
-        );
+        )
+        .param("count", cell_errors - MAX_CELL_ERRORS);
     }
 
     if !has_fluid {
@@ -299,7 +354,8 @@ pub fn validate(scene: &Scene) -> Report {
             r.error(
                 "probe.position",
                 format!("probe '{}' is outside the grid", p.name),
-            );
+            )
+            .param("probe", p.name.clone());
         }
     }
     r
@@ -329,9 +385,12 @@ fn unique_ids(r: &mut Report, what: &str, ids: impl Iterator<Item = u32>) -> Has
     let mut seen = HashSet::new();
     for id in ids {
         if id == 0 {
-            r.error("id.zero", format!("{what} ids must be >= 1"));
+            r.error("id.zero", format!("{what} ids must be >= 1"))
+                .param("what", what);
         } else if !seen.insert(id) {
-            r.error("id.duplicate", format!("duplicate {what} id {id}"));
+            r.error("id.duplicate", format!("duplicate {what} id {id}"))
+                .param("what", what)
+                .param("id", id);
         }
     }
     seen
