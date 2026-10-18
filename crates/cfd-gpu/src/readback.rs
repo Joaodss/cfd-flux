@@ -9,6 +9,7 @@
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use cfd_core::sample::{PendingSamples, SampleSet, SampleSpec};
 use cfd_core::solver::{LatticeFields, PendingFields};
@@ -19,6 +20,10 @@ use crate::GpuContext;
 const PENDING: u8 = 0;
 const MAPPED: u8 = 1;
 const FAILED: u8 = 2;
+
+/// How long [`Mapping::wait`] waits for a callback that another thread's poll has collected
+/// (normally microseconds; the bound only turns a wgpu bug into an error instead of a hang).
+const CALLBACK_GRACE: Duration = Duration::from_secs(10);
 
 /// A staging buffer being mapped, with the flag set by the map callback.
 pub(crate) struct Mapping {
@@ -47,14 +52,36 @@ impl Mapping {
         self.state.load(Ordering::Acquire) != PENDING
     }
 
-    /// Blocks until the submission has completed and the callback has run.
-    pub fn wait(&self, ctx: &GpuContext) {
-        if !self.is_done() {
-            let _ = ctx.device.poll(wgpu::PollType::Wait {
+    /// Blocks until the submission has completed and the callback has run; `Err` (with the
+    /// reason) if the poll fails or the callback still has not run after [`CALLBACK_GRACE`].
+    ///
+    /// `poll(Wait)` alone is not enough: a poll collects the callbacks of *every* finished
+    /// submission and runs them after it returns, on the thread that polled. When another thread
+    /// polls the same device (solvers sharing one context on several threads), it can collect
+    /// this callback, and our `Wait` then returns before the callback has run.
+    pub fn wait(&self, ctx: &GpuContext) -> Result<(), String> {
+        let deadline = Instant::now() + CALLBACK_GRACE;
+        while !self.is_done() {
+            let polled = ctx.device.poll(wgpu::PollType::Wait {
                 submission_index: Some(self.index.clone()),
                 timeout: None,
             });
+            if self.is_done() {
+                break;
+            }
+            if let Err(e) = polled {
+                return Err(format!("device poll failed: {e}"));
+            }
+            // The submission has completed, so the callback is about to run on the thread that
+            // collected it. Further `Wait`s return at once: this loop yields rather than blocks.
+            if Instant::now() >= deadline {
+                return Err(format!(
+                    "map callback did not run within {CALLBACK_GRACE:?} of the copy completing"
+                ));
+            }
+            std::thread::yield_now();
         }
+        Ok(())
     }
 
     /// Reads the mapped bytes as `f32`, unmaps, and returns the buffer for reuse.
@@ -159,7 +186,8 @@ impl PendingFields for GpuFields {
 
     fn wait(mut self: Box<Self>) -> LatticeFields {
         if let Some(m) = &self.mapping {
-            m.wait(&self.ctx);
+            // A failed wait leaves the mapping unread: `collect` reports NaN fields.
+            let _ = m.wait(&self.ctx);
         }
         self.collect()
     }
@@ -191,7 +219,8 @@ impl PendingSamples for GpuSamples {
             .items
             .into_iter()
             .map(|c| {
-                c.mapping.wait(&self.ctx);
+                // A failed wait leaves the mapping unread: NaN samples below.
+                let _ = c.mapping.wait(&self.ctx);
                 let mut raw = Vec::new();
                 match c.mapping.read(&mut raw) {
                     Some(buffer) => c.pool.give(buffer),
