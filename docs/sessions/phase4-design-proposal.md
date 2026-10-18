@@ -1,6 +1,6 @@
 # Phase 4 — web editor (drawing board): design proposal (2026-10-18)
 
-**Status: proposed, waiting for the author's answers to §14.** Implemented on `feat/phase4-editor`; the accepted
+**Status: approved by the author on 2026-10-18, as proposed** (every proposal of §14 accepted). Implemented on `feat/phase4-editor`; the accepted
 parts move into [02 §2.1](../02-architecture.md#21-frontend--appsweb), [03](../03-data-model.md) and new ADRs as
 they are implemented, and the plan's Phase 4 tasks follow §13.
 
@@ -406,7 +406,7 @@ apps/web/src/
 
 Steps 1–2 are the "stop here if the session gets long" point.
 
-## 14. Open questions for the author
+## 14. Open questions — answered (2026-10-18): every proposal accepted
 
 | # | Question | Proposal |
 |---|----------|----------|
