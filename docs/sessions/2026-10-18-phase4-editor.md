@@ -15,6 +15,7 @@ Stop after the first two implementation steps if the session gets long, with eve
 | 3 | Palette and elements: active elements, automatic creation, eyedropper, element list, probes | ✅ |
 | 4 | Properties panels (Element, Scene, Run) and the fluid/material library (`cfd_core::library`) | ✅ |
 | 5 | Save/load: `deflate+base64`, `.cfdscene` files, server save/open with `PUT`, draft autosave, PNG import, example gallery | ✅ |
+| 6 | Validation: issue `params`/`at` and a fuller estimate in Rust, debounced validation, issue list and canvas markers, estimate in the Run tab | ✅ |
 
 ## Found along the way
 
@@ -63,6 +64,16 @@ Stop after the first two implementation steps if the session gets long, with eve
 - An imported image is centred in the view but kept inside the grid when it fits (with the view off the domain,
   the block was clipped at the edge). ajv and the schema load on demand: the main chunk went from 604 to 467 kB.
 - `toScene` writes the keys in the Rust serializer's order, so editor files read like the CLI's.
+
+- **Validation (step 6):** `Report::error`/`warning` return the new issue, so call sites chain `.param(..)`
+  and `.at(x, y)`; `cell.element` keeps its code and gains a `problem` param (five kinds) instead of new codes.
+  `/validate` returns the estimate whenever the scene could be prepared (also on `limits.*` and `engine.*`).
+  A vitest test reads `cfd-core`'s sources and fails if an issue code has no wording in `src/messages.ts`.
+- **Not obvious:** the Reynolds number shown is the solver's own (`Dimensionless`: the largest boundary or
+  initial velocity and the shorter side of the fluid's bounding box), so the "Cylinder Re=100" example shows
+  Re ≈ 615 (1.5 m/s peak × 0.41 m / 1e-3 m²/s), not the benchmark's 100 (mean velocity × diameter).
+- Checked against a running server: the cylinder validates on CUDA ("Ready to run", Re and Ma in the status bar);
+  an inlet cell inside the cylinder gives one error at that cell with `problem: noFluidNeighbour`.
 
 ## Decisions taken with the author
 

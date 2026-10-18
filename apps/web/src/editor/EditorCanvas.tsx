@@ -42,6 +42,27 @@ function drawOverlay(ctx: CanvasRenderingContext2D, s: EditorState, dpr: number)
     ctx.lineDashOffset = 0
     ctx.setLineDash([])
   }
+  // Validation issues on cells: a square around the cell, red for errors, amber for warnings
+  // (at least 10 px, so they stay visible when zoomed out); the clicked one gets a thicker ring.
+  const v = s.validation
+  const result = v.status === 'done' ? v.result : v.status === 'pending' ? v.last : null
+  for (const issue of result?.issues ?? []) {
+    if (!issue.at) continue
+    const [x, y] = issue.at
+    const [cx, cy] = cellToScreen(s.view, H, x + 0.5, y + 0.5)
+    const half = Math.max(5, s.view.zoom * 0.75)
+    ctx.lineWidth = 2
+    ctx.strokeStyle = issue.severity === 'error' ? '#ef4444' : '#f59e0b'
+    ctx.strokeRect(cx - half, cy - half, 2 * half, 2 * half)
+  }
+  if (s.flash) {
+    const [cx, cy] = cellToScreen(s.view, H, s.flash[0] + 0.5, s.flash[1] + 0.5)
+    ctx.lineWidth = 3
+    ctx.strokeStyle = '#facc15'
+    ctx.beginPath()
+    ctx.arc(cx, cy, Math.max(12, s.view.zoom * 2), 0, 2 * Math.PI)
+    ctx.stroke()
+  }
   // Probes: a ring with a cross at the cell centre, the name next to it.
   ctx.font = '11px system-ui, sans-serif'
   ;(s.table.probes ?? []).forEach((p, i) => {

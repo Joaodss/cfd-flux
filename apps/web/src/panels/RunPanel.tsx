@@ -1,8 +1,9 @@
-// The Run tab: simulated time, output, method, precision and backend preference. The estimate
-// (steps, memory, time, Re, Ma) joins it with validation (design proposal §8).
+// The Run tab: simulated time, output, method, precision and backend preference, then the
+// estimate from the server's validation (steps, memory, time, Re, Ma, τ).
 import { Group, NumberField, Row, SelectField } from '../components/fields.tsx'
 import { useEditor } from '../editor/store.ts'
 import type { BackendPreference, OutputField, Precision } from '../generated/scene.ts'
+import { EstimatePanel } from './EstimatePanel.tsx'
 
 const FIELDS: readonly (readonly [OutputField, string])[] = [
   ['velocity', 'Velocity'],
@@ -22,6 +23,7 @@ export function RunPanel() {
   const frames = Math.floor(run.endTime / run.outputInterval + 1e-9) + 1
   return (
     <div className="flex flex-col gap-5" data-testid="run-panel">
+      <EstimatePanel />
       <Group title="Time">
         <NumberField
           label="End time"

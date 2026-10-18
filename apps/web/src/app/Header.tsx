@@ -12,6 +12,7 @@ import { isDirty, useEditor } from '../editor/store.ts'
 import { newScene, openFile, save, saveAsFile, saveToServer } from './documents.ts'
 import { ExampleGallery } from './ExampleGallery.tsx'
 import { ImportImageDialog } from './ImportImageDialog.tsx'
+import { IssuesButton } from './IssuesButton.tsx'
 import { ServerScenesDialog } from './ServerScenesDialog.tsx'
 
 function sourceLabel(s: ReturnType<typeof useEditor.getState>['source']): string {
@@ -84,6 +85,7 @@ export function Header() {
         {dirty && <span title="Unsaved changes"> •</span>}
       </span>
       <span className="truncate text-xs text-muted-foreground">— {sourceLabel(source)}</span>
+      <IssuesButton />
       <ServerScenesDialog open={dialog === 'server'} onOpenChange={close} />
       <ExampleGallery open={dialog === 'gallery'} onOpenChange={close} />
       <ImportImageDialog open={dialog === 'image'} onOpenChange={close} />

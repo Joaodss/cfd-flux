@@ -6,7 +6,46 @@ import type { Scene } from '../generated/scene.ts'
 export interface Issue {
   code: string
   severity: 'error' | 'warning'
+  /** English text; the editor words known codes itself from `params` (src/messages.ts). */
   message: string
+  params?: Record<string, string | number>
+  /** The cell the issue is about. */
+  at?: [number, number]
+}
+
+/** What running the scene would take, and the numbers derived from it (03 §7). */
+export interface Estimate {
+  cells: number
+  fluidCells: number
+  steps: number
+  frames: number
+  thermal: boolean
+  memoryBytes: number
+  storedBytes: number
+  engine: 'cpu' | 'wgpu' | 'cuda' | null
+  seconds?: number
+  numbers: {
+    velocity: number
+    length: number
+    reynolds: number
+    mach: number
+    prandtl?: number
+    rayleigh?: number
+    tau: number
+    tauThermal?: number
+    dx: number
+    dt: number
+    latticeVelocity: number
+  }
+}
+
+/** The answer of `POST /api/scenes/validate`. */
+export interface Validation {
+  ok: boolean
+  code?: string
+  message?: string
+  issues: Issue[]
+  estimate: Estimate | null
 }
 
 /** An API error with the server's stable code (`offline` when the server cannot be reached). */
@@ -80,6 +119,8 @@ export const api = {
   saveScene: (scene: Scene) => request<SavedScene>('POST', '/api/scenes', scene),
   updateScene: (id: string, scene: Scene) =>
     request<SavedScene>('PUT', `/api/scenes/${encodeURIComponent(id)}`, scene),
+  validate: (scene: Scene, signal?: AbortSignal) =>
+    request<Validation>('POST', '/api/scenes/validate', scene, signal),
   deleteScene: (id: string) => request<void>('DELETE', `/api/scenes/${encodeURIComponent(id)}`),
   request,
 }

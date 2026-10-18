@@ -4,6 +4,7 @@ import type { Draft } from 'immer'
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
 import { newDocument } from '../scene/defaults.ts'
+import type { Validation } from '../api/client.ts'
 import type { Document, SceneTable } from '../scene/io.ts'
 import type { ElementKind } from './colours.ts'
 import { defaultElement, nextElementId, type PaletteKind } from './elements.ts'
@@ -56,12 +57,19 @@ export interface EditorState {
   savedVersion: number
   /** A message for the bar under the header (saved, errors), or null. */
   notice: Notice | null
+  /** The server's verdict on the current document (debounced; see app/validation.ts). */
+  validation: ValidationState
+  /** A cell to highlight briefly (an issue the user clicked). */
+  flash: [number, number] | null
 
   load(doc: Document, source?: DocSource | null): void
   /** The document was saved to `source`. */
   markSaved(source: DocSource): void
   notify(kind: Notice['kind'], text: string): void
   dismissNotice(): void
+  setValidation(v: ValidationState): void
+  /** Centres the view on a cell (at least 8 px/cell) and highlights it. */
+  showCell(cell: [number, number]): void
   setViewport(width: number, height: number): void
   setView(view: View): void
   /** Zooms one ladder step in (+1) or out (−1), about a screen point (default: the centre). */
@@ -113,6 +121,13 @@ export type DocSource =
   | { kind: 'file'; name: string; handle?: FileSystemFileHandle }
   | { kind: 'server'; id: string; name: string }
   | { kind: 'example'; id: string }
+
+/** Where validation stands: running, the server's answer, or no server. */
+export type ValidationState =
+  | { status: 'idle' }
+  | { status: 'pending'; last: Validation | null }
+  | { status: 'done'; result: Validation }
+  | { status: 'offline'; message: string }
 
 export interface Notice {
   kind: 'info' | 'error'
@@ -185,6 +200,24 @@ export const useEditor = create<EditorState>()(
       source: null,
       savedVersion: 0,
       notice: null,
+      validation: { status: 'idle' },
+      flash: null,
+      setValidation: (validation) => set({ validation }),
+      showCell: ([x, y]) => {
+        const { view, viewport, layers } = get()
+        const zoom = Math.max(view.zoom, 8)
+        set({
+          flash: [x, y],
+          view: {
+            zoom,
+            offsetX: viewport.width / 2 - (x + 0.5) * zoom,
+            offsetY: viewport.height / 2 - (layers.height - y - 0.5) * zoom,
+          },
+        })
+        // The highlight fades after two seconds (unless another cell was shown since).
+        const shown = get().flash
+        setTimeout(() => get().flash === shown && set({ flash: null }), 2000)
+      },
       notify: (kind, text) => set({ notice: { kind, text } }),
       dismissNotice: () => set({ notice: null }),
 

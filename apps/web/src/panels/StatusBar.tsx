@@ -1,6 +1,7 @@
 // Bottom status bar: the cell under the pointer, its physical position and contents, zoom, size.
 import { useEditor } from '../editor/store.ts'
-import { CELL_NAMES, formatLength, formatZoom } from './format.ts'
+import { currentValidation } from '../app/issues.ts'
+import { CELL_NAMES, formatLength, formatValue, formatZoom } from './format.ts'
 
 export function StatusBar() {
   const cursor = useEditor((s) => s.cursor)
@@ -8,6 +9,7 @@ export function StatusBar() {
   const grid = useEditor((s) => s.table.grid)
   const elements = useEditor((s) => s.table.elements)
   const drag = useEditor((s) => s.dragSize)
+  const numbers = useEditor((s) => currentValidation(s.validation)?.estimate?.numbers)
   // Re-read the cell under the pointer when the layers change beneath it.
   useEditor((s) => s.layersVersion)
   // The layers are not React state: read the cell here, re-rendered because `cursor` changed.
@@ -37,7 +39,15 @@ export function StatusBar() {
           {formatLength(drag[1] * grid.cellSize)}
         </span>
       )}
-      <span className="ml-auto">{formatZoom(zoom)}</span>
+      {numbers && (
+        <span
+          className="ml-auto"
+          title="Reynolds and lattice Mach numbers (from the last validation)"
+        >
+          Re {formatValue(numbers.reynolds)} · Ma {formatValue(numbers.mach)}
+        </span>
+      )}
+      <span className={numbers ? undefined : 'ml-auto'}>{formatZoom(zoom)}</span>
       <span>
         {grid.width} × {grid.height} cells · {formatLength(grid.width * grid.cellSize)} ×{' '}
         {formatLength(grid.height * grid.cellSize)}

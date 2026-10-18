@@ -5,6 +5,7 @@ import { openDroppedFile, openFile, save, saveAsFile } from './app/documents.ts'
 import { Header } from './app/Header.tsx'
 import { ToolOptions } from './app/ToolOptions.tsx'
 import { Toolbar } from './app/Toolbar.tsx'
+import { startValidation } from './app/validation.ts'
 import { EditorCanvas } from './editor/EditorCanvas.tsx'
 import { isDirty, useEditor } from './editor/store.ts'
 import { handleKey } from './editor/tools/controller.ts'
@@ -40,10 +41,11 @@ function useShortcuts() {
   }, [])
 }
 
-/** Autosave, the browser's "leave site?" warning, and scene files dropped on the window. */
+/** Validation, autosave, the browser's "leave site?" warning, and scene files dropped on the window. */
 function useDocumentGuards() {
   useEffect(() => {
-    const stop = startAutosave()
+    const stopAutosave = startAutosave()
+    const stopValidation = startValidation()
     const beforeUnload = (e: BeforeUnloadEvent) => {
       if (isDirty(useEditor.getState())) e.preventDefault()
     }
@@ -60,7 +62,8 @@ function useDocumentGuards() {
     window.addEventListener('dragover', dragOver)
     window.addEventListener('drop', drop)
     return () => {
-      stop()
+      stopAutosave()
+      stopValidation()
       window.removeEventListener('beforeunload', beforeUnload)
       window.removeEventListener('dragover', dragOver)
       window.removeEventListener('drop', drop)
