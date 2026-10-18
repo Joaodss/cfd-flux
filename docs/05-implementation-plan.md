@@ -137,7 +137,7 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 
 **Goal:** draw and configure scenes in the browser.
 
-- [ ] M — Canvas with zoom/pan, pixel grid, `Uint8Array/Uint16Array` layers, rendering with colours per type/element.
+- [x] M — Canvas with zoom/pan, pixel grid, `Uint8Array/Uint16Array` layers, rendering with colours per type/element. *(WebGL2: integer textures + palette, dirty 64×64 tiles; 4096² in ≈ 80 ms, a tile in ≈ 3 ms.)*
 - [ ] M — Tools: pencil (brush size), eraser, line, rectangle, ellipse, bucket, select/move/copy.
 - [ ] M — Type palette (fluid, wall, inlet, outlet, heat source, liquid region, probe); automatic element creation when drawing a new region; selection of an existing element.
 - [ ] M — Properties panel per element (velocity, thermal, material) and global properties (domain, scale, fluids, gravity, time, method, backend).

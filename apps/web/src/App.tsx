@@ -1,31 +1,69 @@
+// The editor's layout: header, tool strip, canvas, side panel and status bar.
 import { useEffect, useState } from 'react'
-import type { Scene } from './generated/scene.ts'
+import { Header } from './app/Header.tsx'
+import { Toolbar } from './app/Toolbar.tsx'
+import { EditorCanvas } from './editor/EditorCanvas.tsx'
+import { useEditor } from './editor/store.ts'
+import { ScenePanel } from './panels/ScenePanel.tsx'
+import { StatusBar } from './panels/StatusBar.tsx'
 
-const EXAMPLES = ['channel', 'cylinder-re100', 'heated-cavity-ra1e5', 'dam-break']
-
-// Phase 0 placeholder: lists the example scenes. The pixel editor arrives in Phase 4.
-export default function App() {
-  const [scenes, setScenes] = useState<Scene[]>([])
-
+/** Keyboard shortcuts of the whole editor (ignored while typing in a field). */
+function useShortcuts() {
   useEffect(() => {
-    Promise.all(EXAMPLES.map((n) => import(`../../../scenes/${n}.json`))).then((mods) =>
-      setScenes(mods.map((m) => m.default as Scene)),
-    )
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+      const s = useEditor.getState()
+      switch (e.key) {
+        case 'h':
+        case 'H':
+          s.setTool('hand')
+          break
+        case 'f':
+        case 'F':
+          s.fit()
+          break
+        case '+':
+        case '=':
+          s.zoomStep(1)
+          break
+        case '-':
+          s.zoomStep(-1)
+          break
+        case '1':
+          s.zoomTo(1)
+          break
+        default:
+          return
+      }
+      e.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [])
+}
 
+export default function App() {
+  const [error, setError] = useState<string | null>(null)
+  useShortcuts()
   return (
-    <main>
-      <h1>cfd-flux</h1>
-      <p>CFD simulator in the browser — under construction (Phase 0 done).</p>
-      <h2>Example scenes</h2>
-      <ul>
-        {scenes.map((s) => (
-          <li key={s.name}>
-            <strong>{s.name}</strong> — {s.grid.width}×{s.grid.height} cells
-            {s.description ? `: ${s.description}` : ''}
-          </li>
-        ))}
-      </ul>
-    </main>
+    <div className="flex h-full flex-col">
+      <Header onError={setError} />
+      {error && (
+        <div className="flex items-center gap-2 border-b border-red-500/40 bg-red-500/10 px-3 py-1 text-sm text-red-400">
+          {error}
+          <button className="ml-auto text-xs underline" onClick={() => setError(null)}>
+            dismiss
+          </button>
+        </div>
+      )}
+      <div className="flex min-h-0 flex-1">
+        <Toolbar />
+        <EditorCanvas />
+        <ScenePanel />
+      </div>
+      <StatusBar />
+    </div>
   )
 }
