@@ -4,6 +4,7 @@
 //! files match. Geometries follow the validation cases in `docs/08-validation-guide.md`.
 
 use crate::layers::{LayerData, LayerEncoding};
+use crate::library;
 use crate::scene::*;
 use crate::units::STANDARD_GRAVITY;
 
@@ -81,16 +82,7 @@ impl Canvas {
 }
 
 fn air(id: u8) -> Fluid {
-    Fluid {
-        id,
-        name: "Air".into(),
-        preset: Some("air".into()),
-        density: 1.204,
-        kinematic_viscosity: 1.516e-5,
-        thermal_conductivity: Some(0.0257),
-        specific_heat: Some(1005.0),
-        thermal_expansion: Some(3.43e-3),
-    }
+    library::fluid("air").expect("air preset").fluid(id)
 }
 
 fn no_slip_wall(id: u16, name: &str, thermal: ThermalBc) -> Element {
@@ -350,16 +342,7 @@ pub fn dam_break() -> Scene {
             cell_size: dx,
             edges: DomainEdges::default(),
         },
-        fluids: vec![Fluid {
-            id: 1,
-            name: "Water".into(),
-            preset: Some("water".into()),
-            density: 998.2,
-            kinematic_viscosity: 1.004e-6,
-            thermal_conductivity: Some(0.598),
-            specific_heat: Some(4182.0),
-            thermal_expansion: Some(2.07e-4),
-        }],
+        fluids: vec![library::fluid("water").expect("water preset").fluid(1)],
         solid_materials: vec![],
         elements: vec![no_slip_wall(1, "Tank", ThermalBc::Adiabatic)],
         probes: vec![Probe {

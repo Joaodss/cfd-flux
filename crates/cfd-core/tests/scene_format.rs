@@ -63,6 +63,15 @@ fn committed_schema_is_up_to_date() {
 }
 
 #[test]
+fn committed_library_is_up_to_date() {
+    let committed = read_normalized("apps/web/src/generated/library.json");
+    assert!(
+        cfd_core::library::to_json_pretty() == committed,
+        "apps/web/src/generated/library.json is outdated; run `cargo run -p cfd-cli -- library apps/web/src/generated/library.json`"
+    );
+}
+
+#[test]
 fn unknown_fields_are_rejected() {
     let mut json: serde_json::Value =
         serde_json::from_str(&examples::channel().to_json_pretty()).unwrap();

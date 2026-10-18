@@ -1,0 +1,104 @@
+{
+  "fluids": [
+    {
+      "key": "air",
+      "name": "Air",
+      "density": 1.204,
+      "kinematicViscosity": 0.00001516,
+      "thermalConductivity": 0.0257,
+      "specificHeat": 1005.0,
+      "thermalExpansion": 0.00343,
+      "source": "Incropera Table A.4, 293 K"
+    },
+    {
+      "key": "water",
+      "name": "Water",
+      "density": 998.2,
+      "kinematicViscosity": 1.004e-6,
+      "thermalConductivity": 0.598,
+      "specificHeat": 4182.0,
+      "thermalExpansion": 0.000207,
+      "source": "Incropera Table A.6, 293 K"
+    },
+    {
+      "key": "engineOil",
+      "name": "Engine oil",
+      "density": 888.0,
+      "kinematicViscosity": 0.0009,
+      "thermalConductivity": 0.145,
+      "specificHeat": 1880.0,
+      "thermalExpansion": 0.0007,
+      "source": "Incropera Table A.5 (unused engine oil), 293 K"
+    },
+    {
+      "key": "glycerol",
+      "name": "Glycerol",
+      "density": 1264.0,
+      "kinematicViscosity": 0.00118,
+      "thermalConductivity": 0.286,
+      "specificHeat": 2390.0,
+      "thermalExpansion": 0.00048,
+      "source": "Incropera Table A.5, 293 K"
+    },
+    {
+      "key": "ethanol",
+      "name": "Ethanol",
+      "density": 789.0,
+      "kinematicViscosity": 1.52e-6,
+      "thermalConductivity": 0.167,
+      "specificHeat": 2440.0,
+      "thermalExpansion": 0.00109,
+      "source": "CRC Handbook of Chemistry and Physics, 293 K"
+    }
+  ],
+  "solids": [
+    {
+      "key": "aluminium",
+      "name": "Aluminium",
+      "thermalConductivity": 237.0,
+      "density": 2702.0,
+      "specificHeat": 903.0,
+      "source": "Incropera Table A.1 (pure), 300 K"
+    },
+    {
+      "key": "copper",
+      "name": "Copper",
+      "thermalConductivity": 401.0,
+      "density": 8933.0,
+      "specificHeat": 385.0,
+      "source": "Incropera Table A.1 (pure), 300 K"
+    },
+    {
+      "key": "steel",
+      "name": "Steel (carbon)",
+      "thermalConductivity": 63.9,
+      "density": 7832.0,
+      "specificHeat": 434.0,
+      "source": "Incropera Table A.1 (AISI 1010), 300 K"
+    },
+    {
+      "key": "glass",
+      "name": "Glass",
+      "thermalConductivity": 1.4,
+      "density": 2500.0,
+      "specificHeat": 750.0,
+      "source": "Incropera Table A.3 (plate glass), 300 K"
+    },
+    {
+      "key": "pine",
+      "name": "Wood (pine)",
+      "thermalConductivity": 0.12,
+      "density": 510.0,
+      "specificHeat": 1380.0,
+      "source": "Incropera Table A.3 (softwood, across the grain), 300 K"
+    },
+    {
+      "key": "concrete",
+      "name": "Concrete",
+      "thermalConductivity": 1.4,
+      "density": 2300.0,
+      "specificHeat": 880.0,
+      "source": "Incropera Table A.3 (stone mix), 300 K"
+    }
+  ]
+}

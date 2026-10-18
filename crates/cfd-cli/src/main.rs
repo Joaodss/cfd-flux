@@ -29,6 +29,12 @@ enum Command {
         /// Output file; prints to stdout when omitted.
         out: Option<PathBuf>,
     },
+    /// Print (or write) the preset fluids and solid materials as JSON (the web editor's
+    /// `apps/web/src/generated/library.json`).
+    Library {
+        /// Output file; prints to stdout when omitted.
+        out: Option<PathBuf>,
+    },
     /// Write built-in example scenes as JSON.
     Example {
         /// Example name (see `--list`).
@@ -85,6 +91,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let json = serde_json::to_string_pretty(&Scene::json_schema())? + "\n";
             emit(out.as_deref(), &json)?;
         }
+        Command::Library { out } => emit(out.as_deref(), &cfd_core::library::to_json_pretty())?,
         Command::Example {
             name,
             all,

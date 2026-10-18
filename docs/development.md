@@ -62,6 +62,9 @@ cargo run -p cfd-cli -- schema schema/scene.schema.json
 cargo run -p cfd-cli -- example --all scenes
 cd apps/web && npm run gen:types
 
+# Preset fluids and solids (cfd-core/src/library.rs) for the web editor; a test checks it is up to date
+cargo run -p cfd-cli -- library apps/web/src/generated/library.json
+
 # Check scene files
 cargo run -p cfd-cli -- validate scenes/*.json
 
