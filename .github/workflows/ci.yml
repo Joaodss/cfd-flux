@@ -15,7 +15,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        # An explicit Ubuntu release, so image upgrades are a deliberate change here
+        # (ubuntu-latest moves from 24.04 to 26.04 between 2026-10-19 and 11-19).
+        os: [ubuntu-26.04, windows-latest]
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -42,7 +44,7 @@ jobs:
 
   cuda-kernels:
     name: CUDA kernels (NVRTC, no GPU)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -51,7 +53,9 @@ jobs:
       # check the generated static_asserts on the Params/BcParams layouts against Rust.
       - name: Install NVRTC
         run: |
-          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          # NVIDIA's repository for this image's release (ubuntu2604 on ubuntu-26.04).
+          repo="ubuntu$(. /etc/os-release && echo "${VERSION_ID//./}")"
+          wget -q "https://developer.download.nvidia.com/compute/cuda/repos/$repo/x86_64/cuda-keyring_1.1-1_all.deb"
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update && sudo apt-get install -y cuda-nvrtc-13-4
           echo "LD_LIBRARY_PATH=$(dirname "$(find /usr/local -name 'libnvrtc.so.13*' | head -1)")" >> "$GITHUB_ENV"
@@ -61,7 +65,7 @@ jobs:
 
   verify:
     name: Validation suite (quick)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -73,7 +77,7 @@ jobs:
       - name: Install lavapipe
         run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
       - run: cargo run --release -p cfd-cli -- verify --quick --backend wgpu --allow-software --report target/verify-report-wgpu
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: verify-report
@@ -83,7 +87,7 @@ jobs:
 
   web:
     name: Web
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     defaults:
       run:
         working-directory: apps/web
