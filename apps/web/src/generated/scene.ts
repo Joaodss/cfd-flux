@@ -91,7 +91,7 @@ export type OutletBc =
     }
 export type EdgeKind = 'wall' | 'periodic'
 export type LayerDtype = 'u8' | 'u16'
-export type LayerEncoding = 'raw+base64' | 'zstd+base64'
+export type LayerEncoding = 'raw+base64' | 'zstd+base64' | 'deflate+base64'
 export type Buoyancy = 'none' | 'boussinesq'
 export type BackendPreference = ('cpu' | 'wgpu' | 'cuda') | 'auto'
 export type Method = 'lbm'

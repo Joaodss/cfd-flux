@@ -60,7 +60,7 @@ Each layer is a W×H array (row by row, origin at the bottom-left corner to matc
 | `fluidId` | `u8`, optional | Initial fluid per cell (multiphase); 0 = `initial.fluid` |
 | `probes` | sparse list (outside `layers`) | Probe coordinates (no array needed) |
 
-**Transport encoding:** each layer is sent as base64 of either raw little-endian bytes or `zstd(raw bytes)` (drawings have large uniform areas; typical compression > 50×). An indexed PNG is a possible alternative (also handy for import/export in the editor).
+**Transport encoding:** each layer is sent as base64 of raw little-endian bytes (`raw+base64`), of `zstd(raw bytes)` (`zstd+base64`, what `cfd-cli` writes) or of raw DEFLATE (RFC 1951, no zlib header: `deflate+base64`, what the web editor writes — browsers compress it natively with `CompressionStream("deflate-raw")` and have no zstd encoder). Drawings have large uniform areas; typical compression > 50×. Every reader accepts all three; inflating is bounded by the layer's expected size.
 
 ```jsonc
 "layers": {
@@ -187,7 +187,7 @@ Implemented by `cfd-server` (Phase 3). All JSON is camelCase like the scene form
 | `GET` | `/api/simulations/{id}/frames/{n}` | `?dtype=f32\|f16` | one stored frame (LFFR) |
 | `GET` | `/api/simulations/{id}/files/{name}` | `scene.json`, `meta.json`, `probes.csv`, `forces.csv`, `diagnostics.csv` | the file |
 | `GET` · `POST` | `/api/scenes` | `Scene` | list (id, name, times) · save (`201 { id, name }`) |
-| `GET` · `DELETE` | `/api/scenes/{id}` | — | the scene JSON · `204` |
+| `GET` · `PUT` · `DELETE` | `/api/scenes/{id}` | — · `Scene` · — | the scene JSON · `{ id, name }` (replaced; `404` if unknown) · `204` |
 
 - **Options** (`options` of a submission; the same overrides as `cfd-cli run`): `backend` (`auto|cpu|wgpu|cuda`; default: the scene's `run.backend`), `latticeVelocity`, `endTime`, `outputInterval`, `sampleInterval` (s), `storeFrames` (default `true`; streaming works either way). Unknown options are a `400`.
 - **Job status:** `queued → running ⇄ paused → completed | failed | cancelled`; `failed` carries `reason`: `diverged` (the frames before stay valid), `error` (backend or I/O) or `interrupted` (the server stopped; jobs are not resumed).

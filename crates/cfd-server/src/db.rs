@@ -225,6 +225,18 @@ impl Db {
         Ok(())
     }
 
+    /// Replaces a saved scene's name and JSON; returns whether it existed.
+    pub async fn update_scene(&self, id: &str, name: &str, json: &str) -> Result<bool> {
+        let r = sqlx::query("UPDATE scenes SET name = ?, json = ?, updated_at = ? WHERE id = ?")
+            .bind(name)
+            .bind(json)
+            .bind(now_ms())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() > 0)
+    }
+
     pub async fn scenes(&self) -> Result<Vec<SceneSummary>> {
         Ok(sqlx::query_as::<_, SceneSummary>(
             "SELECT id, name, created_at, updated_at FROM scenes ORDER BY updated_at DESC",

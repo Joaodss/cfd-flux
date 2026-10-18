@@ -105,7 +105,7 @@ pub fn router(state: AppState) -> Router {
         .collect();
     let cors = CorsLayer::new()
         .allow_origin(origins)
-        .allow_methods([Method::GET, Method::POST, Method::DELETE])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers(Any);
     // JSON and CSV compress well; frames are already zstd-compressed.
     let compression = CompressionLayer::new().compress_when(
@@ -117,7 +117,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/scenes", get(api::list_scenes).post(api::save_scene))
         .route(
             "/api/scenes/{id}",
-            get(api::get_scene).delete(api::delete_scene),
+            get(api::get_scene)
+                .put(api::update_scene)
+                .delete(api::delete_scene),
         )
         .route("/api/simulations", get(api::list_jobs).post(api::submit))
         .route(

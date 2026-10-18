@@ -11,6 +11,7 @@ rust-version.workspace = true
 base64.workspace = true
 bytemuck.workspace = true
 half.workspace = true
+miniz_oxide.workspace = true
 ruzstd.workspace = true
 schemars.workspace = true
 serde.workspace = true

@@ -401,6 +401,38 @@ async fn saved_scenes_can_be_run_by_id() {
         .unwrap();
     assert_eq!(back, small_channel());
 
+    // PUT replaces it (name and content); an unknown id is a 404.
+    let mut renamed = small_channel();
+    renamed.name = "Renamed channel".into();
+    let r = client()
+        .put(s.url(&format!("/api/scenes/{scene_id}")))
+        .json(&renamed)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let v: Value = r.json().await.unwrap();
+    assert_eq!(
+        (v["id"].as_str(), v["name"].as_str()),
+        (Some(scene_id.as_str()), Some("Renamed channel"))
+    );
+    let back: Scene = client()
+        .get(s.url(&format!("/api/scenes/{scene_id}")))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(back, renamed);
+    let r = client()
+        .put(s.url("/api/scenes/no-such-scene"))
+        .json(&renamed)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+
     let r = client()
         .post(s.url("/api/simulations"))
         .json(&json!({ "sceneId": scene_id, "options": { "endTime": 0.05 } }))

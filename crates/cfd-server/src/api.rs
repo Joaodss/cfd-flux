@@ -496,6 +496,31 @@ pub async fn save_scene(
     ))
 }
 
+/// `PUT /api/scenes/{id}`: replaces a saved scene (the editor's "Save" after "Save to server").
+pub async fn update_scene(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    ApiJson(scene): ApiJson<Box<RawValue>>,
+) -> Result<Json<SavedScene>, ApiError> {
+    let parsed = Scene::from_json(scene.get()).map_err(|e| ApiError::BadRequest {
+        code: "scene.format",
+        message: format!("invalid scene: {e}"),
+    })?;
+    if !state
+        .inner
+        .jobs
+        .db
+        .update_scene(&id, &parsed.name, scene.get())
+        .await?
+    {
+        return Err(ApiError::NotFound(format!("no saved scene {id}")));
+    }
+    Ok(Json(SavedScene {
+        id,
+        name: parsed.name,
+    }))
+}
+
 pub async fn list_scenes(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<crate::db::SceneSummary>>, ApiError> {

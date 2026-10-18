@@ -330,6 +330,7 @@ dependencies = [
  "base64 0.22.1",
  "bytemuck",
  "half",
+ "miniz_oxide 0.8.9",
  "ruzstd",
  "schemars",
  "serde",
