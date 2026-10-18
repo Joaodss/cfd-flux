@@ -122,14 +122,14 @@ describe('shapes', () => {
     }
   })
 
-  it('a 20 × 20 ellipse is the cylinder of the example scene', () => {
+  it('a 20 × 20 ellipse is the cylinder of the example scene', async () => {
     const scene = JSON.parse(
       readFileSync(
         fileURLToPath(new URL('../../../scenes/cylinder-re100.json', import.meta.url)),
         'utf8',
       ),
     )
-    const { layers } = fromScene(scene)
+    const { layers } = await fromScene(scene)
     const cylinder = new Set<string>()
     for (let y = 0; y < layers.height; y++) {
       for (let x = 0; x < layers.width; x++) {

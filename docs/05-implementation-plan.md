@@ -142,9 +142,9 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 - [x] M — Type palette (fluid, wall, inlet, outlet, heat source, liquid region, probe); automatic element creation when drawing a new region; selection of an existing element. *(An active element per kind, created with defaults by the first stroke — creation and cells are one undo entry; `N` starts a new one; eyedropper `I`/Alt+click; element list with cell counts and delete; probe tool. The liquid region is the fluid/empty split of free-surface scenes; `fluidId` painting waits for multiphase, Q9.)*
 - [x] M — Properties panel per element (velocity, thermal, material) and global properties (domain, scale, fluids, gravity, time, method, backend). *(Element, Scene and Run tabs; forms follow the generated unions; every edit is one undo entry; grid resize anchored at the bottom-left and "refine ×k", both undoable.)*
 - [x] S — Library of predefined fluids/materials (air, water, oil; aluminium, copper, glass…). *(`cfd_core::library`: 5 fluids and 6 solids with sources, used by the examples; `cfd-cli library` writes the editor's `generated/library.json`, kept current by a test.)*
-- [ ] M — Undo/redo, save/load (local `.cfdscene` file + server), PNG import as a mask. *(Undo/redo done: 64×64 tile patches swapped in place, uniform tiles stored as one value, 256 MB / 200-entry budget.)*
+- [x] M — Undo/redo, save/load (local `.cfdscene` file + server), PNG import as a mask. *(Undo/redo: 64×64 tile patches swapped in place, uniform tiles stored as one value, 256 MB / 200-entry budget. Files: `.cfdscene` = the scene JSON with `deflate+base64` layers (new encoding, read by `cfd-core`; a committed editor-written fixture is checked in Rust), File System Access API where available; server: POST + new `PUT /api/scenes/{id}`; draft autosave in IndexedDB; PNG import as a floating masked selection.)*
 - [ ] M — Client-side validation and estimates (Re, memory, estimated time) before submitting.
-- [ ] S — Example gallery.
+- [x] S — Example gallery. *(A dialog of the `scenes/` examples with thumbnails drawn from their layers.)*
 
 **Acceptance:** draw the cylinder-in-a-channel case from scratch in < 2 min and submit it without errors.
 

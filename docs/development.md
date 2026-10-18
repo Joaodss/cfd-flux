@@ -104,7 +104,8 @@ curl -s http://127.0.0.1:7878/api/capabilities
 # Web (in apps/web)
 npm install
 npm run dev          # development server
-npm test             # Vitest (checks scenes/ against the JSON Schema)
+npm test             # Vitest: logic, components (happy-dom), scenes/ against the JSON Schema
+UPDATE_FIXTURES=1 npm test   # rewrite tests/fixtures/ (editor-written scenes cfd-core reads back)
 npm run typecheck && npm run lint && npm run format:check && npm run build
 ```
 

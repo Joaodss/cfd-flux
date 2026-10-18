@@ -36,8 +36,8 @@ describe('base64Decode', () => {
 })
 
 describe('fromScene', () => {
-  it.each(scenes)('decodes %s consistently with its elements', (_, scene) => {
-    const { table, layers } = fromScene(scene)
+  it.each(scenes)('decodes %s consistently with its elements', async (_, scene) => {
+    const { table, layers } = await fromScene(scene)
     expect(table.schemaVersion).toBe(SCHEMA_VERSION)
     expect('layers' in table).toBe(false)
     expect([layers.width, layers.height]).toEqual([scene.grid.width, scene.grid.height])
@@ -52,9 +52,9 @@ describe('fromScene', () => {
     }
   })
 
-  it('reads the cylinder where examples.rs drew it', () => {
+  it('reads the cylinder where examples.rs drew it', async () => {
     const [, scene] = scenes.find(([f]) => f.startsWith('cylinder'))!
-    const { layers } = fromScene(scene)
+    const { layers } = await fromScene(scene)
     const at = (x: number, y: number) => [
       layers.cellType[layers.index(x, y)],
       layers.elementId[layers.index(x, y)],
@@ -66,9 +66,9 @@ describe('fromScene', () => {
     expect(at(41, 60)).toEqual([CellType.Fluid, 0])
   })
 
-  it('rejects a layer of the wrong size', () => {
+  it('rejects a layer of the wrong size', async () => {
     const [, scene] = scenes[0]
     const bad = { ...scene, grid: { ...scene.grid, width: scene.grid.width + 1 } }
-    expect(() => fromScene(bad)).toThrow(/cellType: expected/)
+    await expect(fromScene(bad)).rejects.toThrow(/cellType: expected/)
   })
 })

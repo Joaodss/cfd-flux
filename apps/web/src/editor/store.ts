@@ -50,8 +50,18 @@ export interface EditorState {
   dragSize: [number, number] | null
   /** Bumped when the layers changed outside the store (tools), so the canvas redraws. */
   layersVersion: number
+  /** Where the document was opened from or last saved to (where "Save" writes). */
+  source: DocSource | null
+  /** `historyVersion` at the last load or save: the document is dirty when they differ. */
+  savedVersion: number
+  /** A message for the bar under the header (saved, errors), or null. */
+  notice: Notice | null
 
-  load(doc: Document): void
+  load(doc: Document, source?: DocSource | null): void
+  /** The document was saved to `source`. */
+  markSaved(source: DocSource): void
+  notify(kind: Notice['kind'], text: string): void
+  dismissNotice(): void
   setViewport(width: number, height: number): void
   setView(view: View): void
   /** Zooms one ladder step in (+1) or out (−1), about a screen point (default: the centre). */
@@ -97,6 +107,22 @@ export interface EditorState {
 export const MAX_BRUSH = 64
 
 export type PanelTab = 'element' | 'scene' | 'run'
+
+/** Where a document lives: a file (with its handle where the browser gives one), the server, an example. */
+export type DocSource =
+  | { kind: 'file'; name: string; handle?: FileSystemFileHandle }
+  | { kind: 'server'; id: string; name: string }
+  | { kind: 'example'; id: string }
+
+export interface Notice {
+  kind: 'info' | 'error'
+  text: string
+}
+
+/** Whether the document has changes that were not saved. */
+export function isDirty(s: Pick<EditorState, 'historyVersion' | 'savedVersion'>): boolean {
+  return s.historyVersion !== s.savedVersion
+}
 
 /** What erasing paints: fluid, or empty cells (gas) in a free-surface scene. */
 export function background(table: SceneTable): Paint {
@@ -156,14 +182,27 @@ export const useEditor = create<EditorState>()(
       floating: false,
       dragSize: null,
       layersVersion: 0,
+      source: null,
+      savedVersion: 0,
+      notice: null,
+      notify: (kind, text) => set({ notice: { kind, text } }),
+      dismissNotice: () => set({ notice: null }),
 
-      load: (doc) =>
+      markSaved: (source) =>
+        set((s) => {
+          s.source = source
+          s.savedVersion = s.historyVersion
+        }),
+
+      load: (doc, source = null) =>
         set((s) => {
           s.table = doc.table
           s.layers = doc.layers
           s.fluidId = doc.fluidId
           s.history = new History()
           s.historyVersion++
+          s.savedVersion = s.historyVersion
+          s.source = source
           s.cursor = null
           s.selection = null
           s.floating = false

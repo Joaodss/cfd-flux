@@ -112,7 +112,7 @@ export class Stroke {
 
   /**
    * Copies a `w` × `h` block of cells (row-major, bottom row first) with its bottom-left corner at
-   * (x, y), clipped to the grid.
+   * (x, y), clipped to the grid. With a `mask`, only the cells where it is non-zero are copied.
    */
   blit(
     x: number,
@@ -121,6 +121,7 @@ export class Stroke {
     h: number,
     cellType: Uint8Array,
     elementId: Uint16Array,
+    mask?: Uint8Array,
   ): void {
     const l = this.layers
     const a = Math.max(0, x)
@@ -133,8 +134,16 @@ export class Stroke {
         this.touch(tx * TILE, yy)
       const src = row * w + (a - x)
       const dst = yy * l.width + a
-      l.cellType.set(cellType.subarray(src, src + b - a), dst)
-      l.elementId.set(elementId.subarray(src, src + b - a), dst)
+      if (!mask) {
+        l.cellType.set(cellType.subarray(src, src + b - a), dst)
+        l.elementId.set(elementId.subarray(src, src + b - a), dst)
+        continue
+      }
+      for (let i = 0; i < b - a; i++) {
+        if (mask[src + i] === 0) continue
+        l.cellType[dst + i] = cellType[src + i]
+        l.elementId[dst + i] = elementId[src + i]
+      }
     }
   }
 

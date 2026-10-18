@@ -71,6 +71,33 @@ fn committed_library_is_up_to_date() {
     );
 }
 
+/// Contract with the web editor (Phase 4 design proposal §10): a scene its TypeScript code wrote,
+/// with `deflate+base64` layers (`apps/web/tests/files.test.ts` keeps the fixture).
+#[test]
+fn editor_files_decode_in_rust() {
+    let text = read_normalized("apps/web/tests/fixtures/cylinder-re100.cfdscene");
+    let scene = Scene::from_json(&text).unwrap();
+    assert_eq!(
+        scene.layers.cell_type.encoding,
+        LayerEncoding::DeflateBase64
+    );
+    assert!(validate(&scene).is_ok(), "{:#?}", validate(&scene).issues);
+    let example = examples::cylinder_re100();
+    let n = example.grid.cell_count();
+    assert_eq!(
+        scene.layers.cell_type.decode_u8(n).unwrap(),
+        example.layers.cell_type.decode_u8(n).unwrap()
+    );
+    assert_eq!(
+        scene.layers.element_id.decode_u16(n).unwrap(),
+        example.layers.element_id.decode_u16(n).unwrap()
+    );
+    // Everything but the layers is what the editor loaded.
+    let mut same = scene.clone();
+    same.layers = example.layers.clone();
+    assert_eq!(same, example);
+}
+
 #[test]
 fn unknown_fields_are_rejected() {
     let mut json: serde_json::Value =

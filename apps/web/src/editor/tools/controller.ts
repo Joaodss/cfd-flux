@@ -230,6 +230,51 @@ export function deleteElement(id: number): void {
   changed()
 }
 
+/**
+ * Places an imported mask as a floating selection painted with the palette's paint, centred in
+ * the view; the select tool then moves it, and Enter (or a click outside) drops it. An element
+ * created for it is recorded first, as its own undo entry. Returns an error message, or null.
+ */
+export function floatMask(mask: {
+  width: number
+  height: number
+  cells: Uint8Array
+}): string | null {
+  if (active) return 'finish the current drag first'
+  const s = useEditor.getState()
+  if (s.palette === 'probe')
+    return 'choose a cell type or element in the palette to paint the image with'
+  const before = s.table
+  const paint = palettePaint(true)
+  if (!paint) return 'no element ids left'
+  if (tableBeforeCreate) {
+    tableBeforeCreate = null
+    useEditor.getState().commitTable('New element for the image', before)
+  }
+  const n = mask.width * mask.height
+  const block = {
+    width: mask.width,
+    height: mask.height,
+    cellType: new Uint8Array(n).fill(paint.cellType),
+    elementId: new Uint16Array(n).fill(paint.elementId),
+    mask: mask.cells,
+  }
+  const { view, viewport, layers } = useEditor.getState()
+  const [cx, cy] = screenToCell(view, layers.height, viewport.width / 2, viewport.height / 2)
+  // Centred in the view, but kept inside the grid when it fits (the view may show the margin).
+  const place = (c: number, size: number, grid: number) =>
+    Math.max(0, Math.min(c - Math.floor(size / 2), grid - size))
+  setTool('select')
+  selectTool.float(
+    block,
+    [place(cx, mask.width, layers.width), place(cy, mask.height, layers.height)],
+    'Import image',
+    context(),
+  )
+  changed()
+  return null
+}
+
 export function undo(): void {
   if (active) return
   // Undoing while a selection floats puts it back where it came from.

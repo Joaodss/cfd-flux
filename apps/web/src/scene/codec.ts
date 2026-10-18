@@ -1,7 +1,11 @@
 // Layer encoding inside the scene JSON (03 §3): base64 of raw little-endian bytes, optionally
-// zstd-compressed. Decoding only for now; the editor's own encoding comes with saving (step 5).
+// compressed. The editor writes `deflate+base64` (the browser's native CompressionStream) and reads
+// all three encodings (`zstd+base64` with fzstd: the CLI and the examples write it).
+//
+// Compression streams are asynchronous (they work in chunks without blocking the page), so
+// encoding and decoding return Promises — `async`/`await` here works like C#'s Task-based async.
 import { decompress } from 'fzstd'
-import type { LayerData } from '../generated/scene.ts'
+import type { LayerData, LayerEncoding } from '../generated/scene.ts'
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 const LOOKUP = (() => {
@@ -36,13 +40,65 @@ export function base64Decode(text: string): Uint8Array {
   return out
 }
 
-function payload(layer: LayerData): Uint8Array {
+/** Standard base64 with padding, built in chunks (no giant intermediate strings). */
+export function base64Encode(bytes: Uint8Array): string {
+  const parts: string[] = []
+  const CHUNK = 3 * 8192
+  const codes = new Uint16Array((CHUNK / 3) * 4)
+  for (let start = 0; start < bytes.length; start += CHUNK) {
+    const end = Math.min(start + CHUNK, bytes.length)
+    let o = 0
+    for (let i = start; i < end; i += 3) {
+      const n = end - i
+      const v = (bytes[i] << 16) | (n > 1 ? bytes[i + 1] << 8 : 0) | (n > 2 ? bytes[i + 2] : 0)
+      codes[o++] = ALPHABET.charCodeAt((v >> 18) & 63)
+      codes[o++] = ALPHABET.charCodeAt((v >> 12) & 63)
+      codes[o++] = n > 1 ? ALPHABET.charCodeAt((v >> 6) & 63) : 61
+      codes[o++] = n > 2 ? ALPHABET.charCodeAt(v & 63) : 61
+    }
+    parts.push(String.fromCharCode(...codes.subarray(0, o)))
+  }
+  return parts.join('')
+}
+
+/** Raw DEFLATE (RFC 1951), as `cfd-core` decodes it. */
+export async function deflateRaw(bytes: Uint8Array): Promise<Uint8Array> {
+  const stream = new Blob([bytes as BlobPart])
+    .stream()
+    .pipeThrough(new CompressionStream('deflate-raw'))
+  return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
+/** Inflates raw DEFLATE, failing (without reading on) once more than `limit` bytes come out. */
+export async function inflateRaw(bytes: Uint8Array, limit: number): Promise<Uint8Array> {
+  const stream = new Blob([bytes as BlobPart])
+    .stream()
+    .pipeThrough(new DecompressionStream('deflate-raw'))
+  const reader = stream.getReader()
+  const out = new Uint8Array(limit)
+  let n = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (n + value.length > limit) {
+      await reader.cancel()
+      throw new Error(`inflates to more than the expected ${limit} bytes`)
+    }
+    out.set(value, n)
+    n += value.length
+  }
+  return out.subarray(0, n)
+}
+
+async function payload(layer: LayerData, limit: number): Promise<Uint8Array> {
   const bytes = base64Decode(layer.data)
   switch (layer.encoding) {
     case 'raw+base64':
       return bytes
     case 'zstd+base64':
       return decompress(bytes)
+    case 'deflate+base64':
+      return inflateRaw(bytes, limit)
   }
 }
 
@@ -53,9 +109,11 @@ function checkDtype(layer: LayerData, expected: LayerData['dtype'], name: string
 }
 
 /** Decodes a `u8` layer and checks it has exactly `cells` values. */
-export function decodeU8(layer: LayerData, cells: number, name: string): Uint8Array {
+export async function decodeU8(layer: LayerData, cells: number, name: string): Promise<Uint8Array> {
   checkDtype(layer, 'u8', name)
-  const bytes = payload(layer)
+  const bytes = await payload(layer, cells).catch((e: Error) => {
+    throw new Error(`layer ${name}: ${e.message}`)
+  })
   if (bytes.length !== cells) {
     throw new Error(`layer ${name}: expected ${cells} cells, found ${bytes.length}`)
   }
@@ -63,9 +121,15 @@ export function decodeU8(layer: LayerData, cells: number, name: string): Uint8Ar
 }
 
 /** Decodes a little-endian `u16` layer and checks it has exactly `cells` values. */
-export function decodeU16(layer: LayerData, cells: number, name: string): Uint16Array {
+export async function decodeU16(
+  layer: LayerData,
+  cells: number,
+  name: string,
+): Promise<Uint16Array> {
   checkDtype(layer, 'u16', name)
-  const bytes = payload(layer)
+  const bytes = await payload(layer, cells * 2).catch((e: Error) => {
+    throw new Error(`layer ${name}: ${e.message}`)
+  })
   if (bytes.length !== cells * 2) {
     throw new Error(`layer ${name}: expected ${cells} cells, found ${bytes.length / 2}`)
   }
@@ -75,4 +139,25 @@ export function decodeU16(layer: LayerData, cells: number, name: string): Uint16
   const out = new Uint16Array(cells)
   for (let i = 0; i < cells; i++) out[i] = view.getUint16(i * 2, true)
   return out
+}
+
+async function encode(
+  bytes: Uint8Array,
+  dtype: LayerData['dtype'],
+  encoding: LayerEncoding,
+): Promise<LayerData> {
+  if (encoding === 'zstd+base64') throw new Error('the editor cannot write zstd layers')
+  const data = encoding === 'deflate+base64' ? await deflateRaw(bytes) : bytes
+  return { encoding, dtype, data: base64Encode(data) }
+}
+
+export function encodeU8(values: Uint8Array, encoding: LayerEncoding = 'deflate+base64') {
+  return encode(values, 'u8', encoding)
+}
+
+export function encodeU16(values: Uint16Array, encoding: LayerEncoding = 'deflate+base64') {
+  const bytes = new Uint8Array(values.length * 2)
+  const view = new DataView(bytes.buffer)
+  for (let i = 0; i < values.length; i++) view.setUint16(i * 2, values[i], true)
+  return encode(bytes, 'u16', encoding)
 }

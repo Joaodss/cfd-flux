@@ -15,6 +15,8 @@ export interface Block {
   height: number
   cellType: Uint8Array
   elementId: Uint16Array
+  /** Cells to copy (non-zero); without it, the whole rectangle (an imported image has one). */
+  mask?: Uint8Array
 }
 
 interface Floating {
@@ -209,7 +211,7 @@ export class SelectTool implements DrawTool {
     f.stroke.revert()
     if (f.source) this.fill(f.stroke, f.source)
     const b = f.block
-    f.stroke.blit(x, y, b.width, b.height, b.cellType, b.elementId)
+    f.stroke.blit(x, y, b.width, b.height, b.cellType, b.elementId, b.mask)
     f.x = x
     f.y = y
     this.setSelection([x, y, x + b.width - 1, y + b.height - 1])

@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "name": "Cylinder Re=100",
+  "description": "Schäfer & Turek (1996) benchmark 2D-2: von Kármán vortex street behind a cylinder.",
+  "grid": {
+    "width": 442,
+    "height": 84,
+    "cellSize": 0.005,
+    "edges": {
+      "left": "wall",
+      "right": "wall",
+      "bottom": "wall",
+      "top": "wall"
+    }
+  },
+  "fluids": [
+    {
+      "id": 1,
+      "name": "Benchmark fluid",
+      "density": 1,
+      "kinematicViscosity": 0.001
+    }
+  ],
+  "solidMaterials": [],
+  "elements": [
+    {
+      "id": 1,
+      "name": "Channel walls",
+      "kind": "wall",
+      "velocity": {
+        "type": "noSlip"
+      },
+      "thermal": {
+        "type": "adiabatic"
+      }
+    },
+    {
+      "id": 2,
+      "name": "Inlet",
+      "kind": "inlet",
+      "velocity": {
+        "type": "parabolic",
+        "peak": [
+          1.5,
+          0
+        ]
+      },
+      "thermal": {
+        "type": "adiabatic"
+      },
+      "fluid": 1
+    },
+    {
+      "id": 3,
+      "name": "Outlet",
+      "kind": "outlet",
+      "pressure": {
+        "type": "pressure",
+        "value": 0
+      }
+    },
+    {
+      "id": 4,
+      "name": "Cylinder",
+      "kind": "wall",
+      "velocity": {
+        "type": "noSlip"
+      },
+      "thermal": {
+        "type": "adiabatic"
+      }
+    }
+  ],
+  "probes": [
+    {
+      "name": "Front",
+      "position": [
+        30,
+        41
+      ]
+    },
+    {
+      "name": "Wake",
+      "position": [
+        91,
+        41
+      ]
+    }
+  ],
+  "initial": {
+    "fluid": 1,
+    "velocity": [
+      0,
+      0
+    ],
+    "temperature": 293.15,
+    "pressure": 0
+  },
+  "physics": {
+    "gravity": [
+      0,
+      0
+    ],
+    "thermal": false,
+    "buoyancy": "none",
+    "freeSurface": false
+  },
+  "run": {
+    "method": "lbm",
+    "backend": "auto",
+    "precision": "f32",
+    "endTime": 8,
+    "outputInterval": 0.01,
+    "outputFields": [
+      "velocity",
+      "pressure",
+      "vorticity"
+    ]
+  },
+  "layers": {
+    "cellType": {
+      "encoding": "deflate+base64",
+      "dtype": "u8",
+      "data": "7dwxDoMwEADBEP7/ZwqKiARhN7G00swLTtoK7PO20fR+kbQrF6VclXJVylUpV6VclXJVylUpV6VclXJVylUpV6VclXJVylUpV6VclXJVylUpV6VclXJVylUpV6VclXJVylUpVzVZ7tz7+fs0zJsq99nZWjARcybKXfftlkzF2Ljc96rkmrkYUa5qWO53P3nRZDxTrmpU7u5RgFWz8US5KuWqlKtSrkq5Kl8FVcpV+ftVpVyVU54qJ6tVbjNUuUFUpVyVclXKVSlXpVyVclXKVSlXpVyVclXKVSlXpVyVclXKVSlXpVyVclXKVSlXpVyVclXKVSlXpVyVclXKVSlXpVyVclXKVe13D55QcAA="
+    },
+    "elementId": {
+      "encoding": "deflate+base64",
+      "dtype": "u16",
+      "data": "7dw7DsIwAAVBm+T+Z6YkIAuQYm01886wlT9zTDML9xhA59AcpDQHLc1BS3PQ0hy0NActzUFLc9DSHLQ0By3NQUtz0NIctDQHLc1BS3PQ0hy0NActzUFLc9DSHLQ0By3NQUtz0NIctDQHLc1BS3PQ0hy09jZ3Xgas7GvuXAz4tKe5VW+6g5UdzX0rTnXwTnPQut/cr+JUB1eag9bd5v4pTnXwojloaQ5amoOW5qClOWg5K4CW5qDl7he0NActb3mg5c0qtPzNAC1/EEFLc9DSHLQ0By3NQUtz0NIctDQHLc1BS3PQ0hy0NActzUFLc9DSHLQ0By3NQUtz0NIctDQHLc1BS3PQ0hy0NActzUFLc9DSHLQ0By3NQUtz0NIctDQHrWNMM0v3BA=="
+    }
+  }
+}

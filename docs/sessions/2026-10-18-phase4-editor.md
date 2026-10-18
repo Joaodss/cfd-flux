@@ -14,6 +14,7 @@ Stop after the first two implementation steps if the session gets long, with eve
 | 2 | Drawing tools and history | ✅ |
 | 3 | Palette and elements: active elements, automatic creation, eyedropper, element list, probes | ✅ |
 | 4 | Properties panels (Element, Scene, Run) and the fluid/material library (`cfd_core::library`) | ✅ |
+| 5 | Save/load: `deflate+base64`, `.cfdscene` files, server save/open with `PUT`, draft autosave, PNG import, example gallery | ✅ |
 
 ## Found along the way
 
@@ -52,6 +53,16 @@ Stop after the first two implementation steps if the session gets long, with eve
   `get()` outside the recipe. Earlier probe undo tests passed only because they never redid a probe edit.
 - Component tests (Testing Library on happy-dom) cover the number field, the inlet and thermal forms and the
   Run tab; the tests' tsconfig gained the DOM and Vite types, JSX and JSON modules.
+
+- **Documents (step 5):** `deflate+base64` in `cfd-core` (miniz_oxide, already in the tree; inflation bounded by
+  the layer size) and in the editor (native `CompressionStream`/`DecompressionStream`); a sample made by Node's
+  `CompressionStream` is a Rust unit test, and an editor-written cylinder file is committed and checked in Rust
+  (same layers and table as the example) — semantic, not byte, equality, so zlib versions do not matter. The
+  editor's cylinder file is 2.9 kB (the zstd example: 3.1 kB). Checked against a running server: gallery, save to
+  server, save again (PUT: one record, renamed), reopen, autosave/restore after a reload, PNG import.
+- An imported image is centred in the view but kept inside the grid when it fits (with the view off the domain,
+  the block was clipped at the edge). ajv and the schema load on demand: the main chunk went from 604 to 467 kB.
+- `toScene` writes the keys in the Rust serializer's order, so editor files read like the CLI's.
 
 ## Decisions taken with the author
 
