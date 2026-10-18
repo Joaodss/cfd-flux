@@ -52,7 +52,7 @@
 ### 2.1 Frontend — `apps/web`
 - **Stack:** TypeScript + Vite + React, Zustand, Radix/shadcn + Tailwind, uPlot; Vitest + Playwright; Three.js/react-three-fiber for the 3D stage (see [ADR-005](07-decisions-and-questions.md)).
 - **Editor:** layers stored as `Uint8Array`/`Uint16Array` (one per logical layer, outside React), rendered with **WebGL2**: the layers are uploaded unchanged into integer textures (`R8UI` cell type, `R16UI` element id; changed 64×64 tiles with `texSubImage2D`), and a fragment shader maps each screen pixel to its cell, colours it from a palette texture and draws grid lines from 8 px/cell; a Canvas2D overlay draws tool previews. Zoom 1/8–32 px/cell on a √2 ladder, pan, fit. Drawing with Bresenham / scanline fill. A 4096² domain uploads and draws in ≈ 80 ms, a changed tile in ≈ 3 ms (design: [Phase 4 proposal](sessions/phase4-design-proposal.md) §3).
-- **State:** a simple store (Zustand) with history for undo/redo (diffs per affected rectangle).
+- **State:** a Zustand store (with `immer`) for the scene table, view and UI state; the pixel layers are only referenced from it. Tools write through a revertible `Stroke` that copies each 64×64 tile on its first write (shapes and moved selections are redrawn live on every pointer move); the history keeps the changed tiles and undo/redo *swap* them with the layers (one copy per tile, uniform tiles stored as one value), within 256 MB / 200 entries.
 - **Viewer:** WebGL2 (universal fallback) with colour-map shaders; WebGPU when available for particles and streamlines.
 - **Communication:** REST for CRUD, binary WebSocket for frames.
 - **Optional, later:** the solver core compiled to WASM/WebGPU for low-resolution local previews.

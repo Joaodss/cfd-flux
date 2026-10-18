@@ -1,22 +1,72 @@
-// The drawing surface: a WebGL2 canvas filling its container. The renderer and the pointer
-// handlers are imperative code kept in refs and effects; React renders this component once.
+// The drawing surface: a WebGL2 canvas for the cells and a transparent 2D canvas on top for the
+// selection outline and the brush cursor. The renderer and the pointer handlers are imperative
+// code kept in an effect; React renders this component once.
 import { useEffect, useRef, useState } from 'react'
 import { coloursFor } from './colours.ts'
 import { Renderer } from './render/renderer.ts'
-import { useEditor } from './store.ts'
-import { screenToCell } from './view.ts'
+import { useEditor, type EditorState } from './store.ts'
+import { pointerDown, pointerMove, pointerUp } from './tools/controller.ts'
+import { brushSpans } from './tools/raster.ts'
+import { cellToScreen, screenToCell } from './view.ts'
 
 /** Wheel delta (pixels) per zoom step: a mouse notch is 100–120, trackpads send many small deltas. */
 const WHEEL_STEP = 100
 
+/** Draws the selection outline and the brush footprint (CSS pixels, scaled by the DPR). */
+function drawOverlay(ctx: CanvasRenderingContext2D, s: EditorState, dpr: number): void {
+  const { width, height } = ctx.canvas
+  ctx.setTransform(1, 0, 0, 1, 0, 0)
+  ctx.clearRect(0, 0, width, height)
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  const H = s.layers.height
+  const rect = (x0: number, y0: number, x1: number, y1: number) => {
+    // Inclusive cells → the screen rectangle of their outer edges (y up → y down).
+    const [sx0, sy0] = cellToScreen(s.view, H, x0, y1 + 1)
+    const [sx1, sy1] = cellToScreen(s.view, H, x1 + 1, y0)
+    return [
+      Math.round(sx0) + 0.5,
+      Math.round(sy0) + 0.5,
+      Math.round(sx1 - sx0),
+      Math.round(sy1 - sy0),
+    ] as const
+  }
+  if (s.selection) {
+    const [x, y, w, h] = rect(...s.selection)
+    ctx.lineWidth = 1
+    ctx.setLineDash([4, 4])
+    ctx.strokeStyle = '#000'
+    ctx.strokeRect(x, y, w, h)
+    ctx.lineDashOffset = 4
+    ctx.strokeStyle = '#fff'
+    ctx.strokeRect(x, y, w, h)
+    ctx.lineDashOffset = 0
+    ctx.setLineDash([])
+  }
+  const brushTool = s.tool === 'pencil' || s.tool === 'eraser'
+  if (brushTool && s.cursor && s.view.zoom >= 2) {
+    const spans = brushSpans(s.brush)
+    const dy = spans.map((r) => r[0])
+    const dx0 = Math.min(...spans.map((r) => r[1]))
+    const dx1 = Math.max(...spans.map((r) => r[2]))
+    const [cx, cy] = s.cursor
+    const [x, y, w, h] = rect(cx + dx0, cy + Math.min(...dy), cx + dx1, cy + Math.max(...dy))
+    ctx.lineWidth = 1
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)'
+    ctx.strokeRect(x, y, w, h)
+  }
+}
+
 export function EditorCanvas() {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const overlayRef = useRef<HTMLCanvasElement>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     const container = containerRef.current!
     const canvas = canvasRef.current!
+    const overlayCanvas = overlayRef.current!
+    const overlay = overlayCanvas.getContext('2d')!
     let renderer: Renderer
     try {
       renderer = new Renderer(canvas)
@@ -31,7 +81,9 @@ export function EditorCanvas() {
     let frame = 0
     const draw = () => {
       frame = 0
-      renderer.draw(useEditor.getState().view, window.devicePixelRatio)
+      const s = useEditor.getState()
+      renderer.draw(s.view, window.devicePixelRatio)
+      drawOverlay(overlay, s, window.devicePixelRatio)
     }
     const schedule = () => {
       if (frame === 0) frame = requestAnimationFrame(draw)
@@ -39,7 +91,7 @@ export function EditorCanvas() {
 
     let layers: unknown = null
     let elements: unknown = null
-    const sync = (s: ReturnType<typeof useEditor.getState>) => {
+    const sync = (s: EditorState) => {
       try {
         if (s.layers !== layers) {
           layers = s.layers
@@ -61,27 +113,44 @@ export function EditorCanvas() {
 
     const resize = () => {
       const { width, height } = container.getBoundingClientRect()
-      renderer.resize(width, height, window.devicePixelRatio)
+      const dpr = window.devicePixelRatio
+      renderer.resize(width, height, dpr)
+      overlayCanvas.width = Math.max(1, Math.round(width * dpr))
+      overlayCanvas.height = Math.max(1, Math.round(height * dpr))
       useEditor.getState().setViewport(width, height)
       schedule()
     }
     const observer = new ResizeObserver(resize)
     observer.observe(container)
 
-    // ---- pointer: pan (hand tool, middle button, or space + drag), zoom (wheel), cursor --------
+    // ---- pointer: tools, pan (hand tool, middle button, or Space + drag), zoom (wheel) ---------
     let pan: { id: number; x: number; y: number } | null = null
+    let drawing: number | null = null
     let space = false
     const local = (e: { clientX: number; clientY: number }): [number, number] => {
-      const r = canvas.getBoundingClientRect()
+      const r = overlayCanvas.getBoundingClientRect()
       return [e.clientX - r.left, e.clientY - r.top]
     }
-    const onPointerDown = (e: PointerEvent) => {
+    const cellOf = (e: PointerEvent): [number, number] => {
       const s = useEditor.getState()
-      if (e.button === 1 || (e.button === 0 && (space || s.tool === 'hand'))) {
+      const [sx, sy] = local(e)
+      return screenToCell(s.view, s.layers.height, sx, sy)
+    }
+    const mods = (e: PointerEvent) => ({ shift: e.shiftKey, alt: e.altKey })
+    const onPointerDown = (e: PointerEvent) => {
+      if (pan || drawing !== null) return
+      overlayCanvas.focus()
+      if (e.button === 1 || (e.button === 0 && space)) {
         pan = { id: e.pointerId, x: e.clientX, y: e.clientY }
-        canvas.setPointerCapture(e.pointerId)
-        e.preventDefault()
+      } else if (e.button === 0) {
+        if (pointerDown(cellOf(e), mods(e))) drawing = e.pointerId
+        else pan = { id: e.pointerId, x: e.clientX, y: e.clientY }
+      } else {
+        return
       }
+      // Capture: moves and the release arrive here even outside the canvas.
+      overlayCanvas.setPointerCapture(e.pointerId)
+      e.preventDefault()
     }
     const onPointerMove = (e: PointerEvent) => {
       const s = useEditor.getState()
@@ -95,13 +164,20 @@ export function EditorCanvas() {
         pan.x = e.clientX
         pan.y = e.clientY
       }
-      const [sx, sy] = local(e)
-      s.setCursor(screenToCell(s.view, s.layers.height, sx, sy))
+      const cell = cellOf(e)
+      s.setCursor(cell)
+      if (drawing === e.pointerId) pointerMove(cell, mods(e))
     }
     const onPointerUp = (e: PointerEvent) => {
       if (pan && e.pointerId === pan.id) pan = null
+      if (drawing === e.pointerId) {
+        drawing = null
+        pointerUp(cellOf(e), mods(e))
+      }
     }
-    const onPointerLeave = () => useEditor.getState().setCursor(null)
+    const onPointerLeave = () => {
+      if (drawing === null) useEditor.getState().setCursor(null)
+    }
     let wheel = 0
     const onWheel = (e: WheelEvent) => {
       e.preventDefault() // the page itself never scrolls or zooms over the canvas
@@ -109,50 +185,60 @@ export function EditorCanvas() {
       const s = useEditor.getState()
       while (Math.abs(wheel) >= WHEEL_STEP) {
         const dir = wheel < 0 ? 1 : -1
-        wheel -= -dir * WHEEL_STEP
+        wheel += dir * WHEEL_STEP
         s.zoomStep(dir, local(e))
       }
+    }
+    const setCursorStyle = () => {
+      const tool = useEditor.getState().tool
+      overlayCanvas.style.cursor =
+        space || tool === 'hand' ? 'grab' : tool === 'select' ? 'default' : 'crosshair'
     }
     const onKey = (e: KeyboardEvent) => {
       if (e.code === 'Space' && !(e.target instanceof HTMLInputElement)) {
         space = e.type === 'keydown'
-        canvas.style.cursor = space || useEditor.getState().tool === 'hand' ? 'grab' : 'crosshair'
+        setCursorStyle()
       }
     }
-    canvas.addEventListener('pointerdown', onPointerDown)
-    canvas.addEventListener('pointermove', onPointerMove)
-    canvas.addEventListener('pointerup', onPointerUp)
-    canvas.addEventListener('pointercancel', onPointerUp)
-    canvas.addEventListener('pointerleave', onPointerLeave)
+    const unsubscribeTool = useEditor.subscribe((s, prev) => {
+      if (s.tool !== prev.tool) setCursorStyle()
+    })
+    setCursorStyle()
+    overlayCanvas.addEventListener('pointerdown', onPointerDown)
+    overlayCanvas.addEventListener('pointermove', onPointerMove)
+    overlayCanvas.addEventListener('pointerup', onPointerUp)
+    overlayCanvas.addEventListener('pointercancel', onPointerUp)
+    overlayCanvas.addEventListener('pointerleave', onPointerLeave)
     // Not passive: preventDefault() must be allowed to stop the browser's own scrolling.
-    canvas.addEventListener('wheel', onWheel, { passive: false })
+    overlayCanvas.addEventListener('wheel', onWheel, { passive: false })
     window.addEventListener('keydown', onKey)
     window.addEventListener('keyup', onKey)
 
     return () => {
       unsubscribe()
+      unsubscribeTool()
       observer.disconnect()
       cancelAnimationFrame(frame)
-      canvas.removeEventListener('pointerdown', onPointerDown)
-      canvas.removeEventListener('pointermove', onPointerMove)
-      canvas.removeEventListener('pointerup', onPointerUp)
-      canvas.removeEventListener('pointercancel', onPointerUp)
-      canvas.removeEventListener('pointerleave', onPointerLeave)
-      canvas.removeEventListener('wheel', onWheel)
+      overlayCanvas.removeEventListener('pointerdown', onPointerDown)
+      overlayCanvas.removeEventListener('pointermove', onPointerMove)
+      overlayCanvas.removeEventListener('pointerup', onPointerUp)
+      overlayCanvas.removeEventListener('pointercancel', onPointerUp)
+      overlayCanvas.removeEventListener('pointerleave', onPointerLeave)
+      overlayCanvas.removeEventListener('wheel', onWheel)
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('keyup', onKey)
       renderer.dispose()
     }
   }, [])
 
-  const tool = useEditor((s) => s.tool)
   return (
     <div ref={containerRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
+      <canvas ref={canvasRef} className="absolute inset-0 size-full" />
       <canvas
-        ref={canvasRef}
+        ref={overlayRef}
         data-testid="editor-canvas"
-        className="absolute inset-0 size-full touch-none"
-        style={{ cursor: tool === 'hand' ? 'grab' : 'crosshair' }}
+        tabIndex={-1}
+        className="absolute inset-0 size-full touch-none outline-none"
       />
       {error && (
         <div className="absolute inset-0 grid place-items-center p-8 text-center text-sm text-red-400">

@@ -138,11 +138,11 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 **Goal:** draw and configure scenes in the browser.
 
 - [x] M — Canvas with zoom/pan, pixel grid, `Uint8Array/Uint16Array` layers, rendering with colours per type/element. *(WebGL2: integer textures + palette, dirty 64×64 tiles; 4096² in ≈ 80 ms, a tile in ≈ 3 ms.)*
-- [ ] M — Tools: pencil (brush size), eraser, line, rectangle, ellipse, bucket, select/move/copy.
+- [x] M — Tools: pencil (brush size), eraser, line, rectangle, ellipse, bucket, select/move/copy. *(Drawn live through a revertible stroke; a 20 × 20 ellipse is exactly the example cylinder; a 4096² half-domain fill takes 0.17 s.)*
 - [ ] M — Type palette (fluid, wall, inlet, outlet, heat source, liquid region, probe); automatic element creation when drawing a new region; selection of an existing element.
 - [ ] M — Properties panel per element (velocity, thermal, material) and global properties (domain, scale, fluids, gravity, time, method, backend).
 - [ ] S — Library of predefined fluids/materials (air, water, oil; aluminium, copper, glass…).
-- [ ] M — Undo/redo, save/load (local `.cfdscene` file + server), PNG import as a mask.
+- [ ] M — Undo/redo, save/load (local `.cfdscene` file + server), PNG import as a mask. *(Undo/redo done: 64×64 tile patches swapped in place, uniform tiles stored as one value, 256 MB / 200-entry budget.)*
 - [ ] M — Client-side validation and estimates (Re, memory, estimated time) before submitting.
 - [ ] S — Example gallery.
 

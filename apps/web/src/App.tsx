@@ -1,43 +1,21 @@
 // The editor's layout: header, tool strip, canvas, side panel and status bar.
 import { useEffect, useState } from 'react'
 import { Header } from './app/Header.tsx'
+import { ToolOptions } from './app/ToolOptions.tsx'
 import { Toolbar } from './app/Toolbar.tsx'
 import { EditorCanvas } from './editor/EditorCanvas.tsx'
-import { useEditor } from './editor/store.ts'
+import { handleKey } from './editor/tools/controller.ts'
 import { ScenePanel } from './panels/ScenePanel.tsx'
 import { StatusBar } from './panels/StatusBar.tsx'
 
-/** Keyboard shortcuts of the whole editor (ignored while typing in a field). */
+/** The editor's keyboard shortcuts (ignored while typing in a field). */
 function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target
       if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return
-      if (e.ctrlKey || e.metaKey || e.altKey) return
-      const s = useEditor.getState()
-      switch (e.key) {
-        case 'h':
-        case 'H':
-          s.setTool('hand')
-          break
-        case 'f':
-        case 'F':
-          s.fit()
-          break
-        case '+':
-        case '=':
-          s.zoomStep(1)
-          break
-        case '-':
-          s.zoomStep(-1)
-          break
-        case '1':
-          s.zoomTo(1)
-          break
-        default:
-          return
-      }
-      e.preventDefault()
+      if (t instanceof HTMLElement && t.closest('[role=menu], [role=dialog]')) return
+      if (handleKey(e)) e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -58,6 +36,7 @@ export default function App() {
           </button>
         </div>
       )}
+      <ToolOptions />
       <div className="flex min-h-0 flex-1">
         <Toolbar />
         <EditorCanvas />

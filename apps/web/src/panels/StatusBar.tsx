@@ -7,6 +7,9 @@ export function StatusBar() {
   const zoom = useEditor((s) => s.view.zoom)
   const grid = useEditor((s) => s.table.grid)
   const elements = useEditor((s) => s.table.elements)
+  const drag = useEditor((s) => s.dragSize)
+  // Re-read the cell under the pointer when the layers change beneath it.
+  useEditor((s) => s.layersVersion)
   // The layers are not React state: read the cell here, re-rendered because `cursor` changed.
   const layers = useEditor.getState().layers
 
@@ -28,6 +31,12 @@ export function StatusBar() {
         {where || '—'}
       </span>
       <span className="min-w-40">{what}</span>
+      {drag && (
+        <span data-testid="status-drag">
+          {drag[0]} × {drag[1]} cells = {formatLength(drag[0] * grid.cellSize)} ×{' '}
+          {formatLength(drag[1] * grid.cellSize)}
+        </span>
+      )}
       <span className="ml-auto">{formatZoom(zoom)}</span>
       <span>
         {grid.width} × {grid.height} cells · {formatLength(grid.width * grid.cellSize)} ×{' '}
