@@ -1,6 +1,7 @@
 # Phase 5 — visualisation and playback (the MVP viewer): design proposal (2026-10-19)
 
-**Status: proposed, waiting for the author's answers to §16.** Nothing here is implemented yet. The accepted parts move
+**Status: approved by the author on 2026-10-19, as proposed** (every proposal of §16 accepted). Implemented on
+`feat/phase5-viewer`. The accepted parts move
 into [02 §2.1](../02-architecture.md#21-frontend--appsweb), [03](../03-data-model.md) and a new ADR as they are
 implemented, and the plan's Phase 5 tasks follow §15.
 
@@ -403,7 +404,7 @@ Plus the plan's MVP line: export a PNG, the force CSV and a video of the street.
 
 Steps 1–3 are the "first implementation steps" of this session; the session stops after them if it gets long.
 
-## 16. Open questions for the author
+## 16. Open questions — answered (2026-10-19): every proposal accepted
 
 | # | Question | Proposal |
 |---|----------|----------|
