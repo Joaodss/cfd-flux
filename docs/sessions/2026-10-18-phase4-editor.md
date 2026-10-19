@@ -17,6 +17,7 @@ Stop after the first two implementation steps if the session gets long, with eve
 | 5 | Save/load: `deflate+base64`, `.cfdscene` files, server save/open with `PUT`, draft autosave, PNG import, example gallery | ✅ |
 | 6 | Validation: issue `params`/`at` and a fuller estimate in Rust, debounced validation, issue list and canvas markers, estimate in the Run tab | ✅ |
 | 7 | Run: submit, job view at `#/jobs/{id}` (WebSocket progress, pause/resume/cancel), back to the editor, runs list | ✅ |
+| 8 | Acceptance: Playwright scenario (+ `web-e2e` CI job), ADR-030, docs, final check | ✅ scripted run passes in ≈ 3–4 s; hand timing is the author's |
 
 ## Found along the way
 
@@ -82,8 +83,26 @@ Stop after the first two implementation steps if the session gets long, with eve
   reopens it. Progress messages carry no frame count, so the view shows frames once a run is over.
 - Component tests drive the job view with a stand-in `WebSocket` class (`vi.stubGlobal`) and `fetch` stubs.
 
+- **Acceptance (step 8):** the Playwright scenario draws the cylinder in a channel through the UI and the result
+  equals `cfd-core`'s example cell for cell (cell types and element ids 1–4); validation reports no issues and
+  Re = 615; the run completes. Chromium uses SwiftShader (software WebGL): headless Chromium no longer falls back
+  to it alone, and without WebGL2 the canvas cannot start (CI runners have no GPU).
+
 ## Decisions taken with the author
 
 - Design proposal approved as written (2026-10-18): every proposal of §14 accepted (WebGL2 renderer,
   `deflate+base64` layers, explicit elements, Rust library, server validation with issue `params`, `PUT
   /api/scenes/{id}`, Playwright in CI, `immer`, the default new scene).
+
+## Final check (2026-10-19)
+
+- Web (`apps/web`): `npm run typecheck`, `lint`, `format:check`, `build` clean; generated types up to date;
+  `npm test`: **113 tests pass** (logic, components on happy-dom, contracts with Rust); `npm run test:e2e`: the
+  acceptance scenario passes (≈ 3–4 s, software WebGL), also as the new `web-e2e` CI job.
+- Rust: `cargo fmt --check`; `cargo clippy --workspace --all-targets -D warnings` and the `--no-default-features`
+  run (cli, cuda, engines, job, server): clean. `CFD_REQUIRE_GPU=1 CFD_REQUIRE_CUDA=1 cargo test --workspace`:
+  **207 tests pass** (was 199): the library, `deflate+base64`, the editor-written fixture, issue params and cells,
+  `PUT /api/scenes/{id}`, the extended estimate.
+- Not done / follow-ups: the author's hand-timed acceptance run (< 2 min); the wgpu readback fix
+  (`fix/wgpu-readback-wait`, its own session) is not on this branch; `cfd-server` does not serve the built app yet
+  (Phase 5, Q10); the Reynolds number shown uses the solver's characteristic scales (see above).

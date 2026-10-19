@@ -106,6 +106,9 @@ npm install
 npm run dev          # development server
 npm test             # Vitest: logic, components (happy-dom), scenes/ against the JSON Schema
 UPDATE_FIXTURES=1 npm test   # rewrite tests/fixtures/ (editor-written scenes cfd-core reads back)
+npx playwright install chromium   # once: the browser for the end-to-end tests
+npm run test:e2e     # Playwright: starts a release cfd-server (port 7879, fresh target/e2e-data) and Vite
+                     # (port 5174), then draws, validates and runs the cylinder (Phase 4 acceptance)
 npm run typecheck && npm run lint && npm run format:check && npm run build
 ```
 

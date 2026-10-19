@@ -146,7 +146,7 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 - [x] M — Client-side validation and estimates (Re, memory, estimated time) before submitting. *(The server's `/api/scenes/validate`, 400 ms after the last edit, outdated requests aborted; issues carry `params` and a cell (`at`), worded by the editor's message table (a test requires every code `cfd-core` emits) and marked on the canvas; the estimate adds Re, Ma, Pr, Ra, τ, Δt and the lattice velocity, also when a server limit fails.)*
 - [x] S — Example gallery. *(A dialog of the `scenes/` examples with thumbnails drawn from their layers.)*
 
-**Acceptance:** draw the cylinder-in-a-channel case from scratch in < 2 min and submit it without errors.
+**Acceptance:** draw the cylinder-in-a-channel case from scratch in < 2 min and submit it without errors. ✅ **Met by the scripted scenario (2026-10-19):** `npm run test:e2e` (Playwright, also a CI job on a GPU-less runner) sets up the 442 × 84 grid, draws the walls, a parabolic inlet, the outlet and the cylinder through the UI — the result equals `cfd-core`'s example cell for cell — waits for the server's validation (no issues), runs it and follows the job to completion, in ≈ 3–4 s. The hand-timed run (< 2 min) is the author's to record.
 
 ---
 

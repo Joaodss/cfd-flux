@@ -180,6 +180,27 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   256² kernel became 20% slower than storing every step; the mask-based rule is faster everywhere. A `step(1)` loop
   gains nothing (every step is a last step): the run loop's batches are what benefit.
 
+### ADR-030 — Web editor: pixels outside React, WebGL2 cells, tile-swap history, server-side validation · *Accepted (2026-10-18)*
+- **Context:** Phase 4 needs an editor for grids up to 4096² (16 M cells) with undo, live shape previews, files and
+  validation, written by an author new to TypeScript/React, with the Rust types as the source of truth
+  ([design proposal](sessions/phase4-design-proposal.md), every answer of its §14 accepted).
+- **Decision:** the layers are typed arrays owned by plain TypeScript objects, never React state; the scene table,
+  view and UI state live in a Zustand store (with `immer`). Cells are drawn by **WebGL2** from integer textures
+  (`R8UI`, `R16UI`, dirty 64×64 tiles uploaded with `texSubImage2D`) and a palette texture; a Canvas2D overlay draws
+  selections, probes and issue markers. Tools write through a revertible `Stroke` (shapes are redrawn live); the
+  **history** keeps changed 64×64 tiles and swaps them on undo/redo (uniform tiles as one value; 256 MB / 200
+  entries), with table changes and whole-grid replacements in the same entries. Files are the `Scene` JSON with
+  **`deflate+base64`** layers (native `CompressionStream`; a new encoding read by `cfd-core` through `miniz_oxide`).
+  **Validation stays on the server** (`/api/scenes/validate`, debounced, aborted when outdated), whose issues carry
+  `params` and a cell so the editor words and marks them; the preset library lives in `cfd_core::library` and is
+  generated into the web app.
+- **Consequences:** a 4096² grid uploads and draws in ≈ 80 ms and a tile in ≈ 3 ms; a half-domain fill takes 0.17 s
+  and its undo entry 128 kB. Nothing in the editor duplicates physics or validation (one implementation, in Rust);
+  the editor needs the local server for checks and estimates — compiling `cfd-core` to WASM stays the option for a
+  serverless demo (ADR-010). Contract tests keep the two sides in step: an editor-written scene file read by
+  `cfd-core`, a sample of the browser's deflate decoded in Rust, every issue code worded by the editor, generated
+  types and library checked as up to date. The acceptance scenario is a Playwright test in CI.
+
 ## Open questions
 
 Answers to these questions can change priorities. Record the answer and the date here.
