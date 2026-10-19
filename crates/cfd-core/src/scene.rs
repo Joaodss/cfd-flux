@@ -33,6 +33,10 @@ pub struct Scene {
     pub probes: Vec<Probe>,
     pub initial: InitialConditions,
     pub physics: Physics,
+    /// Scales of the reported dimensionless numbers (Re, Ra, C_D, C_L, St, Nu); they do not
+    /// change the simulation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<ReferenceScales>,
     pub run: RunConfig,
     pub layers: Layers,
 }
@@ -272,6 +276,25 @@ pub struct Physics {
     /// Liquid with a free surface; `empty` cells are gas/void.
     #[serde(default)]
     pub free_surface: bool,
+}
+
+/// Reference scales of the dimensionless numbers reported for a scene, e.g. a cylinder's
+/// diameter and the mean inlet velocity. Only reports use them: the solver still takes its time
+/// step from the fastest prescribed velocity. A missing value falls back to the characteristic
+/// scale the solver derives (`domain::Dimensionless`).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReferenceScales {
+    /// Length L in metres. Default: the shorter side of the fluid's bounding box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<f64>,
+    /// Velocity U in m/s. Default: the largest prescribed (or buoyancy) velocity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub velocity: Option<f64>,
+    /// Temperature difference ΔT in kelvin (Nusselt and Rayleigh numbers). Default: the spread
+    /// of the prescribed temperatures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub temperature_difference: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

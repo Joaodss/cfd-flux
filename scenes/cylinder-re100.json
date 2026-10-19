@@ -105,6 +105,10 @@
     "buoyancy": "none",
     "freeSurface": false
   },
+  "reference": {
+    "length": 0.1,
+    "velocity": 1.0
+  },
   "run": {
     "method": "lbm",
     "backend": "auto",

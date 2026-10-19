@@ -120,6 +120,20 @@ pub struct Numbers {
     pub dt: f64,
     /// Lattice velocity U·dt/dx.
     pub lattice_velocity: f64,
+    /// The scales of reported numbers (the scene's `reference`, defaults filled in) and the
+    /// Reynolds and Rayleigh numbers they give.
+    pub reference: ReferenceNumbers,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceNumbers {
+    pub length: f64,
+    pub velocity: f64,
+    pub temperature_difference: f64,
+    pub reynolds: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rayleigh: Option<f64>,
 }
 
 impl Numbers {
@@ -137,6 +151,13 @@ impl Numbers {
             dx: d.units.dx,
             dt: d.units.dt,
             lattice_velocity: n.velocity * d.units.velocity_factor(),
+            reference: ReferenceNumbers {
+                length: n.reference.length,
+                velocity: n.reference.velocity,
+                temperature_difference: n.reference.temperature_difference,
+                reynolds: n.reference.reynolds,
+                rayleigh: n.reference.rayleigh,
+            },
         }
     }
 }

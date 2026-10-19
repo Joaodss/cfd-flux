@@ -82,7 +82,8 @@ pub struct Plan {
 
 impl Plan {
     /// Defaults: about 500 samples, fields mode, statistics over the second half, the domain's
-    /// characteristic scales, maps of differing fields at 480 px.
+    /// reference scales (the scene's `reference`, else the characteristic ones), maps of
+    /// differing fields at 480 px.
     pub fn new(domain: &Domain, steps: u64) -> Self {
         Self {
             steps,
@@ -91,8 +92,8 @@ impl Plan {
             stats_from: steps / 2,
             tolerance: TOLERANCE,
             stats_tolerance: STATS_TOLERANCE,
-            ref_length: domain.numbers.length,
-            ref_velocity: domain.numbers.velocity,
+            ref_length: domain.numbers.reference.length,
+            ref_velocity: domain.numbers.reference.velocity,
             maps: Maps::Differing,
             map_size: 480,
         }

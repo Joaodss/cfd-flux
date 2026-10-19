@@ -72,6 +72,10 @@ async fn a_valid_scene_gets_an_estimate() {
         (n["reynolds"].as_f64().unwrap() / re - 1.0).abs() < 1e-9,
         "{n}"
     );
+    // Without a scene `reference`, the reference scales are the characteristic ones.
+    let r = &n["reference"];
+    assert_eq!(r["reynolds"], n["reynolds"], "{n}");
+    assert_eq!(r["length"], n["length"], "{n}");
     s.stop().await;
 }
 

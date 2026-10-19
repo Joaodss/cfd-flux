@@ -36,6 +36,14 @@ export interface Estimate {
     dx: number
     dt: number
     latticeVelocity: number
+    /** Scales of reported numbers: the scene's `reference`, defaults filled in. */
+    reference: {
+      length: number
+      velocity: number
+      temperatureDifference: number
+      reynolds: number
+      rayleigh?: number
+    }
   }
 }
 

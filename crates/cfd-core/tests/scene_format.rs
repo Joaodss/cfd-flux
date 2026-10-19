@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use cfd_core::examples;
 use cfd_core::layers::{LayerData, LayerEncoding};
-use cfd_core::scene::{CellType, Scene};
+use cfd_core::scene::{CellType, ReferenceScales, Scene};
 use cfd_core::validate::validate;
 
 fn repo_file(rel: &str) -> PathBuf {
@@ -191,4 +191,19 @@ fn detects_bad_references_and_sizes() {
     let mut s = examples::channel();
     s.probes[0].position = [10_000, 0];
     assert!(error_codes(&s).contains(&"probe.position"));
+
+    let mut s = examples::channel();
+    s.reference = Some(ReferenceScales {
+        length: Some(0.0),
+        velocity: Some(f64::NAN),
+        temperature_difference: Some(5.0),
+    });
+    let r = validate(&s);
+    let bad: Vec<_> = r
+        .issues
+        .iter()
+        .filter(|i| i.code == "reference.scale")
+        .map(|i| i.params["scale"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(bad, ["length", "velocity"]);
 }

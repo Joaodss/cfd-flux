@@ -48,6 +48,8 @@ const MESSAGES: Record<string, Format> = {
   'id.zero': (p) => `A ${p.what} has id 0 (ids start at 1)`,
   'id.duplicate': (p) => `Two ${p.what}s share the id ${p.id}`,
   'run.time': () => 'The output interval must be positive and at most the end time',
+  'reference.scale': (p) =>
+    `The reference ${p.scale === 'temperatureDifference' ? 'temperature difference' : p.scale} must be a positive number`,
   'layer.cellType': () => 'The cell-type layer cannot be read (wrong size or data)',
   'layer.elementId': () => 'The element layer cannot be read (wrong size or data)',
   'layer.fluidId': () => 'The fluid layer cannot be read or uses missing fluids',

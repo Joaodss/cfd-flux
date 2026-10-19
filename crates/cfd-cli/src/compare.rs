@@ -82,10 +82,10 @@ pub struct CompareArgs {
     /// Relative limit of the statistics (frequency; mean/min/max force vs the largest force).
     #[arg(long, default_value_t = compare::STATS_TOLERANCE)]
     pub stats_tolerance: f64,
-    /// Reference length (m) for St and force coefficients [default: the scene's characteristic length].
+    /// Reference length (m) for St and force coefficients [default: the scene's `reference`, else its characteristic length].
     #[arg(long, value_name = "METRES")]
     pub ref_length: Option<f64>,
-    /// Reference velocity (m/s) for St and force coefficients [default: the scene's characteristic velocity].
+    /// Reference velocity (m/s) for St and force coefficients [default: the scene's `reference`, else its characteristic velocity].
     #[arg(long, value_name = "M_PER_S")]
     pub ref_velocity: Option<f64>,
     /// Steps between samples of the diagnostics and forces [default: steps / 500].

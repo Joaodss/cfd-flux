@@ -85,7 +85,7 @@ impl JobObserver for Console {
             units.dx,
             units.dt,
             d.run.total,
-            n.reynolds,
+            n.reference.reynolds,
             n.mach,
             d.physics.tau(),
             c.describe(),

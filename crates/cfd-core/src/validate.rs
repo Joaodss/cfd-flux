@@ -160,6 +160,21 @@ pub fn validate(scene: &Scene) -> Report {
             .param("fluid", f.id);
         }
     }
+    if let Some(rs) = &scene.reference {
+        for (name, v) in [
+            ("length", rs.length),
+            ("velocity", rs.velocity),
+            ("temperatureDifference", rs.temperature_difference),
+        ] {
+            if v.is_some_and(|v| !(v.is_finite() && v > 0.0)) {
+                r.error(
+                    "reference.scale",
+                    format!("the reference {name} must be a positive number"),
+                )
+                .param("scale", name);
+            }
+        }
+    }
     if !fluid_ids.contains(&(scene.initial.fluid as u32)) {
         r.error(
             "initial.fluid",

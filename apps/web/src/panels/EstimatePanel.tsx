@@ -42,6 +42,7 @@ export function EstimatePanel() {
     )
   }
   const n = e.numbers
+  const r = n.reference
   const failure = result && !result.ok && result.code !== 'scene.invalid' ? result.message : null
   return (
     <Group title="Estimate">
@@ -64,21 +65,32 @@ export function EstimatePanel() {
             ? formatDuration(e.seconds)
             : 'known after a first run on this engine'}
         </Item>
-        <Item label="Reynolds" title="U·L/ν with the characteristic velocity and length below">
-          <span data-testid="estimate-re">{formatValue(n.reynolds)}</span>
+        <Item label="Reynolds" title="U·L/ν with the reference scales (Scene tab)">
+          <span data-testid="estimate-re">{formatValue(r.reynolds)}</span>
         </Item>
+        {r.reynolds !== n.reynolds && (
+          <Item
+            label="Re (solver scales)"
+            title="U·L/ν with the solver's characteristic velocity and length (below)"
+          >
+            <span data-testid="estimate-re-solver">{formatValue(n.reynolds)}</span>
+          </Item>
+        )}
         <Item label="Mach (lattice)" title="Keep it below ≈ 0.17 for accuracy">
           <span className={n.mach > 0.17 ? 'text-amber-500' : undefined}>
             {formatValue(n.mach)}
           </span>
         </Item>
         {n.prandtl !== undefined && <Item label="Prandtl">{formatValue(n.prandtl)}</Item>}
-        {n.rayleigh !== undefined && <Item label="Rayleigh">{formatValue(n.rayleigh)}</Item>}
+        {r.rayleigh !== undefined && <Item label="Rayleigh">{formatValue(r.rayleigh)}</Item>}
         <Item label="τ" title="Relaxation time (viscous; thermal)">
           {formatValue(n.tau)}
           {n.tauThermal !== undefined && `; ${formatValue(n.tauThermal)}`}
         </Item>
-        <Item label="U, L" title="Characteristic velocity and length">
+        <Item label="Reference U, L" title="Reference velocity and length (Scene tab)">
+          {formatValue(r.velocity)} m/s, {formatLength(r.length)}
+        </Item>
+        <Item label="U, L (solver)" title="Characteristic velocity and length: they set Δt">
           {formatValue(n.velocity)} m/s, {formatLength(n.length)}
         </Item>
         <Item label="Δx, Δt">

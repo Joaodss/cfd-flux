@@ -552,6 +552,37 @@
       ],
       "type": "object"
     },
+    "ReferenceScales": {
+      "additionalProperties": false,
+      "description": "Reference scales of the dimensionless numbers reported for a scene, e.g. a cylinder's\ndiameter and the mean inlet velocity. Only reports use them: the solver still takes its time\nstep from the fastest prescribed velocity. A missing value falls back to the characteristic\nscale the solver derives (`domain::Dimensionless`).",
+      "properties": {
+        "length": {
+          "description": "Length L in metres. Default: the shorter side of the fluid's bounding box.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "temperatureDifference": {
+          "description": "Temperature difference ΔT in kelvin (Nusselt and Rayleigh numbers). Default: the spread\nof the prescribed temperatures.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "velocity": {
+          "description": "Velocity U in m/s. Default: the largest prescribed (or buoyancy) velocity.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "RunConfig": {
       "additionalProperties": false,
       "properties": {
@@ -800,6 +831,17 @@
         "$ref": "#/$defs/Probe"
       },
       "type": "array"
+    },
+    "reference": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ReferenceScales"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Scales of the reported dimensionless numbers (Re, Ra, C_D, C_L, St, Nu); they do not\nchange the simulation."
     },
     "run": {
       "$ref": "#/$defs/RunConfig"

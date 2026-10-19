@@ -116,6 +116,11 @@ export interface Scene {
   name: string
   physics: Physics
   probes?: Probe[]
+  /**
+   * Scales of the reported dimensionless numbers (Re, Ra, C_D, C_L, St, Nu); they do not
+   * change the simulation.
+   */
+  reference?: ReferenceScales | null
   run: RunConfig
   /**
    * Format version; must equal the version supported by the server.
@@ -255,6 +260,27 @@ export interface Probe {
    * @maxItems 2
    */
   position: [number, number]
+}
+/**
+ * Reference scales of the dimensionless numbers reported for a scene, e.g. a cylinder's
+ * diameter and the mean inlet velocity. Only reports use them: the solver still takes its time
+ * step from the fastest prescribed velocity. A missing value falls back to the characteristic
+ * scale the solver derives (`domain::Dimensionless`).
+ */
+export interface ReferenceScales {
+  /**
+   * Length L in metres. Default: the shorter side of the fluid's bounding box.
+   */
+  length?: number | null
+  /**
+   * Temperature difference ΔT in kelvin (Nusselt and Rayleigh numbers). Default: the spread
+   * of the prescribed temperatures.
+   */
+  temperatureDifference?: number | null
+  /**
+   * Velocity U in m/s. Default: the largest prescribed (or buoyancy) velocity.
+   */
+  velocity?: number | null
 }
 export interface RunConfig {
   backend: BackendPreference

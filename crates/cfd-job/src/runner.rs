@@ -458,6 +458,13 @@ fn initial_meta(
             mach: n.mach,
             prandtl: n.prandtl,
             rayleigh: n.rayleigh,
+            reference: ReferenceMeta {
+                length: n.reference.length,
+                velocity: n.reference.velocity,
+                temperature_difference: n.reference.temperature_difference,
+                reynolds: n.reference.reynolds,
+                rayleigh: n.reference.rayleigh,
+            },
         },
         warnings: domain
             .issues

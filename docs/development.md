@@ -90,7 +90,7 @@ cargo run --release -p cfd-cli -- verify --cases cavity --no-report
 # (CFD_REQUIRE_GPU / CFD_REQUIRE_CUDA make them fail instead).
 cargo run --release -p cfd-cli -- compare scenes/channel.json --out out/cmp --steps 2000
 cargo run --release -p cfd-cli -- compare scenes/channel.json --out out/cmp --force --backends cpu,cuda --tolerance 0  # must be bit-identical
-cargo run --release -p cfd-cli -- compare scenes/cylinder-re100.json --out out/cmp-cyl --end-time 12 --statistics --stats-from 6 --ref-length 0.1 --ref-velocity 1
+cargo run --release -p cfd-cli -- compare scenes/cylinder-re100.json --out out/cmp-cyl --end-time 12 --statistics --stats-from 6   # St, C_D with the scene's reference scales (D, Ū)
 cargo run --release -p cfd-cli -- compare --validation   # writes validation/compare/ (commit it), ~1 min
 
 # Server (Phase 3): API on http://127.0.0.1:7878, data (SQLite + results/) in ./data

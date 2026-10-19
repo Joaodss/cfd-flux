@@ -84,6 +84,19 @@ pub(crate) struct DimensionlessMeta {
     pub prandtl: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rayleigh: Option<f64>,
+    /// Scales of reported numbers (the scene's `reference`, defaults filled in).
+    pub reference: ReferenceMeta,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReferenceMeta {
+    pub length: f64,
+    pub velocity: f64,
+    pub temperature_difference: f64,
+    pub reynolds: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rayleigh: Option<f64>,
 }
 
 #[derive(Serialize)]

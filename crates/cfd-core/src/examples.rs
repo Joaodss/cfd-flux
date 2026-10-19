@@ -171,6 +171,7 @@ pub fn channel() -> Scene {
             pressure: 0.0,
         },
         physics: isothermal(),
+        reference: None,
         run: run(
             20.0,
             0.1,
@@ -258,6 +259,12 @@ pub fn cylinder_re100() -> Scene {
             pressure: 0.0,
         },
         physics: isothermal(),
+        // The benchmark's scales: the diameter and the mean inlet velocity (2/3 of the peak).
+        reference: Some(ReferenceScales {
+            length: Some(0.1),
+            velocity: Some(1.0),
+            temperature_difference: None,
+        }),
         run: run(
             8.0,
             0.01,
@@ -314,6 +321,7 @@ pub fn heated_cavity_ra1e5() -> Scene {
             buoyancy: Buoyancy::Boussinesq,
             free_surface: false,
         },
+        reference: None,
         run: run(200.0, 1.0, vec![OutputField::Velocity, OutputField::Temperature]),
         layers: c.layers(),
     }
@@ -361,6 +369,7 @@ pub fn dam_break() -> Scene {
             buoyancy: Buoyancy::None,
             free_surface: true,
         },
+        reference: None,
         run: run(
             1.0,
             0.01,

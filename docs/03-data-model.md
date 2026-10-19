@@ -37,6 +37,7 @@
   "probes": [ { "name": "Probe A", "position": [600, 150] } ],   // cell coordinates
   "initial": { "fluid": 1, "velocity": [0, 0], "temperature": 293.15, "pressure": 0 },
   "physics": { "gravity": [0, -9.81], "thermal": true, "buoyancy": "boussinesq", "freeSurface": false },
+  "reference": { "length": 0.1, "velocity": 1.0 },   // optional: scales of reported Re, Ra, C_D, C_L, St, Nu
   "run": {
     "method": "lbm",                 // more methods added in later phases
     "backend": "auto",               // auto | cpu | wgpu | cuda
@@ -48,6 +49,8 @@
   "layers": { "...": "see section 3" }
 }
 ```
+
+**Reference scales** (`reference`, optional; `length` m, `velocity` m/s, `temperatureDifference` K, each optional): the scales of the dimensionless numbers *reported* for the scene — Re and Ra in the estimate, the force coefficients, St and Nu in the viewer — e.g. a cylinder's diameter and the mean inlet velocity. They never change the simulation: the time step still follows the fastest prescribed velocity. A missing value is the solver's characteristic scale (the shorter side of the fluid's bounding box, the largest prescribed or buoyancy velocity, the spread of the prescribed temperatures).
 
 ## 3. Pixel layers
 
@@ -196,7 +199,8 @@ Implemented by `cfd-server` (Phase 3). All JSON is camelCase like the scene form
 - **Estimate:** `cells`, `fluidCells`, `steps`, `frames`, `thermal`, `memoryBytes`, `storedBytes`, `engine`
   (`null` when none can run it), `seconds` (once a job has measured that engine's throughput) and `numbers`:
   the characteristic `velocity` and `length`, `reynolds`, `mach`, `prandtl?`, `rayleigh?`, `tau`, `tauThermal?`,
-  `dx`, `dt` and `latticeVelocity`. A scene over a server limit or with no engine still gets its estimate.
+  `dx`, `dt`, `latticeVelocity` and `reference` (`length`, `velocity`, `temperatureDifference` with the defaults filled
+  in, and the `reynolds` and `rayleigh?` they give). A scene over a server limit or with no engine still gets its estimate.
 - **Options** (`options` of a submission; the same overrides as `cfd-cli run`): `backend` (`auto|cpu|wgpu|cuda`; default: the scene's `run.backend`), `latticeVelocity`, `endTime`, `outputInterval`, `sampleInterval` (s), `storeFrames` (default `true`; streaming works either way). Unknown options are a `400`.
 - **Job status:** `queued → running ⇄ paused → completed | failed | cancelled`; `failed` carries `reason`: `diverged` (the frames before stay valid), `error` (backend or I/O) or `interrupted` (the server stopped; jobs are not resumed).
 - **Errors:** `{ "error": { "code", "message", "issues"? } }` with stable codes: `request.json` (400, not JSON or not the expected shape), `scene.format` (400, not a scene), `scene.invalid` (422, with the validation `issues`), `limits.cells` / `limits.steps` (422), `engine.unavailable` / `engine.memory` (422), `request.tooLarge` (413: send layers as `zstd+base64`), `queue.full` (429), `notFound`, `conflict`, `internal`.
