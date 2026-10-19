@@ -16,6 +16,7 @@ Stop after the first two implementation steps if the session gets long, with eve
 | 4 | Properties panels (Element, Scene, Run) and the fluid/material library (`cfd_core::library`) | ✅ |
 | 5 | Save/load: `deflate+base64`, `.cfdscene` files, server save/open with `PUT`, draft autosave, PNG import, example gallery | ✅ |
 | 6 | Validation: issue `params`/`at` and a fuller estimate in Rust, debounced validation, issue list and canvas markers, estimate in the Run tab | ✅ |
+| 7 | Run: submit, job view at `#/jobs/{id}` (WebSocket progress, pause/resume/cancel), back to the editor, runs list | ✅ |
 
 ## Found along the way
 
@@ -74,6 +75,12 @@ Stop after the first two implementation steps if the session gets long, with eve
   Re ≈ 615 (1.5 m/s peak × 0.41 m / 1e-3 m²/s), not the benchmark's 100 (mean velocity × diameter).
 - Checked against a running server: the cylinder validates on CUDA ("Ready to run", Re and Ma in the status bar);
   an inlet cell inside the cylinder gives one error at that cell with `problem: noFluidNeighbour`.
+
+- **Runs (step 7):** checked end to end against a release `cfd-server`: the cylinder submitted from the editor
+  runs on CUDA, the job view follows it through Vite's WebSocket proxy (≈ 1,060–1,250 MLUPS on the 442 × 84
+  grid), pause/resume/cancel take effect, "Editor" returns to the same drawing, `#/jobs` lists the run and
+  reopens it. Progress messages carry no frame count, so the view shows frames once a run is over.
+- Component tests drive the job view with a stand-in `WebSocket` class (`vi.stubGlobal`) and `fetch` stubs.
 
 ## Decisions taken with the author
 

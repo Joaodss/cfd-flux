@@ -1,5 +1,14 @@
 // Top bar: document commands (new, open, save, examples, PNG import) and the document's name.
-import { ChevronDown, FilePlus, FolderOpen, ImageUp, LayoutGrid, Save } from 'lucide-react'
+import {
+  ChevronDown,
+  FilePlus,
+  FolderOpen,
+  History,
+  ImageUp,
+  LayoutGrid,
+  Play,
+  Save,
+} from 'lucide-react'
 import { useState } from 'react'
 import { Button } from '../components/ui/button.tsx'
 import {
@@ -13,6 +22,8 @@ import { newScene, openFile, save, saveAsFile, saveToServer } from './documents.
 import { ExampleGallery } from './ExampleGallery.tsx'
 import { ImportImageDialog } from './ImportImageDialog.tsx'
 import { IssuesButton } from './IssuesButton.tsx'
+import { navigate } from './route.ts'
+import { runScene } from './run.ts'
 import { ServerScenesDialog } from './ServerScenesDialog.tsx'
 
 function sourceLabel(s: ReturnType<typeof useEditor.getState>['source']): string {
@@ -26,6 +37,8 @@ export function Header() {
   const name = useEditor((s) => s.table.name)
   const source = useEditor((s) => s.source)
   const dirty = useEditor(isDirty)
+  const runnable = useEditor((s) => s.validation.status === 'done' && s.validation.result.ok)
+  const [running, setRunning] = useState(false)
   const [dialog, setDialog] = useState<'server' | 'gallery' | 'image' | null>(null)
   const close = (open: boolean) => !open && setDialog(null)
 
@@ -86,6 +99,31 @@ export function Header() {
       </span>
       <span className="truncate text-xs text-muted-foreground">— {sourceLabel(source)}</span>
       <IssuesButton />
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => navigate({ name: 'jobs' })}
+        title="Earlier runs"
+      >
+        <History /> Runs
+      </Button>
+      <Button
+        size="sm"
+        data-testid="run"
+        disabled={!runnable || running}
+        title={
+          runnable
+            ? 'Run the simulation on the server'
+            : 'Fix the issues first (or start the server)'
+        }
+        onClick={async () => {
+          setRunning(true)
+          await runScene()
+          setRunning(false)
+        }}
+      >
+        <Play /> Run
+      </Button>
       <ServerScenesDialog open={dialog === 'server'} onOpenChange={close} />
       <ExampleGallery open={dialog === 'gallery'} onOpenChange={close} />
       <ImportImageDialog open={dialog === 'image'} onOpenChange={close} />

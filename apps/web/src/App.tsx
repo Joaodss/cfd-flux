@@ -3,6 +3,9 @@ import { useEffect, useState } from 'react'
 import { discardDraft, pendingDraft, startAutosave } from './app/autosave.ts'
 import { openDroppedFile, openFile, save, saveAsFile } from './app/documents.ts'
 import { Header } from './app/Header.tsx'
+import { JobsList } from './app/JobsList.tsx'
+import { JobView } from './app/JobView.tsx'
+import { parseRoute, useRoute } from './app/route.ts'
 import { ToolOptions } from './app/ToolOptions.tsx'
 import { Toolbar } from './app/Toolbar.tsx'
 import { startValidation } from './app/validation.ts'
@@ -30,6 +33,8 @@ function useShortcuts() {
         void openFile()
         return
       }
+      // The rest belongs to the editor, not the run views.
+      if (parseRoute(window.location.hash).name !== 'editor') return
       const t = e.target
       if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement) return
       if (t instanceof HTMLSelectElement) return
@@ -148,6 +153,10 @@ function NoticeBar() {
 export default function App() {
   useShortcuts()
   useDocumentGuards()
+  const route = useRoute()
+  // The editor's document stays in the store while a run is shown: "Editor" returns to it as it was.
+  if (route.name === 'job') return <JobView id={route.id} />
+  if (route.name === 'jobs') return <JobsList />
   return (
     <div className="flex h-full flex-col">
       <Header />
