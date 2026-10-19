@@ -18,6 +18,7 @@ use serde_json::value::RawValue;
 use crate::config::{Limits, StreamDefaults};
 use crate::error::{ApiError, ApiJson, IssueDto};
 use crate::jobs::{JobStatus, JobView};
+use crate::stream::StreamFormat;
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -502,11 +503,19 @@ pub async fn resume(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FrameQuery {
     dtype: Option<String>,
+    /// Field names, comma-separated (default: every field of the frame).
+    fields: Option<String>,
+    /// Longest side in cells: box-downsampled like the stream (default: full resolution).
+    max_size: Option<u32>,
 }
 
-/// `GET /api/simulations/{id}/frames/{n}?dtype=f32|f16`: one stored frame (LFFR).
+/// `GET /api/simulations/{id}/frames/{n}?dtype=f32|f16&fields=…&maxSize=…`: one stored frame
+/// (LFFR). With `fields` and `maxSize` it is in a stream format: the named fields,
+/// box-downsampled by the stream's integer factor with the CPU filter the GPU samples are tested
+/// against, so it equals the stream frame of the same index (the viewer mixes both).
 pub async fn frame(
     State(state): State<AppState>,
     Path((id, n)): Path<(String, u32)>,
@@ -521,17 +530,9 @@ pub async fn frame(
     let bytes = tokio::fs::read(dir.frame_path(n))
         .await
         .map_err(|_| ApiError::NotFound(format!("job {id} has no stored frame {n}")))?;
-    let bytes = match q.dtype.as_deref() {
-        None | Some("f32") => bytes,
-        Some("f16") => tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
-            let mut frame = Frame::decode(&bytes)?;
-            for f in &mut frame.fields {
-                f.desc.dtype = Dtype::F16;
-            }
-            Ok(frame.encode()?)
-        })
-        .await
-        .map_err(anyhow::Error::from)??,
+    let dtype = match q.dtype.as_deref() {
+        None | Some("f32") => Dtype::F32,
+        Some("f16") => Dtype::F16,
         Some(other) => {
             return Err(ApiError::BadRequest {
                 code: "request.dtype",
@@ -539,7 +540,39 @@ pub async fn frame(
             })
         }
     };
+    if dtype == Dtype::F32 && q.fields.is_none() && q.max_size.is_none() {
+        return Ok(([(CONTENT_TYPE, "application/octet-stream")], bytes));
+    }
+    let format = StreamFormat {
+        fields: q.fields.as_deref().map(crate::stream::field_list),
+        max_size: q.max_size.unwrap_or(u32::MAX).clamp(16, u32::MAX),
+    };
+    let bytes = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
+        let frame = Frame::decode(&bytes)?;
+        Ok(convert_frame(frame, &format, dtype).encode()?)
+    })
+    .await
+    .map_err(anyhow::Error::from)??;
     Ok(([(CONTENT_TYPE, "application/octet-stream")], bytes))
+}
+
+/// A stored frame in a stream format: its fields in frame order, downsampled, in `dtype`.
+fn convert_frame(mut frame: Frame, format: &StreamFormat, dtype: Dtype) -> Frame {
+    let (w, h) = (frame.width as usize, frame.height as usize);
+    let k = format.factor(frame.width, frame.height) as usize;
+    frame.fields.retain(|f| {
+        format
+            .fields
+            .as_ref()
+            .is_none_or(|list| list.iter().any(|n| *n == f.desc.name))
+    });
+    for f in &mut frame.fields {
+        f.values = cfd_core::sample::downsample(&f.values, f.desc.components as usize, w, h, k);
+        f.desc.dtype = dtype;
+    }
+    frame.width = w.div_ceil(k) as u32;
+    frame.height = h.div_ceil(k) as u32;
+    frame
 }
 
 /// `GET /api/simulations/{id}/files/{name}`: `scene.json`, `meta.json` or a CSV series.

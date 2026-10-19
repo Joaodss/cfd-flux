@@ -7,6 +7,7 @@ import type { FrameHeader } from '../frames/lffr.ts'
 import { quantitiesOf, type Quantity } from './quantities.ts'
 import { accumulate, rangeFor, type RangeMode, type Seen } from './ranges.ts'
 import type { FrameStats } from './stats.ts'
+import { INITIAL_TIMELINE, type Timeline } from './timeline.ts'
 
 export interface ViewerState {
   /** The run's grid (cells), once its scene is loaded. */
@@ -23,8 +24,10 @@ export interface ViewerState {
   /** What the frames so far span (seeded from the stream's `hello`). */
   seen: Seen
   frame: { header: FrameHeader; stats: FrameStats } | null
-  /** Frames received (live) since the view opened. */
+  /** Frames shown since the view opened. */
   received: number
+  /** Play/pause/scrub state (the Viewer drives it). */
+  timeline: Timeline
   view: View
   viewport: { width: number; height: number }
   /** The cell under the pointer and the shown quantity's value there. */
@@ -44,6 +47,7 @@ export interface ViewerState {
   zoomStep(direction: 1 | -1, at?: [number, number]): void
   fit(): void
   setCursor(cursor: ViewerState['cursor']): void
+  setTimeline(patch: Partial<Timeline>): void
 }
 
 const INITIAL = {
@@ -57,6 +61,7 @@ const INITIAL = {
   seen: {},
   frame: null,
   received: 0,
+  timeline: INITIAL_TIMELINE,
   view: { zoom: 1, offsetX: 0, offsetY: 0 },
   viewport: { width: 0, height: 0 },
   cursor: null,
@@ -126,6 +131,7 @@ export const useViewer = create<ViewerState>()((set, get) => ({
     if (grid) set({ view: fitView(grid.width, grid.height, viewport.width, viewport.height) })
   },
   setCursor: (cursor) => set({ cursor }),
+  setTimeline: (patch) => set((s) => ({ timeline: { ...s.timeline, ...patch } })),
 }))
 
 function sameFields(quantities: Quantity[], header: FrameHeader): boolean {

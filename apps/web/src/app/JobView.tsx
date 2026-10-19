@@ -8,6 +8,7 @@ import type { Scene } from '../generated/scene.ts'
 import { seedFromHello } from '../viewer/ranges.ts'
 import { useViewer } from '../viewer/store.ts'
 import type { Viewer } from '../viewer/Viewer.ts'
+import { TimelineBar } from '../viewer/TimelineBar.tsx'
 import { ViewerCanvas } from '../viewer/ViewerCanvas.tsx'
 import { Legend, ViewerToolbar } from '../viewer/ViewerControls.tsx'
 import { INITIAL, reduce } from './jobState.ts'
@@ -92,10 +93,19 @@ export function JobView({ id }: { id: string }) {
   useEffect(() => {
     if (viewer && scene) {
       viewer
-        .setScene(scene, VIEWER_MAX_SIZE)
+        .setScene(scene, id, VIEWER_MAX_SIZE)
         .catch((e: Error) => setError(`The run's scene cannot be shown: ${e.message}`))
     }
-  }, [viewer, scene])
+  }, [viewer, scene, id])
+
+  // The timeline follows the run while it is active; once it is over, its frames are known.
+  const jobStatus = state.job?.status
+  const jobFrames = state.job?.frames
+  useEffect(() => {
+    if (!viewer || !jobStatus) return
+    const active = ACTIVE.includes(jobStatus)
+    viewer.setRun(active, active ? null : (jobFrames ?? null))
+  }, [viewer, jobStatus, jobFrames])
 
   const { job, progress, connection } = state
   const status = job?.status
@@ -174,6 +184,10 @@ export function JobView({ id }: { id: string }) {
         <section className="flex min-w-0 flex-1 flex-col" data-testid="viewer">
           <ViewerToolbar />
           <ViewerCanvas onReady={onViewer} />
+          <TimelineBar
+            viewer={viewer}
+            running={state.job ? ACTIVE.includes(state.job.status) : true}
+          />
           <Legend />
         </section>
         <aside className="flex w-80 shrink-0 flex-col gap-4 overflow-y-auto border-l border-border p-4">

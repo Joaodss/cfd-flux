@@ -244,6 +244,14 @@ pub struct StreamQuery {
     max_size: Option<u32>,
 }
 
+/// `velocity, vorticity` → the names (blanks dropped).
+pub fn field_list(list: &str) -> Vec<String> {
+    list.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// The first message of every stream.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -269,12 +277,7 @@ pub async fn stream(
     let view = state.inner.jobs.view(&id).await?;
     let job = state.inner.jobs.get(&id);
     let format = StreamFormat {
-        fields: q.fields.map(|f| {
-            f.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        }),
+        fields: q.fields.as_deref().map(field_list),
         max_size: q
             .max_size
             .unwrap_or(state.inner.config.stream.stream_max_size)

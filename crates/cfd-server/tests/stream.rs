@@ -264,6 +264,61 @@ async fn unknown_and_finished_jobs() {
     s.stop().await;
 }
 
+/// Stored frames fetched in a stream format (`fields`, `maxSize`) equal the stream's frames of
+/// the same index byte for byte (on the CPU engine, where both come from the same f32 values), so
+/// the viewer can mix live and stored frames (Phase 5 design proposal §3.1).
+#[tokio::test]
+async fn stored_frames_in_a_stream_format_equal_stream_frames() {
+    let s = TestServer::start("ws-stored-format").await;
+    let id = submit(&s, &examples::channel(), channel_options(0.2, 0.02)).await;
+    // 400 × 100 cells at most 128 on a side: factor 4, 100 × 25 blocks.
+    let mut ws = connect(&s, &id, "?maxSize=128").await;
+    let mut streamed: Vec<Vec<u8>> = Vec::new();
+    loop {
+        let m = tokio::time::timeout(Duration::from_secs(60), ws.next())
+            .await
+            .expect("a message within 60 s");
+        match m {
+            None | Some(Ok(Message::Close(_))) => break,
+            Some(Ok(Message::Binary(b))) => streamed.push(b.to_vec()),
+            Some(Ok(_)) => {}
+            Some(Err(e)) => panic!("websocket error: {e}"),
+        }
+    }
+    assert!(!streamed.is_empty());
+    let get = |query: String| {
+        let url = s.url(&query);
+        async move {
+            let r = client().get(url).send().await.unwrap();
+            assert_eq!(r.status(), 200);
+            r.bytes().await.unwrap().to_vec()
+        }
+    };
+    for bytes in &streamed {
+        let h = Frame::decode_header(bytes).unwrap();
+        assert_eq!((h.width, h.height), (100, 25));
+        let stored = get(format!(
+            "/api/simulations/{id}/frames/{}?dtype=f16&maxSize=128",
+            h.frame_index
+        ))
+        .await;
+        assert!(stored == *bytes, "frame {} differs", h.frame_index);
+    }
+    // A subset of the fields, in frame order whatever the order asked for, full size, f32.
+    let f = Frame::decode(
+        &get(format!(
+            "/api/simulations/{id}/frames/3?fields=vorticity,velocity"
+        ))
+        .await,
+    )
+    .unwrap();
+    let names: Vec<&str> = f.fields.iter().map(|f| f.desc.name.as_str()).collect();
+    assert_eq!(names, ["velocity", "vorticity"]);
+    assert_eq!((f.width, f.height), (400, 100));
+    assert!(f.fields.iter().all(|f| f.desc.dtype == Dtype::F32));
+    s.stop().await;
+}
+
 /// Whether an engine can run here; GPU engines are skipped (with a message) unless
 /// `CFD_REQUIRE_GPU` / `CFD_REQUIRE_CUDA` asks for them.
 fn available(kind: EngineKind) -> bool {

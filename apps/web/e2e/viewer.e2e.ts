@@ -1,0 +1,78 @@
+// Phase 5 viewer: a short cylinder run through the job view — live frames, the solid mask, the
+// colour map, and the timeline over stored frames (scrub, step, play). Against a real cfd-server.
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { expect, test, type Page } from '@playwright/test'
+
+const scene = JSON.parse(
+  readFileSync(
+    fileURLToPath(new URL('../../../scenes/cylinder-re100.json', import.meta.url)),
+    'utf8',
+  ),
+)
+
+type Pixel = [number, number, number, number]
+
+/** The canvas pixel at the centre of a cell (through the development-only test hook). */
+function pixel(page: Page, x: number, y: number): Promise<Pixel> {
+  return page.evaluate(
+    ([x, y]) =>
+      (
+        globalThis as unknown as { __viewer: { pixelAtCell(x: number, y: number): Pixel } }
+      ).__viewer.pixelAtCell(x, y),
+    [x, y],
+  )
+}
+
+const SOLID: Pixel = [71, 85, 105, 255] // the editor's solid colour
+const CYLINDER: [number, number] = [41, 41] // centre of the cylinder's disk
+const WAKE: [number, number] = [70, 45] // just behind it
+
+test('a run is shown live, then scrubbed and played back from stored frames', async ({
+  page,
+  request,
+}) => {
+  // 0.5 s of simulated time, a frame every 0.02 s: the wake starts to form.
+  const r = await request.post('/api/simulations', {
+    data: { scene, options: { endTime: 0.5, outputInterval: 0.02 } },
+  })
+  expect(r.status()).toBe(201)
+  const { id } = (await r.json()) as { id: string }
+
+  await page.goto(`/#/jobs/${id}`)
+  await expect(page.getByTestId('job-status')).toHaveText('completed', { timeout: 60_000 })
+  // Frames arrived (live, or the last stored one once the run is over).
+  await expect(page.getByTestId('viewer-frame')).toHaveText(/frame \d+/)
+  const position = page.getByTestId('timeline-position')
+  await expect(position).toHaveText(/^(\d+) \/ \1 /) // at the last frame
+  const last = Number((await position.textContent())!.split(' ')[0])
+  expect(last).toBeGreaterThanOrEqual(20)
+
+  // The cylinder is drawn as a solid; the wake is coloured by the field.
+  expect(await pixel(page, ...CYLINDER)).toEqual(SOLID)
+  const wakeLast = await pixel(page, ...WAKE)
+  expect(wakeLast).not.toEqual(SOLID)
+
+  // Scrub to the first frame (fetched from the server): a fluid at rest looks different.
+  await page.getByTestId('timeline-slider').fill('0')
+  await expect(position).toHaveText(new RegExp(`^0 / ${last} `))
+  await expect(page.getByTestId('viewer-frame')).toHaveText(/frame 0 /)
+  expect(await pixel(page, ...WAKE)).not.toEqual(wakeLast)
+  expect(await pixel(page, ...CYLINDER)).toEqual(SOLID)
+
+  // Step with the arrow keys.
+  await page.keyboard.press('ArrowRight')
+  await expect(position).toHaveText(new RegExp(`^1 / ${last} `))
+
+  // Play to the end: playback stops at the last frame.
+  await page.getByTestId('timeline-play').click()
+  await expect(position).toHaveText(new RegExp(`^${last} / ${last} `), { timeout: 30_000 })
+  await expect(page.getByTestId('timeline-play')).toBeVisible()
+  expect(await pixel(page, ...WAKE)).toEqual(wakeLast)
+
+  // Another field: vorticity, symmetric range around zero.
+  await page.getByTestId('viewer-quantity').selectOption('vorticity')
+  await expect(page.getByTestId('viewer-range-mode')).toHaveValue('symmetric')
+  const ticks = (await page.getByTestId('viewer-legend').innerText()).split('\n')
+  expect(Number(ticks[0])).toBeCloseTo(-Number(ticks[4]))
+})
