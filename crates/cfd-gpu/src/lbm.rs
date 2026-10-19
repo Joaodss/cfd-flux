@@ -479,13 +479,16 @@ impl WgpuLbm {
 
     /// Checks the status word of a finished batch.
     fn retire(&mut self, batch: Batch) -> Result<(), SolverError> {
-        batch.status.wait(&self.ctx);
+        let waited = batch.status.wait(&self.ctx);
         let mut status = Vec::new();
         match batch.status.read(&mut status) {
             Some(buffer) => self.status_pool.give(buffer),
             None => {
                 self.device_error()?;
-                return Err(SolverError::Backend("status readback failed".into()));
+                let reason = waited.err().unwrap_or_else(|| "mapping failed".into());
+                return Err(SolverError::Backend(format!(
+                    "status readback failed: {reason}"
+                )));
             }
         }
         if status[0] != 0.0 {
@@ -554,10 +557,13 @@ impl WgpuLbm {
         enc.copy_buffer_to_buffer(src, 0, &staging, 0, size);
         let index = self.ctx.queue.submit([enc.finish()]);
         let mapping = Mapping::start(staging, index);
-        mapping.wait(&self.ctx);
+        // A failed wait leaves the mapping unread (`read` gives `None`).
+        let _ = mapping.wait(&self.ctx);
         let mut out = Vec::new();
-        if let Some(buffer) = mapping.read(&mut out) {
-            pool.give(buffer);
+        match mapping.read(&mut out) {
+            Some(buffer) => pool.give(buffer),
+            // Device lost: NaN values rather than a panic; `step` reports the error.
+            None => out = vec![f32::NAN; size as usize / 4],
         }
         out.truncate(size as usize / 4);
         out
