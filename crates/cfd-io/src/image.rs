@@ -12,6 +12,12 @@ pub enum Colormap {
     Inferno,
     /// Diverging (Moreland's cool-warm), white-ish at the centre: vorticity.
     Coolwarm,
+    /// Sequential (matplotlib's magma).
+    Magma,
+    /// Sequential, black to white.
+    Greys,
+    /// Diverging (ColorBrewer's RdBu, reversed): blue, white, red.
+    BlueRed,
 }
 
 const VIRIDIS: [[u8; 3]; 9] = [
@@ -50,23 +56,80 @@ const COOLWARM: [[u8; 3]; 9] = [
     [180, 4, 38],
 ];
 
+const MAGMA: [[u8; 3]; 9] = [
+    [0, 0, 4],
+    [28, 16, 68],
+    [79, 18, 123],
+    [129, 37, 129],
+    [181, 54, 122],
+    [229, 80, 100],
+    [251, 135, 97],
+    [254, 194, 135],
+    [252, 253, 191],
+];
+
+const GREYS: [[u8; 3]; 9] = [
+    [0, 0, 0],
+    [32, 32, 32],
+    [64, 64, 64],
+    [96, 96, 96],
+    [128, 128, 128],
+    [159, 159, 159],
+    [191, 191, 191],
+    [223, 223, 223],
+    [255, 255, 255],
+];
+
+const BLUE_RED: [[u8; 3]; 9] = [
+    [33, 102, 172],
+    [67, 147, 195],
+    [146, 197, 222],
+    [209, 229, 240],
+    [247, 247, 247],
+    [253, 219, 199],
+    [244, 165, 130],
+    [214, 96, 77],
+    [178, 24, 43],
+];
+
 /// Colour of cells outside the fluid (solids, inlets, outlets).
 pub const MASK_COLOUR: [u8; 3] = [96, 96, 96];
 
 impl Colormap {
+    pub const ALL: [Colormap; 6] = [
+        Colormap::Viridis,
+        Colormap::Inferno,
+        Colormap::Magma,
+        Colormap::Greys,
+        Colormap::Coolwarm,
+        Colormap::BlueRed,
+    ];
+
     pub fn name(self) -> &'static str {
         match self {
             Colormap::Viridis => "viridis",
             Colormap::Inferno => "inferno",
             Colormap::Coolwarm => "coolwarm",
+            Colormap::Magma => "magma",
+            Colormap::Greys => "greys",
+            Colormap::BlueRed => "blueRed",
         }
     }
 
-    fn samples(self) -> &'static [[u8; 3]; 9] {
+    /// Diverging maps have a neutral centre, for ranges symmetric around zero.
+    pub fn diverging(self) -> bool {
+        matches!(self, Colormap::Coolwarm | Colormap::BlueRed)
+    }
+
+    /// The 9 samples, evenly spaced from 0 to 1, between which colours are interpolated.
+    pub fn samples(self) -> &'static [[u8; 3]; 9] {
         match self {
             Colormap::Viridis => &VIRIDIS,
             Colormap::Inferno => &INFERNO,
             Colormap::Coolwarm => &COOLWARM,
+            Colormap::Magma => &MAGMA,
+            Colormap::Greys => &GREYS,
+            Colormap::BlueRed => &BLUE_RED,
         }
     }
 
@@ -82,6 +145,20 @@ impl Colormap {
             (a + (b - a) * f).round() as u8
         })
     }
+}
+
+/// Every colour map as JSON, for the web viewer (`apps/web/src/generated/colormaps.json`), so
+/// CLI images and the viewer use the same colours: `[{ name, diverging, samples }]`.
+pub fn colormaps_json() -> String {
+    let maps: Vec<serde_json::Value> = Colormap::ALL
+        .iter()
+        .map(|c| {
+            serde_json::json!({ "name": c.name(), "diverging": c.diverging(), "samples": c.samples() })
+        })
+        .collect();
+    serde_json::to_string_pretty(&maps).expect("colour maps serialize")
+        + "
+"
 }
 
 /// An 8-bit RGB image, rows top-down.

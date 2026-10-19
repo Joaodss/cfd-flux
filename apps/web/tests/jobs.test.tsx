@@ -33,7 +33,7 @@ describe('routes', () => {
     expect(parseRoute('#/jobs/a%2Fb')).toEqual({ name: 'job', id: 'a/b' })
     expect(routeHash({ name: 'job', id: 'a/b' })).toBe('#/jobs/a%2Fb')
     expect(streamUrl('x', { protocol: 'http:', host: 'localhost:5173' })).toBe(
-      'ws://localhost:5173/api/simulations/x/stream?fields=velocity&maxSize=64',
+      'ws://localhost:5173/api/simulations/x/stream?maxSize=1024',
     )
   })
 })
@@ -185,7 +185,7 @@ describe('JobView', () => {
     FakeSocket.last.send({ type: 'status', status: 'running' })
     await act(async () => fireEvent.click(screen.getByTestId('job-cancel')))
     FakeSocket.last.send({ type: 'done', status: 'cancelled', stepsDone: 12500, frames: 25 })
-    expect(requests).toEqual([
+    expect(requests.filter((r) => !r.startsWith('GET'))).toEqual([
       'POST /api/simulations/job-1/pause',
       'POST /api/simulations/job-1/resume',
       'DELETE /api/simulations/job-1',

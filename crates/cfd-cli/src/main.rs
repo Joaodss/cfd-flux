@@ -35,6 +35,12 @@ enum Command {
         /// Output file; prints to stdout when omitted.
         out: Option<PathBuf>,
     },
+    /// Print (or write) the colour maps as JSON (the web viewer's
+    /// `apps/web/src/generated/colormaps.json`).
+    Colormaps {
+        /// Output file; prints to stdout when omitted.
+        out: Option<PathBuf>,
+    },
     /// Write built-in example scenes as JSON.
     Example {
         /// Example name (see `--list`).
@@ -92,6 +98,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             emit(out.as_deref(), &json)?;
         }
         Command::Library { out } => emit(out.as_deref(), &cfd_core::library::to_json_pretty())?,
+        Command::Colormaps { out } => emit(out.as_deref(), &cfd_io::image::colormaps_json())?,
         Command::Example {
             name,
             all,

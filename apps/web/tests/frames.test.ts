@@ -11,7 +11,7 @@ import {
   unshuffle,
   type FrameHeader,
 } from '../src/frames/lffr.ts'
-import { handle, transferables, type Response } from '../src/frames/protocol.ts'
+import { createHandler, transferables, type Response } from '../src/frames/protocol.ts'
 
 const fixture = (name: string) =>
   readFileSync(fileURLToPath(new URL(`./fixtures/frames/${name}`, import.meta.url)))
@@ -137,10 +137,11 @@ describe('FrameDecoder (worker protocol)', () => {
   /** A stand-in worker that runs the real handler in this thread, asynchronously. */
   function fakeWorker(fetchImpl: typeof fetch): WorkerLike {
     let listener: ((e: MessageEvent<Response>) => void) | null = null
+    const handle = createHandler(fetchImpl)
     return {
       postMessage(req) {
-        void handle(req, fetchImpl).then(({ response }) =>
-          listener?.({ data: response } as MessageEvent<Response>),
+        void handle(req).then(
+          (r) => r && listener?.({ data: r.response } as MessageEvent<Response>),
         )
       },
       addEventListener(_type, l) {
@@ -166,8 +167,9 @@ describe('FrameDecoder (worker protocol)', () => {
           )) as typeof fetch
     const d = new FrameDecoder(fakeWorker(fetchImpl))
     const [a, b] = await Promise.all([d.decode(bytes()), d.fetch('/frames/0')])
-    expect(a.header).toEqual(b.header)
-    expect(a.header.frameIndex).toBe(3)
+    expect(a.frame.header).toEqual(b.frame.header)
+    expect(a.frame.header.frameIndex).toBe(3)
+    expect(Object.keys(a.stats)).toEqual(['velocity', 'velocity.x', 'velocity.y', 'pressure'])
     const err = await d.fetch('/frames/9').catch((e: DecodeError) => e)
     expect(err).toBeInstanceOf(DecodeError)
     expect([(err as DecodeError).message, (err as DecodeError).status]).toEqual(['no frame 9', 404])

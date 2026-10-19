@@ -1,7 +1,6 @@
 // A promise API over the decode worker: each request gets an id, and the worker's answer resolves
 // the matching promise (like a TaskCompletionSource per request in .NET).
-import type { DecodedFrame } from './lffr.ts'
-import type { Request, Response } from './protocol.ts'
+import type { Decoded, Request, Response } from './protocol.ts'
 
 /** What the decoder needs of a Worker (a stand-in in tests). */
 export interface WorkerLike {
@@ -25,7 +24,7 @@ export class FrameDecoder {
   private next = 1
   private readonly pending = new Map<
     number,
-    { resolve: (f: DecodedFrame) => void; reject: (e: Error) => void }
+    { resolve: (d: Decoded) => void; reject: (e: Error) => void }
   >()
 
   constructor(worker?: WorkerLike) {
@@ -41,18 +40,23 @@ export class FrameDecoder {
       const p = this.pending.get(r.id)
       if (!p) return
       this.pending.delete(r.id)
-      if (r.ok) p.resolve(r.frame)
+      if (r.ok) p.resolve({ frame: r.frame, stats: r.stats })
       else p.reject(new DecodeError(r.error, r.status))
     })
   }
 
+  /** Sets the fluid fraction per block used by the statistics of the frames that follow. */
+  setMask(fraction: Float32Array | null): void {
+    this.worker.postMessage({ id: 0, kind: 'mask', fraction })
+  }
+
   /** Decodes a compressed frame. The buffer is *moved* to the worker: it is empty afterwards. */
-  decode(buffer: ArrayBuffer): Promise<DecodedFrame> {
+  decode(buffer: ArrayBuffer): Promise<Decoded> {
     return this.request({ id: 0, kind: 'decode', buffer }, [buffer])
   }
 
   /** Fetches and decodes a stored frame in the worker (the bytes never reach this thread). */
-  fetch(url: string): Promise<DecodedFrame> {
+  fetch(url: string): Promise<Decoded> {
     return this.request({ id: 0, kind: 'fetch', url }, [])
   }
 
@@ -67,7 +71,7 @@ export class FrameDecoder {
     this.pending.clear()
   }
 
-  private request(req: Request, transfer: Transferable[]): Promise<DecodedFrame> {
+  private request(req: Request, transfer: Transferable[]): Promise<Decoded> {
     const id = this.next++
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject })

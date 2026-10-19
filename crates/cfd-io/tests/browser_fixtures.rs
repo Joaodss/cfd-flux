@@ -130,3 +130,16 @@ fn browser_fixtures_are_up_to_date() {
         "frames.json is out of date: run `UPDATE_FIXTURES=1 cargo test -p cfd-io --test browser_fixtures`"
     );
 }
+
+#[test]
+fn committed_colormaps_are_up_to_date() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/web/src/generated/colormaps.json");
+    let committed = std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .replace("\r\n", "\n");
+    assert!(
+        cfd_io::image::colormaps_json() == committed,
+        "apps/web/src/generated/colormaps.json is outdated; run `cargo run -p cfd-cli -- colormaps apps/web/src/generated/colormaps.json`"
+    );
+}
