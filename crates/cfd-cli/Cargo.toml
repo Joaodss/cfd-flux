@@ -1,6 +1,6 @@
 [package]
 name = "cfd-cli"
-description = "Command-line tool for live-fluids: scenes, headless runs, benchmarks and validation"
+description = "Command-line tool for cfd-flux: scenes, headless runs, benchmarks and validation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

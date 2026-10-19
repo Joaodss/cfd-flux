@@ -732,37 +732,50 @@ fn check_support(scene: &Scene, cell_type: &[CellType], r: &mut Report) {
             ElementKind::Wall {
                 velocity: WallVelocity::Slip,
                 ..
-            } => r.error(
-                "support.slip",
-                format!("element {}: slip walls are not supported yet", el.id),
-            ),
-            ElementKind::Inlet { fluid, .. } if *fluid != scene.initial.fluid => r.warning(
-                "support.inletFluid",
-                format!(
-                    "element {}: inlet fluid {fluid} differs from the initial fluid; the initial fluid is used",
-                    el.id
-                ),
-            ),
+            } => {
+                r.error(
+                    "support.slip",
+                    format!("element {}: slip walls are not supported yet", el.id),
+                )
+                .param("element", el.id);
+            }
+            ElementKind::Inlet { fluid, .. } if *fluid != scene.initial.fluid => {
+                r.warning(
+                    "support.inletFluid",
+                    format!(
+                        "element {}: inlet fluid {fluid} differs from the initial fluid; the initial fluid is used",
+                        el.id
+                    ),
+                )
+                .param("element", el.id)
+                .param("fluid", *fluid);
+            }
             _ => {}
         }
         if !scene.physics.thermal {
             continue;
         }
         match (thermal_bc(&el.kind), &el.kind) {
-            (Some(ThermalBc::Convective { .. }), _) => r.error(
-                "support.convective",
-                format!(
-                    "element {}: convective thermal boundaries are not supported yet",
-                    el.id
-                ),
-            ),
-            (Some(ThermalBc::Flux { .. }), ElementKind::Inlet { .. }) => r.error(
-                "support.inletFlux",
-                format!(
-                    "element {}: inlets accept a fixed temperature or adiabatic",
-                    el.id
-                ),
-            ),
+            (Some(ThermalBc::Convective { .. }), _) => {
+                r.error(
+                    "support.convective",
+                    format!(
+                        "element {}: convective thermal boundaries are not supported yet",
+                        el.id
+                    ),
+                )
+                .param("element", el.id);
+            }
+            (Some(ThermalBc::Flux { .. }), ElementKind::Inlet { .. }) => {
+                r.error(
+                    "support.inletFlux",
+                    format!(
+                        "element {}: inlets accept a fixed temperature or adiabatic",
+                        el.id
+                    ),
+                )
+                .param("element", el.id);
+            }
             _ => {}
         }
     }

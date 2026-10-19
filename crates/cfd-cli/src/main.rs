@@ -16,7 +16,7 @@ use cfd_core::Scene;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "cfd-cli", version, about = "live-fluids command-line tool")]
+#[command(name = "cfd-cli", version, about = "cfd-flux command-line tool")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -26,6 +26,12 @@ struct Cli {
 enum Command {
     /// Print (or write) the JSON Schema of the scene format.
     Schema {
+        /// Output file; prints to stdout when omitted.
+        out: Option<PathBuf>,
+    },
+    /// Print (or write) the preset fluids and solid materials as JSON (the web editor's
+    /// `apps/web/src/generated/library.json`).
+    Library {
         /// Output file; prints to stdout when omitted.
         out: Option<PathBuf>,
     },
@@ -85,6 +91,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             let json = serde_json::to_string_pretty(&Scene::json_schema())? + "\n";
             emit(out.as_deref(), &json)?;
         }
+        Command::Library { out } => emit(out.as_deref(), &cfd_core::library::to_json_pretty())?,
         Command::Example {
             name,
             all,

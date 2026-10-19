@@ -63,6 +63,42 @@ fn committed_schema_is_up_to_date() {
 }
 
 #[test]
+fn committed_library_is_up_to_date() {
+    let committed = read_normalized("apps/web/src/generated/library.json");
+    assert!(
+        cfd_core::library::to_json_pretty() == committed,
+        "apps/web/src/generated/library.json is outdated; run `cargo run -p cfd-cli -- library apps/web/src/generated/library.json`"
+    );
+}
+
+/// Contract with the web editor (Phase 4 design proposal §10): a scene its TypeScript code wrote,
+/// with `deflate+base64` layers (`apps/web/tests/files.test.ts` keeps the fixture).
+#[test]
+fn editor_files_decode_in_rust() {
+    let text = read_normalized("apps/web/tests/fixtures/cylinder-re100.cfdscene");
+    let scene = Scene::from_json(&text).unwrap();
+    assert_eq!(
+        scene.layers.cell_type.encoding,
+        LayerEncoding::DeflateBase64
+    );
+    assert!(validate(&scene).is_ok(), "{:#?}", validate(&scene).issues);
+    let example = examples::cylinder_re100();
+    let n = example.grid.cell_count();
+    assert_eq!(
+        scene.layers.cell_type.decode_u8(n).unwrap(),
+        example.layers.cell_type.decode_u8(n).unwrap()
+    );
+    assert_eq!(
+        scene.layers.element_id.decode_u16(n).unwrap(),
+        example.layers.element_id.decode_u16(n).unwrap()
+    );
+    // Everything but the layers is what the editor loaded.
+    let mut same = scene.clone();
+    same.layers = example.layers.clone();
+    assert_eq!(same, example);
+}
+
+#[test]
 fn unknown_fields_are_rejected() {
     let mut json: serde_json::Value =
         serde_json::from_str(&examples::channel().to_json_pretty()).unwrap();
@@ -80,6 +116,33 @@ fn paint(scene: &mut Scene, x: u32, y: u32, ct: u8, element: u16) {
     element_id[i] = element;
     scene.layers.cell_type = LayerData::encode_u8(&cell_type, LayerEncoding::RawBase64);
     scene.layers.element_id = LayerData::encode_u16(&element_id, LayerEncoding::RawBase64);
+}
+
+/// Issues carry their values and cell for the editor (localised messages, markers).
+#[test]
+fn issues_carry_params_and_cells() {
+    let mut s = examples::channel();
+    paint(&mut s, 200, 50, CellType::Solid as u8, 2); // a solid cell with the inlet's id
+    let report = validate(&s);
+    let issue = report
+        .issues
+        .iter()
+        .find(|i| i.code == "cell.element")
+        .unwrap();
+    assert_eq!(issue.at, Some([200, 50]));
+    assert_eq!(issue.params["problem"], "kindMismatch");
+    assert_eq!(issue.params["element"], 2);
+
+    let mut s = examples::channel();
+    s.fluids[0].id = 7; // the initial fluid (1) and the inlet's fluid are now missing
+    let report = validate(&s);
+    let issue = report
+        .issues
+        .iter()
+        .find(|i| i.code == "initial.fluid")
+        .unwrap();
+    assert_eq!(issue.params["fluid"], 1);
+    assert_eq!(issue.at, None);
 }
 
 #[test]

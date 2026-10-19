@@ -1,6 +1,6 @@
 [package]
 name = "cfd-core"
-description = "Core types for live-fluids: scene format, layers and validation"
+description = "Core types for cfd-flux: scene format, layers and validation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,6 +11,7 @@ rust-version.workspace = true
 base64.workspace = true
 bytemuck.workspace = true
 half.workspace = true
+miniz_oxide.workspace = true
 ruzstd.workspace = true
 schemars.workspace = true
 serde.workspace = true

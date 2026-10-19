@@ -93,6 +93,52 @@ pub struct Estimate {
     /// Expected solver time, from the throughput of earlier jobs on that engine.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seconds: Option<f64>,
+    /// Characteristic scales, dimensionless numbers and lattice parameters of the run.
+    pub numbers: Numbers,
+}
+
+/// What `Scene → Domain` derived (`cfd_core::domain::Dimensionless`, units, relaxation times).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Numbers {
+    /// Characteristic velocity U (m/s) and length L (m: the shorter side of the fluid's box).
+    pub velocity: f64,
+    pub length: f64,
+    pub reynolds: f64,
+    /// Lattice Mach number of U.
+    pub mach: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prandtl: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rayleigh: Option<f64>,
+    /// Viscous relaxation time τ (and the thermal one when temperature is solved).
+    pub tau: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tau_thermal: Option<f64>,
+    /// Cell size (m) and time step (s).
+    pub dx: f64,
+    pub dt: f64,
+    /// Lattice velocity U·dt/dx.
+    pub lattice_velocity: f64,
+}
+
+impl Numbers {
+    fn of(d: &cfd_core::Domain) -> Self {
+        let n = &d.numbers;
+        Self {
+            velocity: n.velocity,
+            length: n.length,
+            reynolds: n.reynolds,
+            mach: n.mach,
+            prandtl: n.prandtl,
+            rayleigh: n.rayleigh,
+            tau: d.physics.tau(),
+            tau_thermal: d.physics.alpha.map(cfd_core::units::relaxation_time),
+            dx: d.units.dx,
+            dt: d.units.dt,
+            lattice_velocity: n.velocity * d.units.velocity_factor(),
+        }
+    }
 }
 
 /// A scene that passed every check: ready to run on `engine`.
@@ -120,21 +166,37 @@ pub fn check(
     scene: &RawValue,
     options: &JobOptions,
 ) -> Result<Checked, ApiError> {
+    check_with_estimate(state, scene, options).map_err(|(e, _)| e)
+}
+
+/// As [`check`], and when the scene could be prepared but a limit or the engine choice failed,
+/// the estimate too (the editor shows why: "17,000 steps over the limit").
+fn check_with_estimate(
+    state: &AppState,
+    scene: &RawValue,
+    options: &JobOptions,
+) -> Result<Checked, (ApiError, Option<Box<Estimate>>)> {
     let s = &state.inner;
     let prepared = match cfd_job::prepare(scene.get().to_string(), options.run_options()) {
         Ok(p) => p,
         Err(PrepareError::Json(e)) => {
-            return Err(ApiError::BadRequest {
-                code: "scene.format",
-                message: format!("invalid scene: {e}"),
-            })
+            return Err((
+                ApiError::BadRequest {
+                    code: "scene.format",
+                    message: format!("invalid scene: {e}"),
+                },
+                None,
+            ))
         }
         Err(PrepareError::Invalid(report)) => {
-            return Err(ApiError::Unprocessable {
-                code: "scene.invalid",
-                message: "the scene cannot be run".into(),
-                issues: report.issues.iter().map(IssueDto::from).collect(),
-            })
+            return Err((
+                ApiError::Unprocessable {
+                    code: "scene.invalid",
+                    message: "the scene cannot be run".into(),
+                    issues: report.issues.iter().map(IssueDto::from).collect(),
+                },
+                None,
+            ))
         }
     };
     let d = &prepared.domain;
@@ -150,37 +212,8 @@ pub fn check(
             _ => 1,
         })
         .sum();
-    let limits = &s.config.limits;
-    if cells > limits.max_cells {
-        return Err(unprocessable(
-            "limits.cells",
-            format!(
-                "{cells} cells exceed the server's limit of {}",
-                limits.max_cells
-            ),
-        ));
-    }
-    if steps > limits.max_steps {
-        return Err(unprocessable(
-            "limits.steps",
-            format!(
-                "{steps} steps exceed the server's limit of {}; shorten the end time or raise the \
-                 lattice velocity",
-                limits.max_steps
-            ),
-        ));
-    }
-    let pref = options.backend.unwrap_or(prepared.scene.run.backend);
-    let mut notes = Vec::new();
-    let engine = s
-        .inventory
-        .choose(pref, cells, thermal, &mut notes)
-        .map_err(|e| match e {
-            ChooseError::Unavailable { .. } => unprocessable("engine.unavailable", e.to_string()),
-            ChooseError::TooLarge(m) => unprocessable("engine.memory", m),
-        })?;
     let fluid_cells = d.fluid_cell_count() as u64;
-    let estimate = Estimate {
+    let mut estimate = Estimate {
         cells,
         fluid_cells,
         steps,
@@ -192,11 +225,54 @@ pub fn check(
         } else {
             0
         },
-        engine: Some(engine),
-        seconds: s
-            .mlups(engine)
-            .map(|mlups| fluid_cells as f64 * steps as f64 / (mlups * 1e6)),
+        engine: None,
+        seconds: None,
+        numbers: Numbers::of(d),
     };
+    let limits = &s.config.limits;
+    if cells > limits.max_cells {
+        return Err((
+            unprocessable(
+                "limits.cells",
+                format!(
+                    "{cells} cells exceed the server's limit of {}",
+                    limits.max_cells
+                ),
+            ),
+            Some(Box::new(estimate)),
+        ));
+    }
+    if steps > limits.max_steps {
+        return Err((
+            unprocessable(
+                "limits.steps",
+                format!(
+                    "{steps} steps exceed the server's limit of {}; shorten the end time or raise \
+                     the lattice velocity",
+                    limits.max_steps
+                ),
+            ),
+            Some(Box::new(estimate)),
+        ));
+    }
+    let pref = options.backend.unwrap_or(prepared.scene.run.backend);
+    let mut notes = Vec::new();
+    let engine = match s.inventory.choose(pref, cells, thermal, &mut notes) {
+        Ok(engine) => engine,
+        Err(e) => {
+            let err = match e {
+                ChooseError::Unavailable { .. } => {
+                    unprocessable("engine.unavailable", e.to_string())
+                }
+                ChooseError::TooLarge(m) => unprocessable("engine.memory", m),
+            };
+            return Err((err, Some(Box::new(estimate))));
+        }
+    };
+    estimate.engine = Some(engine);
+    estimate.seconds = s
+        .mlups(engine)
+        .map(|mlups| fluid_cells as f64 * steps as f64 / (mlups * 1e6));
     let warnings = d.issues.iter().map(IssueDto::from).collect();
     Ok(Checked {
         prepared,
@@ -226,27 +302,32 @@ pub async fn validate(
     State(state): State<AppState>,
     ApiJson(scene): ApiJson<Box<RawValue>>,
 ) -> Result<Json<Validation>, ApiError> {
-    Ok(Json(match check(&state, &scene, &JobOptions::default()) {
-        Ok(c) => Validation {
-            ok: true,
-            code: None,
-            message: None,
-            issues: c.warnings,
-            estimate: Some(c.estimate),
+    Ok(Json(
+        match check_with_estimate(&state, &scene, &JobOptions::default()) {
+            Ok(c) => Validation {
+                ok: true,
+                code: None,
+                message: None,
+                issues: c.warnings,
+                estimate: Some(c.estimate),
+            },
+            Err((
+                ApiError::Unprocessable {
+                    code,
+                    message,
+                    issues,
+                },
+                estimate,
+            )) => Validation {
+                ok: false,
+                code: Some(code),
+                message: Some(message),
+                issues,
+                estimate: estimate.map(|e| *e),
+            },
+            Err((e, _)) => return Err(e),
         },
-        Err(ApiError::Unprocessable {
-            code,
-            message,
-            issues,
-        }) => Validation {
-            ok: false,
-            code: Some(code),
-            message: Some(message),
-            issues,
-            estimate: None,
-        },
-        Err(e) => return Err(e),
-    }))
+    ))
 }
 
 // ---- jobs --------------------------------------------------------------------------------
@@ -494,6 +575,31 @@ pub async fn save_scene(
             name: parsed.name,
         }),
     ))
+}
+
+/// `PUT /api/scenes/{id}`: replaces a saved scene (the editor's "Save" after "Save to server").
+pub async fn update_scene(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    ApiJson(scene): ApiJson<Box<RawValue>>,
+) -> Result<Json<SavedScene>, ApiError> {
+    let parsed = Scene::from_json(scene.get()).map_err(|e| ApiError::BadRequest {
+        code: "scene.format",
+        message: format!("invalid scene: {e}"),
+    })?;
+    if !state
+        .inner
+        .jobs
+        .db
+        .update_scene(&id, &parsed.name, scene.get())
+        .await?
+    {
+        return Err(ApiError::NotFound(format!("no saved scene {id}")));
+    }
+    Ok(Json(SavedScene {
+        id,
+        name: parsed.name,
+    }))
 }
 
 pub async fn list_scenes(

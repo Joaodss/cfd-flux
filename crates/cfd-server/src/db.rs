@@ -71,7 +71,7 @@ pub struct Db {
 
 impl Db {
     /// Opens (creating it if needed) and migrates the database at `url`, e.g.
-    /// `sqlite://data/live-fluids.db?mode=rwc` or `sqlite::memory:`.
+    /// `sqlite://data/cfd-flux.db?mode=rwc` or `sqlite::memory:`.
     pub async fn connect(url: &str) -> Result<Self> {
         let options = SqliteConnectOptions::from_str(url)
             .with_context(|| format!("invalid database URL {url:?}"))?
@@ -223,6 +223,18 @@ impl Db {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Replaces a saved scene's name and JSON; returns whether it existed.
+    pub async fn update_scene(&self, id: &str, name: &str, json: &str) -> Result<bool> {
+        let r = sqlx::query("UPDATE scenes SET name = ?, json = ?, updated_at = ? WHERE id = ?")
+            .bind(name)
+            .bind(json)
+            .bind(now_ms())
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(r.rows_affected() > 0)
     }
 
     pub async fn scenes(&self) -> Result<Vec<SceneSummary>> {

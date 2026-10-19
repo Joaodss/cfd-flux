@@ -402,7 +402,8 @@
     "LayerEncoding": {
       "enum": [
         "raw+base64",
-        "zstd+base64"
+        "zstd+base64",
+        "deflate+base64"
       ],
       "type": "string"
     },

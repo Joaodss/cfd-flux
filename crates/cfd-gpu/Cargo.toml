@@ -1,6 +1,6 @@
 [package]
 name = "cfd-gpu"
-description = "wgpu/WGSL backend for the live-fluids solvers"
+description = "wgpu/WGSL backend for the cfd-flux solvers"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

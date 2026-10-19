@@ -1,6 +1,6 @@
 [package]
 name = "cfd-verify"
-description = "Backend-agnostic validation cases for live-fluids solvers (analytical and benchmark references)"
+description = "Backend-agnostic validation cases for cfd-flux solvers (analytical and benchmark references)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

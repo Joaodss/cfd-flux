@@ -148,7 +148,7 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
 ### ADR-027 — Server persistence and API errors: SQLite through `sqlx` with runtime queries; one error enum with stable codes · *Accepted (2026-10-13)*
 - **Context:** the server must run with no external services (ADR-010) and stay portable to Postgres if it is ever hosted; the editor needs machine-readable errors it can translate (design proposal Q3, Q6, Q7).
 - **Decision:** `sqlx` with SQLite (bundled, `runtime-tokio`), queries checked at runtime (no database needed to build), migrations embedded with `sqlx::migrate!`; tables `jobs` (status, reason, backend, device, options, steps, frames, MLUPS, times, result directory) and `scenes`. Frames and series stay on disk. Errors are one `ApiError` enum turned into a status and `{ "error": { code, message, issues? } }`; validation issues keep the stable codes of `cfd_core::validate`. Bodies are limited to 64 MB, and a `413` names the `zstd+base64` layer encoding. The server binds `127.0.0.1:7878` (`--listen` to change it).
-- **Consequences:** time estimates use the mean MLUPS of earlier completed jobs per engine (none until one has run). Issues do not yet carry their numbers as data (`params`) for localised messages; they come with the editor (Phase 4).
+- **Consequences:** time estimates use the mean MLUPS of earlier completed jobs per engine (none until one has run). Issues carry their values as data (`params`) and the cell they are about (`at`) since Phase 4, and `/validate` returns the estimate (with Re, Ma, τ, …) also when a limit or the engine choice fails (03 §7).
 
 ### ADR-028 — Output sampling on the device: several specs per request, CUDA in f64, the CPU conversion as the reference · *Accepted (2026-10-16)*
 - **Context:** a frame copied ρ, ux, uy, θ (16 B/cell) and converted them on the job's output thread (`FieldSet::from_lattice`: pressure with the hydrostatic part, vorticity, temperature), then box-downsampled and converted to f16 for every stream format: 32 ms per 1024² frame, 121 ms at 2048², more than a frame interval at interactive rates (design proposal §6). The CPU conversion computes in f64; WGSL has no portable f64.
@@ -180,6 +180,27 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   256² kernel became 20% slower than storing every step; the mask-based rule is faster everywhere. A `step(1)` loop
   gains nothing (every step is a last step): the run loop's batches are what benefit.
 
+### ADR-030 — Web editor: pixels outside React, WebGL2 cells, tile-swap history, server-side validation · *Accepted (2026-10-18)*
+- **Context:** Phase 4 needs an editor for grids up to 4096² (16 M cells) with undo, live shape previews, files and
+  validation, written by an author new to TypeScript/React, with the Rust types as the source of truth
+  ([design proposal](sessions/phase4-design-proposal.md), every answer of its §14 accepted).
+- **Decision:** the layers are typed arrays owned by plain TypeScript objects, never React state; the scene table,
+  view and UI state live in a Zustand store (with `immer`). Cells are drawn by **WebGL2** from integer textures
+  (`R8UI`, `R16UI`, dirty 64×64 tiles uploaded with `texSubImage2D`) and a palette texture; a Canvas2D overlay draws
+  selections, probes and issue markers. Tools write through a revertible `Stroke` (shapes are redrawn live); the
+  **history** keeps changed 64×64 tiles and swaps them on undo/redo (uniform tiles as one value; 256 MB / 200
+  entries), with table changes and whole-grid replacements in the same entries. Files are the `Scene` JSON with
+  **`deflate+base64`** layers (native `CompressionStream`; a new encoding read by `cfd-core` through `miniz_oxide`).
+  **Validation stays on the server** (`/api/scenes/validate`, debounced, aborted when outdated), whose issues carry
+  `params` and a cell so the editor words and marks them; the preset library lives in `cfd_core::library` and is
+  generated into the web app.
+- **Consequences:** a 4096² grid uploads and draws in ≈ 80 ms and a tile in ≈ 3 ms; a half-domain fill takes 0.17 s
+  and its undo entry 128 kB. Nothing in the editor duplicates physics or validation (one implementation, in Rust);
+  the editor needs the local server for checks and estimates — compiling `cfd-core` to WASM stays the option for a
+  serverless demo (ADR-010). Contract tests keep the two sides in step: an editor-written scene file read by
+  `cfd-core`, a sample of the browser's deflate decoded in Rust, every issue code worded by the editor, generated
+  types and library checked as up to date. The acceptance scenario is a Playwright test in CI.
+
 ## Open questions
 
 Answers to these questions can change priorities. Record the answer and the date here.
@@ -197,7 +218,7 @@ Answers to these questions can change priorities. Record the answer and the date
 | Q9 | "Other states" — what do you have in mind: plasma, granular, deformable solids, phase change? | **Answered (2026-10-09):** post-MVP: granular media, plasma and common phase changes, including granular → liquid (crushed ice melting) (ADR-012). Rare cases (solid ↔ gas: sublimation/deposition, and others) in a later phase (Phase 9c) |
 | Q10 | Project license — open source confirmed; which license? | **Answered (2026-10-09):** **MIT OR Apache-2.0** |
 | Q11 | Prior experience with Rust, GPUs and CFD (to calibrate documentation detail and pace)? | **Answered (2026-10-09):** strong CFD experience; little Rust and GPU experience (learns fast); C# background. → Phase 0 includes learning prototypes (see the plan) |
-| Q12 | Project name: the repository is `cfd-flux`, the docs and packages say `live-fluids`. Which one is final? | **Answered (2026-10-13):** **`cfd-flux`** (the repository name); `live-fluids` in the docs, package descriptions, the web app and the local folder is to be renamed (39 mentions in 34 files) |
+| Q12 | Project name: the repository is `cfd-flux`, the docs and packages say `live-fluids`. Which one is final? | **Answered (2026-10-13):** **`cfd-flux`** (the repository name); **renamed 2026-10-18** in the docs, crate and package descriptions, the web app, the license notice and the server's database file (`<data>/cfd-flux.db`); session logs keep the old name as written, and the local folder is the author's to rename |
 | Q13 | Frame encoding: the pure-Rust `ruzstd` encoder (ADR-007) takes 12.6 ms per stored f32 frame of the 442 × 84 cylinder (4 values per cell) and 7.2 ms per f16 stream frame, for a gain of only 3–4% (594 → 574 kB, 297 → 286 kB: the low mantissa bits of physical fields are noise). This caps the server at ≈ 37 frames/s there (ADR-025) and would cost ≈ 0.35 s per stored 1024² frame. Options: no compression for stream frames, a byte-shuffle filter before zstd (as HDF5/Blosc do for floats), the C `zstd` crate, f16 storage by default. | **Answered (2026-10-13): byte shuffle + `lz4_flex`** (pure Rust) for stored and streamed frames, with a `codec` field in a v2 frame header (v1 zstd frames stay readable); **implemented 2026-10-16** (LFFR v2, ADR-007). Measured on 2026-10-13 ([benchmarks](benchmarks.md#frame-encoding-open-question-q13--amd-ryzen-7-3700x-2026-10-13)): a byte shuffle makes every codec 25–35% smaller; shuffle + `lz4_flex` (pure Rust) encodes a 1024² f32 frame in 25 ms to 64% (now: 305 ms, 88%), shuffle + C `zstd` level 1 in 34 ms to 60%. |
 
 ### License options (Q10)

@@ -137,16 +137,16 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 
 **Goal:** draw and configure scenes in the browser.
 
-- [ ] M — Canvas with zoom/pan, pixel grid, `Uint8Array/Uint16Array` layers, rendering with colours per type/element.
-- [ ] M — Tools: pencil (brush size), eraser, line, rectangle, ellipse, bucket, select/move/copy.
-- [ ] M — Type palette (fluid, wall, inlet, outlet, heat source, liquid region, probe); automatic element creation when drawing a new region; selection of an existing element.
-- [ ] M — Properties panel per element (velocity, thermal, material) and global properties (domain, scale, fluids, gravity, time, method, backend).
-- [ ] S — Library of predefined fluids/materials (air, water, oil; aluminium, copper, glass…).
-- [ ] M — Undo/redo, save/load (local `.cfdscene` file + server), PNG import as a mask.
-- [ ] M — Client-side validation and estimates (Re, memory, estimated time) before submitting.
-- [ ] S — Example gallery.
+- [x] M — Canvas with zoom/pan, pixel grid, `Uint8Array/Uint16Array` layers, rendering with colours per type/element. *(WebGL2: integer textures + palette, dirty 64×64 tiles; 4096² in ≈ 80 ms, a tile in ≈ 3 ms.)*
+- [x] M — Tools: pencil (brush size), eraser, line, rectangle, ellipse, bucket, select/move/copy. *(Drawn live through a revertible stroke; a 20 × 20 ellipse is exactly the example cylinder; a 4096² half-domain fill takes 0.17 s.)*
+- [x] M — Type palette (fluid, wall, inlet, outlet, heat source, liquid region, probe); automatic element creation when drawing a new region; selection of an existing element. *(An active element per kind, created with defaults by the first stroke — creation and cells are one undo entry; `N` starts a new one; eyedropper `I`/Alt+click; element list with cell counts and delete; probe tool. The liquid region is the fluid/empty split of free-surface scenes; `fluidId` painting waits for multiphase, Q9.)*
+- [x] M — Properties panel per element (velocity, thermal, material) and global properties (domain, scale, fluids, gravity, time, method, backend). *(Element, Scene and Run tabs; forms follow the generated unions; every edit is one undo entry; grid resize anchored at the bottom-left and "refine ×k", both undoable.)*
+- [x] S — Library of predefined fluids/materials (air, water, oil; aluminium, copper, glass…). *(`cfd_core::library`: 5 fluids and 6 solids with sources, used by the examples; `cfd-cli library` writes the editor's `generated/library.json`, kept current by a test.)*
+- [x] M — Undo/redo, save/load (local `.cfdscene` file + server), PNG import as a mask. *(Undo/redo: 64×64 tile patches swapped in place, uniform tiles stored as one value, 256 MB / 200-entry budget. Files: `.cfdscene` = the scene JSON with `deflate+base64` layers (new encoding, read by `cfd-core`; a committed editor-written fixture is checked in Rust), File System Access API where available; server: POST + new `PUT /api/scenes/{id}`; draft autosave in IndexedDB; PNG import as a floating masked selection.)*
+- [x] M — Client-side validation and estimates (Re, memory, estimated time) before submitting. *(The server's `/api/scenes/validate`, 400 ms after the last edit, outdated requests aborted; issues carry `params` and a cell (`at`), worded by the editor's message table (a test requires every code `cfd-core` emits) and marked on the canvas; the estimate adds Re, Ma, Pr, Ra, τ, Δt and the lattice velocity, also when a server limit fails.)*
+- [x] S — Example gallery. *(A dialog of the `scenes/` examples with thumbnails drawn from their layers.)*
 
-**Acceptance:** draw the cylinder-in-a-channel case from scratch in < 2 min and submit it without errors.
+**Acceptance:** draw the cylinder-in-a-channel case from scratch in < 2 min and submit it without errors. ✅ **Met by the scripted scenario (2026-10-19):** `npm run test:e2e` (Playwright, also a CI job on a GPU-less runner) sets up the 442 × 84 grid, draws the walls, a parabolic inlet, the outlet and the cylinder through the UI — the result equals `cfd-core`'s example cell for cell — waits for the server's validation (no issues), runs it and follows the job to completion, in ≈ 3–4 s. The hand-timed run (< 2 min) is the author's to record.
 
 ---
 

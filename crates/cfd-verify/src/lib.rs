@@ -1,4 +1,4 @@
-//! Validation cases for live-fluids solvers (`docs/08-validation-guide.md`).
+//! Validation cases for cfd-flux solvers (`docs/08-validation-guide.md`).
 //!
 //! The cases only see the [`cfd_core::Solver`] trait: the caller supplies a [`SolverFactory`]
 //! that builds a solver of any backend for a [`Domain`], so the same suite validates the CPU

@@ -44,8 +44,8 @@ rustup default stable-x86_64-pc-windows-msvc
 ### Alternative: WSL (Ubuntu)
 
 ```bash
-cd /mnt/c/Users/<user>/Desktop/GithubProjects/live-fluids
-CARGO_TARGET_DIR=$HOME/.cache/live-fluids-target cargo test --workspace
+cd /mnt/c/Users/<user>/Desktop/GithubProjects/cfd-flux
+CARGO_TARGET_DIR=$HOME/.cache/cfd-flux-target cargo test --workspace
 ```
 (A `CARGO_TARGET_DIR` outside `/mnt/c` avoids mixing Windows/Linux artefacts and is much faster.)
 
@@ -61,6 +61,9 @@ cargo test --workspace
 cargo run -p cfd-cli -- schema schema/scene.schema.json
 cargo run -p cfd-cli -- example --all scenes
 cd apps/web && npm run gen:types
+
+# Preset fluids and solids (cfd-core/src/library.rs) for the web editor; a test checks it is up to date
+cargo run -p cfd-cli -- library apps/web/src/generated/library.json
 
 # Check scene files
 cargo run -p cfd-cli -- validate scenes/*.json
@@ -101,7 +104,11 @@ curl -s http://127.0.0.1:7878/api/capabilities
 # Web (in apps/web)
 npm install
 npm run dev          # development server
-npm test             # Vitest (checks scenes/ against the JSON Schema)
+npm test             # Vitest: logic, components (happy-dom), scenes/ against the JSON Schema
+UPDATE_FIXTURES=1 npm test   # rewrite tests/fixtures/ (editor-written scenes cfd-core reads back)
+npx playwright install chromium   # once: the browser for the end-to-end tests
+npm run test:e2e     # Playwright: starts a release cfd-server (port 7879, fresh target/e2e-data) and Vite
+                     # (port 5174), then draws, validates and runs the cylinder (Phase 4 acceptance)
 npm run typecheck && npm run lint && npm run format:check && npm run build
 ```
 
@@ -110,7 +117,7 @@ npm run typecheck && npm run lint && npm run format:check && npm run build
 - `cfd-server` opens every engine once at start-up (CUDA, a hardware wgpu adapter, the CPU) and logs what it
   found; `--allow-software` lets jobs that ask for wgpu use WARP/lavapipe. `RUST_LOG=cfd_server=debug,tower_http=debug`
   shows every request. No authentication: keep the default loopback address unless the network is trusted.
-- Data: `<data>/live-fluids.db` (SQLite: jobs and saved scenes) and `<data>/results/<job id>/` (the
+- Data: `<data>/cfd-flux.db` (SQLite: jobs and saved scenes) and `<data>/results/<job id>/` (the
   [03 §6.2](03-data-model.md#62-storage) layout; `cfd-cli render <dir>` makes PNGs from it). Jobs active when the
   server stops become `failed/interrupted`.
 - The API and the WebSocket messages are in [03 §7](03-data-model.md#7-api). Quick checks with `curl`:

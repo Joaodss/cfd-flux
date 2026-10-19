@@ -1,6 +1,6 @@
 [package]
 name = "cfd-cuda"
-description = "CUDA backend for the live-fluids solvers (enabled with the `cuda` feature)"
+description = "CUDA backend for the cfd-flux solvers (enabled with the `cuda` feature)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
