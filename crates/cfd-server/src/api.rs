@@ -564,7 +564,7 @@ fn convert_frame(mut frame: Frame, format: &StreamFormat, dtype: Dtype) -> Frame
         format
             .fields
             .as_ref()
-            .is_none_or(|list| list.iter().any(|n| *n == f.desc.name))
+            .is_none_or(|list| list.contains(&f.desc.name))
     });
     for f in &mut frame.fields {
         f.values = cfd_core::sample::downsample(&f.values, f.desc.components as usize, w, h, k);

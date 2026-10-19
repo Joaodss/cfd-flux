@@ -154,11 +154,11 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 
 **Goal:** view and analyse results.
 
-- [ ] M — WebSocket client, frame decoding (LFFR v2: LZ4 block decoding + unshuffle in TypeScript, 03 §6.1), frame buffer in memory/IndexedDB.
-- [ ] M — WebGL2 rendering: float16 textures, colour maps (viridis, coolwarm, …), automatic/manual scale, legend, solid mask.
-- [ ] M — Field selector (velocity, pressure, temperature, vorticity), vectors, streamlines (RK4 on the client).
+- [x] M — WebSocket client, frame decoding (LFFR v2: LZ4 block decoding + unshuffle in TypeScript, 03 §6.1), frame buffer in memory/IndexedDB. *(2026-10-20: decoder in a Web Worker with a contract test against `cfd-io`'s frames; memory-only LRU cache of 512 MiB, the server stores the frames — no IndexedDB, design proposal §3.2.)*
+- [x] M — WebGL2 rendering: float16 textures, colour maps (viridis, coolwarm, …), automatic/manual scale, legend, solid mask. *(2026-10-20: `R16F`/`RG16F`, divided by each block's fluid fraction; colour maps generated from Rust; ranges all frames / this frame / symmetric ±p99 / manual.)*
+- [ ] M — Field selector (velocity, pressure, temperature, vorticity), vectors, streamlines (RK4 on the client). *(Field selector done: |u|, u_x, u_y, p, ω, T, ρ.)*
 - [ ] M — Animated tracer particles/smoke (GPU on the client).
-- [ ] S — Timeline: play/pause/scrub/speed.
+- [x] S — Timeline: play/pause/scrub/speed. *(2026-10-20: Live, step ←/→, loop; stored frames fetched in the stream format, `GET …/frames/{n}?fields=&maxSize=`.)*
 - [ ] M — Probe and force plots (e.g. uPlot); statistics (St, C_D, Nu).
 - [ ] S — Export PNG, CSV and video (WebCodecs/MediaRecorder).
 - [ ] M — Gallery of **quick examples** (cylinder, natural convection, dam break…) with precomputed or low-resolution results (< 10 s), for education/demo ([ADR-009](07-decisions-and-questions.md)).

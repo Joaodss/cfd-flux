@@ -145,12 +145,13 @@ payload     shuffle+lz4: per field, in header order: u32 length L | L bytes of l
   then every byte 1, … (`out[b·m + i] = in[i·s + b]`). The sign/exponent bytes of neighbouring values are alike and
   compress; the low mantissa bytes are noise. Each field is one lz4 *block* (the raw LZ4 block format, no frame
   header or checksum; its decompressed size is known from the header), compressed in parallel on the server.
-- **Decoding in the browser (Phase 5a):** read the prefix and the JSON header, then per field an LZ4 block
+- **Decoding in the browser** (`apps/web/src/frames/`, in a Web Worker; contract fixtures written by `cfd-io`'s
+  test `browser_fixtures`): read the prefix and the JSON header, then per field an LZ4 block
   decoder into a buffer of the known size (a ≈ 100-line TypeScript function, or `lz4js`'s block decoder), the
   unshuffle loop, and a `Float32Array`/`Uint16Array` view of the result (f16 is uploaded as-is to a `R16F`/
   `RG16F` texture). No WASM is needed; v1 (zstd) frames only exist in result directories written before v2 and
   are not streamed.
-- **Stored frames:** f32 at full resolution every output interval (`frames/NNNNNN.bin`); `GET …/frames/{n}?dtype=f16` converts on the fly. Stored and stream frames are *samples* computed on the GPU when the job runs there ([ADR-028](07-decisions-and-questions.md)): bit-identical to the CPU conversion on CUDA, within ~1e-7 on wgpu.
+- **Stored frames:** f32 at full resolution every output interval (`frames/NNNNNN.bin`); `GET …/frames/{n}?dtype=f16` converts on the fly, and `&fields=…&maxSize=…` returns it in a stream format (the viewer's timeline). Stored and stream frames are *samples* computed on the GPU when the job runs there ([ADR-028](07-decisions-and-questions.md)): bit-identical to the CPU conversion on CUDA, within ~1e-7 on wgpu.
 - **Stream frames** (WebSocket): **f16**, only the fields the viewer asked for, box-downsampled by the integer factor `k = ceil(max(width, height) / maxSize)` to `ceil(width/k) × ceil(height/k)` (partial blocks at the edges average what they have). `frameIndex` is the output index; a snapshot (a frame taken for a viewer that joined a paused job, or a new stream format) repeats the last output index and carries its own `step`.
 - **Cost** (1024² cavity, 3 fields, f32): 13.6 ms to 63.7% of the raw size, decoded in 17 ms; `ruzstd` (v1) took
   328 ms for 91% ([benchmarks](benchmarks.md#frame-codec-lffr-v2--amd-ryzen-7-3700x-2026-10-16)).
@@ -187,7 +188,7 @@ Implemented by `cfd-server` (Phase 3). All JSON is camelCase like the scene form
 | `POST` | `/api/simulations/{id}/pause` · `/resume` | — | `202` (applied between batches); `409` unless running/paused |
 | `DELETE` | `/api/simulations/{id}` | `?purge=true` | cancel: `202`; with `purge`, also delete results and record (`204`, or `202` while an active job stops) |
 | `WS` | `/api/simulations/{id}/stream` | `?fields=velocity,vorticity&maxSize=1024` | see below; `404` before the upgrade for an unknown job |
-| `GET` | `/api/simulations/{id}/frames/{n}` | `?dtype=f32\|f16` | one stored frame (LFFR) |
+| `GET` | `/api/simulations/{id}/frames/{n}` | `?dtype=f32\|f16&fields=…&maxSize=…` | one stored frame (LFFR); with `fields`/`maxSize`, in that stream format (the named fields in frame order, box-downsampled like the stream): byte-identical to the stream frame of the same index on the CPU engine, so the viewer mixes both |
 | `GET` | `/api/simulations/{id}/files/{name}` | `scene.json`, `meta.json`, `probes.csv`, `forces.csv`, `diagnostics.csv` | the file |
 | `GET` · `POST` | `/api/scenes` | `Scene` | list (id, name, times) · save (`201 { id, name }`) |
 | `GET` · `PUT` · `DELETE` | `/api/scenes/{id}` | — · `Scene` · — | the scene JSON · `{ id, name }` (replaced; `404` if unknown) · `204` |

@@ -64,6 +64,10 @@ cd apps/web && npm run gen:types
 
 # Preset fluids and solids (cfd-core/src/library.rs) for the web editor; a test checks it is up to date
 cargo run -p cfd-cli -- library apps/web/src/generated/library.json
+# Colour maps (cfd-io/src/image.rs) for the web viewer; a test checks it is up to date
+cargo run -p cfd-cli -- colormaps apps/web/src/generated/colormaps.json
+# Frames for the viewer's decoder contract test (apps/web/tests/fixtures/frames/), after changing the frame format
+UPDATE_FIXTURES=1 cargo test -p cfd-io --test browser_fixtures
 
 # Check scene files
 cargo run -p cfd-cli -- validate scenes/*.json
@@ -108,7 +112,8 @@ npm test             # Vitest: logic, components (happy-dom), scenes/ against th
 UPDATE_FIXTURES=1 npm test   # rewrite tests/fixtures/ (editor-written scenes cfd-core reads back)
 npx playwright install chromium   # once: the browser for the end-to-end tests
 npm run test:e2e     # Playwright: starts a release cfd-server (port 7879, fresh target/e2e-data) and Vite
-                     # (port 5174), then draws, validates and runs the cylinder (Phase 4 acceptance)
+                     # (port 5174), then draws, validates and runs the cylinder (Phase 4 acceptance) and
+                     # follows a short run in the viewer (live frames, scrub, play)
 npm run typecheck && npm run lint && npm run format:check && npm run build
 ```
 
