@@ -113,7 +113,10 @@ export class Viewer {
     const t = s.timeline
     this.cache.put(index, d, t.index ?? index)
     if (index > t.last) s.setTimeline({ last: index })
-    if (t.mode === 'live' && index >= (t.index ?? -1)) this.display(index, d)
+    // Following the run, or the frame asked for at the end of a live run (`setRun`).
+    if ((t.mode === 'live' && index >= (t.index ?? -1)) || (t.buffering && t.index === index)) {
+      this.display(index, d)
+    }
   }
 
   /**
@@ -126,8 +129,11 @@ export class Viewer {
     if (frames !== null && frames - 1 > s.timeline.last) s.setTimeline({ last: frames - 1 })
     const t = useViewer.getState().timeline
     if (!running && t.mode === 'live') {
+      // The run is over: hold its last frame. Live frames may still be in the worker (a fast run
+      // ends before they are decoded), so ask for the last one: from the cache, the stream
+      // (`onLive`) or the server, whichever comes first.
       s.setTimeline({ mode: 'paused' })
-      if (t.index === null && t.last >= 0 && this.cells) this.seek(t.last)
+      if (t.last >= 0 && this.cells) this.request(t.last)
     }
   }
 
