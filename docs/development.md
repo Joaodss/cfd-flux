@@ -10,7 +10,10 @@
 
 **Author's machine (verified 2026-10-09; driver updated 2026-10-12):** RTX 4060 8 GB (`sm_89`), driver 617.42 (CUDA 13.4; was 610.62 = CUDA 13.3),
 CUDA Toolkit 13.4, VS Build Tools 2022 (MSVC 14.4x), Rust 1.90 `stable-x86_64-pc-windows-msvc`, Node 24.
-Native `cargo build/test` and a CUDA test kernel (`nvcc -arch=sm_89`) both work.
+Native `cargo build/test` and a CUDA test kernel (`nvcc -arch=sm_89`) both work. The checkout lives in
+`D:GithubProjectslive-fluids` (moved from `C:Users…DesktopGithubProjects` on 2026-10-21; nothing in the
+repository names an absolute path). **Use `CARGO_BUILD_JOBS=4`** for the full test build: with the default 16 parallel
+jobs rustc runs out of paging file ("the paging file is too small").
 
 ### CUDA on Windows — notes
 
@@ -44,7 +47,7 @@ rustup default stable-x86_64-pc-windows-msvc
 ### Alternative: WSL (Ubuntu)
 
 ```bash
-cd /mnt/c/Users/<user>/Desktop/GithubProjects/cfd-flux
+cd /mnt/d/GithubProjects/live-fluids   # the checkout, as seen from WSL
 CARGO_TARGET_DIR=$HOME/.cache/cfd-flux-target cargo test --workspace
 ```
 (A `CARGO_TARGET_DIR` outside `/mnt/c` avoids mixing Windows/Linux artefacts and is much faster.)

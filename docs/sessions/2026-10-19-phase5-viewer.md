@@ -7,7 +7,7 @@ gets long, with everything tested and committed.
 | # | Task | Status |
 |---|------|--------|
 | H1 | Record the author's hand-timed Phase 4 acceptance run | ✅ 9 min 30 s, misses < 2 min (recorded 2026-10-21; Q14) |
-| H2 | Local folder `cfd-flux`: absolute paths, build/tests/e2e from the new place | ⏳ the folder was not moved yet (below) |
+| H2 | Local folder moved: absolute paths, build/tests/e2e from the new place | ✅ `D:GithubProjectslive-fluids` (2026-10-21, below) |
 | H3 | Reference scales (proposal §7.4, option A) | ✅ |
 | D | Phase 5 design proposal, open questions answered | ✅ every proposal of §16 accepted |
 | 1 | Frame decoder (LFFR v2 in TypeScript, worker) and its contract test | ✅ |
@@ -20,6 +20,12 @@ gets long, with everything tested and committed.
 - **H2:** the session ran in `C:\Users\joaoa\Desktop\GithubProjects\live-fluids` (no `cfd-flux` folder on C:, D: or
   E:). No tracked file names an absolute path except the old session prompts (kept as written, Q12), and there is no
   launch configuration in the repository. Build, tests and e2e pass from this checkout (final check below).
+  **2026-10-21:** the folder is now `D:GithubProjectslive-fluids` (the session ran in a worktree under it). No tracked
+  file or launch configuration names the old path (only the old session prompts and the line above, kept as
+  written; the WSL example in `development.md` now uses the new place). From there, after `npm ci`: `cargo build
+  --workspace` and `CFD_REQUIRE_GPU=1 CFD_REQUIRE_CUDA=1 cargo test --workspace` (`CARGO_BUILD_JOBS=4`, now in
+  `development.md`): **212 tests pass**; `npm test`: **143 pass**; `npm run typecheck` clean; `npm run test:e2e`:
+  **2 pass** (the release server built from scratch in ≈ 3 min).
 - **Reference scales (H3):** `Scene.reference` (optional length, velocity, ΔT) feeds `Dimensionless::reference` (Re,
   Ra with those scales), the estimate's `numbers.reference`, `meta.json` and the defaults of `cfd-cli compare
   --statistics`; the time step is unchanged (a test compares the unit systems). The cylinder example now reads
