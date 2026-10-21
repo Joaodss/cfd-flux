@@ -108,6 +108,19 @@ async function request<T>(
   return json as T
 }
 
+/** A text resource (e.g. a CSV file of a run); errors as `request`'s. */
+async function text(path: string, signal?: AbortSignal): Promise<string> {
+  let r: Response
+  try {
+    r = await fetch(path, { method: 'GET', signal })
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') throw e
+    throw new ApiError('offline', 'the cfd-server cannot be reached (is it running?)', 0)
+  }
+  if (!r.ok) throw new ApiError('http', `GET ${path}: HTTP ${r.status}`, r.status)
+  return r.text()
+}
+
 /** A saved scene in the server's list. */
 export interface SceneSummary {
   id: string
@@ -131,4 +144,5 @@ export const api = {
     request<Validation>('POST', '/api/scenes/validate', scene, signal),
   deleteScene: (id: string) => request<void>('DELETE', `/api/scenes/${encodeURIComponent(id)}`),
   request,
+  text,
 }

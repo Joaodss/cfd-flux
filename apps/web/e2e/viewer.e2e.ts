@@ -75,4 +75,19 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   await expect(page.getByTestId('viewer-range-mode')).toHaveValue('symmetric')
   const ticks = (await page.getByTestId('viewer-legend').innerText()).split('\n')
   expect(Number(ticks[0])).toBeCloseTo(-Number(ticks[4]))
+
+  // The Plots tab: the force coefficients of the body in the flow, the cylinder (not the channel's
+  // walls; uPlot draws into a canvas); a click on the plot moves the playhead to the frame at that
+  // time.
+  await page.getByTestId('job-tab-plots').click()
+  await expect(page.getByTestId('plots-element')).toHaveValue('Cylinder')
+  const forces = page.getByTestId('plot-forces:Cylinder')
+  await expect(forces.locator('canvas')).toBeVisible()
+  await expect(page.locator('[data-testid="plot-diagnostics:mach"] canvas')).toBeVisible()
+  const area = forces.locator('.u-over')
+  const box = (await area.boundingBox())!
+  await area.click({ position: { x: box.width * 0.25, y: box.height / 2 } })
+  const [at] = (await position.textContent())!.split(' ')
+  expect(Number(at)).toBeGreaterThan(0)
+  expect(Number(at)).toBeLessThan(last)
 })

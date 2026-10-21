@@ -1,5 +1,5 @@
 // The job view (`#/jobs/{id}`): the field viewer (Phase 5) fed by the job's WebSocket stream,
-// and beside it the run's status, progress, pause/resume/cancel and log.
+// and beside it the tabs Plots (the run's series) and Run (status, progress, log).
 import { ArrowLeft, Pause, Play, Square } from 'lucide-react'
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { ApiError } from '../api/client.ts'
@@ -8,11 +8,16 @@ import type { Scene } from '../generated/scene.ts'
 import { seedFromHello } from '../viewer/ranges.ts'
 import { useViewer } from '../viewer/store.ts'
 import type { Viewer } from '../viewer/Viewer.ts'
+import { fromScene } from '../scene/io.ts'
+import { bodies } from '../viewer/elements.ts'
+import { PlotsPanel } from '../viewer/PlotsPanel.tsx'
+import { SeriesFeed, useSeries } from '../viewer/seriesFeed.ts'
 import { TimelineBar } from '../viewer/TimelineBar.tsx'
 import { ViewerCanvas } from '../viewer/ViewerCanvas.tsx'
 import { Legend, ViewerToolbar } from '../viewer/ViewerControls.tsx'
 import { INITIAL, reduce } from './jobState.ts'
 import { Button } from '../components/ui/button.tsx'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs.tsx'
 import { formatBytes, formatDuration, formatValue } from '../panels/format.ts'
 import { navigate } from './route.ts'
 
@@ -67,15 +72,28 @@ export function JobView({ id }: { id: string }) {
     // when the id changes or the view goes away.
     dispatch({ kind: 'reset' })
     useViewer.getState().reset()
-    return followJob(
+    const series = useSeries.getState()
+    const feed = new SeriesFeed(
+      { meta: () => jobs.meta(id), text: (name) => jobs.text(id, name) },
+      series.bump,
+    )
+    series.setFeed(feed)
+    const close = followJob(
       id,
       (m) => {
         if (m.type === 'hello') useViewer.getState().seed(seedFromHello(m.ranges))
-        dispatch({ kind: 'message', m })
+        feed.onMessage(m)
+        // Rows go to the feed only: they would re-render the whole view ten times a second.
+        if (m.type !== 'series') dispatch({ kind: 'message', m })
       },
       (normal) => dispatch({ kind: 'closed', normal }),
       (frame) => viewerRef.current?.pushFrame(frame),
     )
+    return () => {
+      close()
+      feed.dispose()
+      useSeries.getState().setFeed(null)
+    }
   }, [id, attempt])
 
   // The run's own scene: its cells are the viewer's solid mask.
@@ -89,6 +107,23 @@ export function JobView({ id }: { id: string }) {
       cancelled = true
     }
   }, [id])
+
+  // The bodies in the flow (the default element of the force plot), from the scene's cells.
+  useEffect(() => {
+    if (!scene) return
+    let cancelled = false
+    fromScene(scene).then(
+      (doc) => {
+        const { elementId, width, height } = doc.layers
+        if (!cancelled)
+          useSeries.getState().setBodies(bodies(scene.elements, elementId, width, height))
+      },
+      () => {}, // the viewer reports a scene it cannot read
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [scene])
 
   useEffect(() => {
     if (viewer && scene) {
@@ -190,93 +225,114 @@ export function JobView({ id }: { id: string }) {
           />
           <Legend />
         </section>
-        <aside className="flex w-80 shrink-0 flex-col gap-4 overflow-y-auto border-l border-border p-4">
-          {error && <p className="text-sm text-red-400">{error}</p>}
-          {connection === 'connecting' && (
-            <p className="text-sm text-muted-foreground">Connecting…</p>
-          )}
-          {connection === 'lost' && (
-            <p className="text-sm text-amber-500">
-              The connection to the server was lost.{' '}
-              <button className="underline" onClick={() => setAttempt((n) => n + 1)}>
-                Reconnect
-              </button>
-            </p>
-          )}
-          {job?.message && (
-            <p
-              className={
-                status === 'failed' ? 'text-sm text-red-400' : 'text-sm text-muted-foreground'
-              }
-            >
-              {job.message}
-            </p>
-          )}
-          {job && (
-            <>
-              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                <div
-                  className="h-full bg-primary transition-[width]"
-                  style={{ width: `${percent}%` }}
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <Stat label="Progress" testId="job-percent" value={`${percent.toFixed(1)} %`} />
-                <Stat
-                  label="Step"
-                  value={`${(progress?.step ?? job.stepsDone).toLocaleString('en')} / ${job.stepsTotal.toLocaleString('en')}`}
-                />
-                <Stat
-                  label="Simulated time"
-                  value={progress ? `${formatValue(progress.simTime)} s` : '—'}
-                />
-                {/* Progress messages carry no frame count: it is known once the run is over. */}
-                {status && !ACTIVE.includes(status) && (
-                  <Stat label="Frames" value={job.frames.toLocaleString('en')} />
-                )}
-                <Stat
-                  label="Engine"
-                  value={`${job.backend}${job.device ? ` · ${job.device}` : ''}`}
-                />
-                <Stat
-                  label="Throughput"
-                  value={progress?.mlups ? `${formatValue(progress.mlups)} MLUPS` : '—'}
-                />
-                <Stat
-                  label="Max Mach (lattice)"
-                  value={progress ? formatValue(progress.maxMach) : '—'}
-                />
-                <Stat label="Mass drift" value={progress ? formatValue(progress.massDrift) : '—'} />
-                <Stat label="Wall time" value={elapsed !== null ? formatDuration(elapsed) : '—'} />
-                {job.estimate && (
-                  <Stat label="Device memory" value={formatBytes(job.estimate.memoryBytes)} />
-                )}
-              </div>
-              {job.warnings?.length || job.notes?.length || state.log.length ? (
-                <section className="text-xs">
-                  <h3 className="mb-1 font-medium tracking-wide text-muted-foreground uppercase">
-                    Log
-                  </h3>
-                  <ul className="flex flex-col gap-0.5 font-mono">
-                    {job.notes?.map((n, i) => (
-                      <li key={`n${i}`}>{n}</li>
-                    ))}
-                    {job.warnings?.map((w, i) => (
-                      <li key={`w${i}`} className="text-amber-500">
-                        {w.message}
-                      </li>
-                    ))}
-                    {state.log.map((l, i) => (
-                      <li key={`l${i}`}>{l}</li>
-                    ))}
-                  </ul>
-                </section>
-              ) : null}
-              <p className="mt-auto text-xs text-muted-foreground">
-                Results on the server: {`results/${job.id}`}
-              </p>
-            </>
-          )}
+        <aside className="flex w-96 shrink-0 flex-col overflow-y-auto border-l border-border p-4">
+          <Tabs defaultValue="run">
+            <TabsList>
+              <TabsTrigger value="plots" data-testid="job-tab-plots">
+                Plots
+              </TabsTrigger>
+              <TabsTrigger value="run" data-testid="job-tab-run">
+                Run
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="plots">
+              <PlotsPanel viewer={viewer} />
+            </TabsContent>
+            <TabsContent value="run">
+              {error && <p className="text-sm text-red-400">{error}</p>}
+              {connection === 'connecting' && (
+                <p className="text-sm text-muted-foreground">Connecting…</p>
+              )}
+              {connection === 'lost' && (
+                <p className="text-sm text-amber-500">
+                  The connection to the server was lost.{' '}
+                  <button className="underline" onClick={() => setAttempt((n) => n + 1)}>
+                    Reconnect
+                  </button>
+                </p>
+              )}
+              {job?.message && (
+                <p
+                  className={
+                    status === 'failed' ? 'text-sm text-red-400' : 'text-sm text-muted-foreground'
+                  }
+                >
+                  {job.message}
+                </p>
+              )}
+              {job && (
+                <>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full bg-primary transition-[width]"
+                      style={{ width: `${percent}%` }}
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <Stat label="Progress" testId="job-percent" value={`${percent.toFixed(1)} %`} />
+                    <Stat
+                      label="Step"
+                      value={`${(progress?.step ?? job.stepsDone).toLocaleString('en')} / ${job.stepsTotal.toLocaleString('en')}`}
+                    />
+                    <Stat
+                      label="Simulated time"
+                      value={progress ? `${formatValue(progress.simTime)} s` : '—'}
+                    />
+                    {/* Progress messages carry no frame count: it is known once the run is over. */}
+                    {status && !ACTIVE.includes(status) && (
+                      <Stat label="Frames" value={job.frames.toLocaleString('en')} />
+                    )}
+                    <Stat
+                      label="Engine"
+                      value={`${job.backend}${job.device ? ` · ${job.device}` : ''}`}
+                    />
+                    <Stat
+                      label="Throughput"
+                      value={progress?.mlups ? `${formatValue(progress.mlups)} MLUPS` : '—'}
+                    />
+                    <Stat
+                      label="Max Mach (lattice)"
+                      value={progress ? formatValue(progress.maxMach) : '—'}
+                    />
+                    <Stat
+                      label="Mass drift"
+                      value={progress ? formatValue(progress.massDrift) : '—'}
+                    />
+                    <Stat
+                      label="Wall time"
+                      value={elapsed !== null ? formatDuration(elapsed) : '—'}
+                    />
+                    {job.estimate && (
+                      <Stat label="Device memory" value={formatBytes(job.estimate.memoryBytes)} />
+                    )}
+                  </div>
+                  {job.warnings?.length || job.notes?.length || state.log.length ? (
+                    <section className="text-xs">
+                      <h3 className="mb-1 font-medium tracking-wide text-muted-foreground uppercase">
+                        Log
+                      </h3>
+                      <ul className="flex flex-col gap-0.5 font-mono">
+                        {job.notes?.map((n, i) => (
+                          <li key={`n${i}`}>{n}</li>
+                        ))}
+                        {job.warnings?.map((w, i) => (
+                          <li key={`w${i}`} className="text-amber-500">
+                            {w.message}
+                          </li>
+                        ))}
+                        {state.log.map((l, i) => (
+                          <li key={`l${i}`}>{l}</li>
+                        ))}
+                      </ul>
+                    </section>
+                  ) : null}
+                  <p className="text-xs text-muted-foreground">
+                    Results on the server: {`results/${job.id}`}
+                  </p>
+                </>
+              )}
+            </TabsContent>
+          </Tabs>
         </aside>
       </div>
     </div>

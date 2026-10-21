@@ -1,6 +1,7 @@
 // Simulation jobs (03 §7): submit, list, read, pause/resume/cancel, the files of a run, and the
 // WebSocket stream of a job's status, progress and frames (binary messages, for the viewer).
 import type { Scene } from '../generated/scene.ts'
+import type { Columns, Rows } from '../viewer/series.ts'
 import { api, type Estimate, type Issue } from './client.ts'
 
 export type JobStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled'
@@ -43,6 +44,15 @@ export interface Job {
 
 export const ACTIVE: readonly JobStatus[] = ['queued', 'running', 'paused']
 
+/** The parts of a run's `meta.json` (03 §6.2) the viewer uses; written when the job starts. */
+export interface RunMeta {
+  units: { dx: number; dt: number; rho0: number }
+  dimensionless: { reference: { length: number; velocity: number; reynolds: number } }
+  run: { outputEverySteps: number; sampleEverySteps: number; endTime: number }
+}
+
+const path = (id: string, rest = '') => `/api/simulations/${encodeURIComponent(id)}${rest}`
+
 export const jobs = {
   submit: (scene: Scene) => api.request<Job>('POST', '/api/simulations', { scene }),
   list: () => api.request<Job[]>('GET', '/api/simulations?limit=100'),
@@ -56,6 +66,10 @@ export const jobs = {
   /** The exact scene of a run (`results/{id}/scene.json`). */
   scene: (id: string) =>
     api.request<Scene>('GET', `/api/simulations/${encodeURIComponent(id)}/files/scene.json`),
+  /** The run's `meta.json` (404 until the job has started). */
+  meta: (id: string) => api.request<RunMeta>('GET', path(id, '/files/meta.json')),
+  /** A file of the run as text (e.g. `forces.csv`). */
+  text: (id: string, name: string) => api.text(path(id, `/files/${name}`)),
   /** Cancels if needed, then deletes the job's results and record. */
   purge: (id: string) =>
     api.request<unknown>('DELETE', `/api/simulations/${encodeURIComponent(id)}?purge=true`),
@@ -81,9 +95,16 @@ export type StreamMessage =
       format?: StreamFormat | null
       /** Min/max of each field over the frames so far (velocity: of its magnitude). */
       ranges?: Record<string, [number, number]>
+      /** The columns of `forces`, `probes` and `diagnostics` (the CSV headers); `null` until the job has started. */
+      series?: Columns | null
     }
   | { type: 'status'; status: JobStatus; reason?: FailReason; message?: string }
   | ({ type: 'progress' } & Progress)
+  /**
+   * The series rows sampled since the last `series` message (sent before each `progress`);
+   * `resync`: some were missed (the viewer fell behind), read the files again.
+   */
+  | { type: 'series'; rows: Rows; resync?: boolean }
   | { type: 'log'; message: string }
   | {
       type: 'done'
