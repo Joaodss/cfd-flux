@@ -265,9 +265,12 @@ pub fn cylinder_re100() -> Scene {
             velocity: Some(1.0),
             temperature_difference: None,
         }),
+        // 20 s: the shedding starts at ≈ 4 s and its overshoot decays until ≈ 10 s, so the
+        // viewer's default statistics window (the second half, 10–20 s, ≈ 30 periods) is periodic
+        // (as `cfd-cli compare`'s statistics). A frame every 0.02 s keeps the run at 1,000 frames.
         run: run(
-            8.0,
-            0.01,
+            20.0,
+            0.02,
             vec![
                 OutputField::Velocity,
                 OutputField::Pressure,

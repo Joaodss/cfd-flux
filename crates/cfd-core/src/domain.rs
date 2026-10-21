@@ -939,8 +939,9 @@ mod tests {
         // Mean over the inlet = 2/3 of the peak (the benchmark's U_mean = 1 m/s).
         let mean: f64 = (1..83).map(inlet_u).sum::<f64>() / 82.0;
         assert!((d.units.velocity_to_physical(mean) - 1.0).abs() < 1e-3);
-        // 8 s of physical time.
-        assert_eq!(d.run.total, d.units.time_to_steps(8.0));
+        // 20 s of physical time, a frame every 0.02 s.
+        assert_eq!(d.run.total, d.units.time_to_steps(20.0));
+        assert_eq!(d.run.output_every, d.units.time_to_steps(0.02));
     }
 
     #[test]
