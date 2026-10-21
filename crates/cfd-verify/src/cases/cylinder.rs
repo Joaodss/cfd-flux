@@ -62,6 +62,22 @@ fn limit(level: Level) -> f64 {
     }
 }
 
+/// The relative tolerance each level checks, with the resolution (cells per diameter) it is
+/// checked at: the finest size of the level. `periodic`: 2D-2, else 2D-1.
+pub fn tolerances(periodic: bool) -> Vec<(u32, f64)> {
+    [Level::Quick, Level::Full]
+        .into_iter()
+        .map(|level| {
+            let sizes = if periodic {
+                sizes_periodic(level)
+            } else {
+                sizes(level)
+            };
+            (*sizes.last().expect("sizes"), limit(level))
+        })
+        .collect()
+}
+
 /// Drag and lift coefficients `2F/(ρ Ū² D)` from the force on the cylinder (ρ = 1).
 fn coefficients(run: &mut Run, u_mean: f64) -> [f64; 2] {
     let units = run.domain().units;

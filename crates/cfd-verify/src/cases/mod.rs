@@ -10,6 +10,8 @@ mod cylinder;
 mod heated_cavity;
 mod rayleigh_benard;
 
+pub use cylinder::tolerances as cylinder_tolerances;
+
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::Instant;
 

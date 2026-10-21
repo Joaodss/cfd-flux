@@ -1,0 +1,61 @@
+{
+  "schaferTurek2D1": {
+    "title": "Schäfer–Turek 2D-1 (cylinder, Re = 20, steady)",
+    "citation": "Schäfer & Turek (1996), Notes Numer. Fluid Mech. 52, 547–566",
+    "quantities": {
+      "cdMean": [
+        5.57,
+        5.59
+      ],
+      "clMean": [
+        0.0104,
+        0.011
+      ]
+    },
+    "checked": [
+      "cdMean"
+    ],
+    "tolerances": [
+      {
+        "cells": 20,
+        "relative": 0.05
+      },
+      {
+        "cells": 40,
+        "relative": 0.02
+      }
+    ]
+  },
+  "schaferTurek2D2": {
+    "title": "Schäfer–Turek 2D-2 (cylinder, Re = 100, periodic)",
+    "citation": "Schäfer & Turek (1996), Notes Numer. Fluid Mech. 52, 547–566",
+    "quantities": {
+      "cdMax": [
+        3.22,
+        3.24
+      ],
+      "clMax": [
+        0.99,
+        1.01
+      ],
+      "strouhal": [
+        0.295,
+        0.305
+      ]
+    },
+    "checked": [
+      "strouhal",
+      "cdMax"
+    ],
+    "tolerances": [
+      {
+        "cells": 20,
+        "relative": 0.05
+      },
+      {
+        "cells": 80,
+        "relative": 0.02
+      }
+    ]
+  }
+}

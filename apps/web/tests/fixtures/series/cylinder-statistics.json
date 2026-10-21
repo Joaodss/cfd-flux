@@ -1,0 +1,10 @@
+{
+  "frequency": 2.9724319785214686,
+  "reference": {
+    "density": 1.0,
+    "length": 0.1,
+    "velocity": 1.0
+  },
+  "samples": 1501,
+  "strouhal": 0.29724319785214687
+}

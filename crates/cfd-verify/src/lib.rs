@@ -10,6 +10,7 @@
 //! - [`cases`]: the cases themselves and the [`cases::all`] registry.
 //! - [`parity`]: backend ↔ CPU-reference parity checks shared by the GPU backends' tests.
 //! - [`report`]: the Markdown report with SVG plots and PNG snapshots.
+//! - [`web`]: the reference data the web viewer's statistics are checked against.
 
 pub mod cases;
 pub mod compare;
@@ -19,6 +20,7 @@ mod plot;
 pub mod references;
 pub mod report;
 pub mod scenes;
+pub mod web;
 
 use cfd_core::{Domain, Solver};
 use serde::Serialize;
