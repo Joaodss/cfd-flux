@@ -20,20 +20,32 @@ const W: u32 = 37;
 const H: u32 = 23;
 
 /// A field of `n` values with long runs of zeros (long LZ4 matches with overlapping copies, match
-/// lengths past 255) between smooth noise (literal runs past 255), plus a few extreme values.
-fn values(n: usize, seed: f32) -> Vec<f32> {
+/// lengths past 255) between noisy values (literal runs past 255), plus a few extreme values.
+///
+/// Only `+ − × ÷` on integers and floats, which IEEE 754 rounds exactly on every platform: the
+/// first version used `f32::sin`, which comes from the platform's maths library, and the f32
+/// fixture written on Windows differed by an ulp on Linux (CI).
+fn values(n: usize, seed: u32) -> Vec<f32> {
     (0..n)
         .map(|i| match i {
             _ if (200..600).contains(&i) => 0.0,
             0 => 1.0e-6,  // an f16 subnormal
             1 => 60000.0, // near the largest f16
             2 => -0.0,
-            _ => (seed + 0.37 * i as f32).sin() * 3.0 + 0.001 * i as f32,
+            _ => {
+                // A small integer hash (an LCG step) → [0, 1), then a parabola for the shape.
+                let h = (i as u32 ^ seed.wrapping_mul(0x9e37_79b9))
+                    .wrapping_mul(1_664_525)
+                    .wrapping_add(1_013_904_223);
+                let noise = (h >> 8) as f32 / (1u32 << 24) as f32;
+                let x = (i % 97) as f32 / 97.0;
+                6.0 * x * (1.0 - x) - 1.5 + noise + 0.001 * i as f32
+            }
         })
         .collect()
 }
 
-fn field(name: &str, components: u8, dtype: Dtype, seed: f32) -> Field {
+fn field(name: &str, components: u8, dtype: Dtype, seed: u32) -> Field {
     Field {
         desc: FieldDesc {
             name: name.into(),
@@ -46,11 +58,11 @@ fn field(name: &str, components: u8, dtype: Dtype, seed: f32) -> Field {
 
 fn frame(dtype: Dtype, frame_index: u32) -> Frame {
     let mut fields = vec![
-        field("velocity", 2, dtype, 0.0),
-        field("pressure", 1, dtype, 1.0),
+        field("velocity", 2, dtype, 0),
+        field("pressure", 1, dtype, 1),
     ];
     if dtype == Dtype::F32 {
-        fields.push(field("vorticity", 1, dtype, 2.0));
+        fields.push(field("vorticity", 1, dtype, 2));
     }
     Frame {
         job_id: "fixture".into(),
