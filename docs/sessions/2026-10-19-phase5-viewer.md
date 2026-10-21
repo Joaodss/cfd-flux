@@ -6,7 +6,7 @@ gets long, with everything tested and committed.
 
 | # | Task | Status |
 |---|------|--------|
-| H1 | Record the author's hand-timed Phase 4 acceptance run | ⏳ waiting for the time |
+| H1 | Record the author's hand-timed Phase 4 acceptance run | ✅ 9 min 30 s, misses < 2 min (recorded 2026-10-21; Q14) |
 | H2 | Local folder `cfd-flux`: absolute paths, build/tests/e2e from the new place | ⏳ the folder was not moved yet (below) |
 | H3 | Reference scales (proposal §7.4, option A) | ✅ |
 | D | Phase 5 design proposal, open questions answered | ✅ every proposal of §16 accepted |
