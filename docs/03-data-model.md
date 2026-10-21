@@ -167,7 +167,7 @@ results/{job_id}/
   forces.csv          # force per element (N/m, gauge)
   diagnostics.csv     # mass, kinetic energy, max velocity/Mach, heat
 ```
-Written by `cfd-job` for both `cfd-cli run --out DIR` and server jobs (`<data>/results/{job id}/`), so `cfd-cli render` works on server results. `meta.json` records:
+The CSV series get a row every sample interval; the files are flushed before each progress report (so a viewer that reads them while the run goes on gets whole lines, up to some step) and the same rows reach viewers as `series` messages (§7). Written by `cfd-job` for both `cfd-cli run --out DIR` and server jobs (`<data>/results/{job id}/`), so `cfd-cli render` works on server results. `meta.json` records:
 - `run.status`: `running` while the job runs, then `completed`, `diverged` (with a message and hints) or `cancelled`;
 - `run.frames` (output events) and `run.framesStored` (frame files; fewer with `--no-frames` / `storeFrames: false`, or past the server's per-job `maxStoredBytes`, which adds a `storage.limit` warning — the run goes on without storing frames);
 - `generator`: `cfd-cli x.y.z` or `cfd-server x.y.z`.
@@ -213,12 +213,14 @@ Server → client; text messages are JSON with a `type`, binary messages are str
 
 | `type` | When | Content |
 |--------|------|---------|
-| `hello` | first | `job` (as `GET /api/simulations/{id}`), `grid` (`width`, `height`, `dx`, `dt`, `thermal`; `null` until the job starts), `format` (`fields`, `maxSize`, `factor`, `width`, `height`, `dtype`), `ranges` (min/max of each field so far; velocity: of its magnitude) |
+| `hello` | first | `job` (as `GET /api/simulations/{id}`), `grid` (`width`, `height`, `dx`, `dt`, `thermal`; `null` until the job starts), `format` (`fields`, `maxSize`, `factor`, `width`, `height`, `dtype`), `ranges` (min/max of each field so far; velocity: of its magnitude), `series` (`forces`, `probes`, `diagnostics`: the column names, i.e. the CSV headers; `null` until the job starts) |
 | `status` | on a change | `status`, `reason?`, `message?` |
+| `series` | before each `progress` and before `done` | `rows`: `{ forces?, probes?, diagnostics? }`, each a list of rows `[step, time, …]` in the columns of `hello.series` (the values of the CSV lines; `NaN` is `null`), sampled since the last `series` message and already on disk; `resync: true` (with no rows) after the viewer fell behind: read the files again |
 | `progress` | at most 10 Hz | `step`, `total`, `simTime`, `percent`, `mlups`, `massDrift`, `maxMach` |
 | `log` | occasionally | `message` (e.g. the stored-frame limit was reached) |
 | `done` | last | `status`, `reason?`, `message?`, `stepsDone`, `frames`; the server then closes the socket |
 
 - A viewer gets the latest frame of its format; one that reads slowly skips frames (never the last one, sent before `done`), and the job never waits for viewers. Events are buffered per viewer (64); one that falls further behind gets the current `status`/`progress` again.
-- A viewer of a finished job gets `hello` and `done` at once.
+- A viewer of a finished job gets `hello` and `done` at once (the series are in the files then).
+- A viewer that joins a running job reads `files/{forces,probes,diagnostics}.csv` (complete lines up to some step) and appends the `series` rows whose step is past the files' last one: every row sent before it joined is in the files, every later one comes in a message.
 - Client → server messages are reserved for interactive mode (Phase 5b): `{ "type": "patch", "rect": [...], "layer": "cellType", "data": ... }`, `{ "type": "setParam", ... }`; until then they are ignored. Pause, resume and cancel go through REST.

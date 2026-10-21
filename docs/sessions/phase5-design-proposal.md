@@ -382,6 +382,10 @@ the run, scrub back to the start and play it again; the statistics over the peri
 suite's tolerance at this resolution (D = 20 cells, `--quick`); the report has St −1.2 % and C_D,max +4.9 % there,
 and 2 % is only required at D = 80. The example runs 8 s; the shedding becomes periodic at ≈ 7 s, which leaves about
 three periods — **proposed: `endTime` 12 s for the example** (≈ 15 periods in the window 6–12 s, ≈ 3 s of GPU time).
+**Changed with the author (2026-10-21): `endTime` 20 s, a frame every 0.02 s.** Measured on CUDA, the shedding's
+overshoot decays until ≈ 10 s, so the second half of a 12 s run reads C_D,max = 3.419 (+5.8 %, a fail); over 10–20 s
+the run is periodic (as `cfd-cli compare`'s statistics already assume): St 0.2973 (−0.9 %), C_D,max 3.375 (+4.5 %).
+1,000 frames (434 MB stored) instead of 1,200 at 0.01 s.
 Plus the plan's MVP line: export a PNG, the force CSV and a video of the street.
 
 ## 15. Proposed order (each step tested and committed before the next)
@@ -420,5 +424,5 @@ Steps 1–3 are the "first implementation steps" of this session; the session st
 | Q10 | Export: PNG, CSV and MP4 (WebCodecs + `mp4-muxer`, MediaRecorder fallback); GIF and VTK left out? (§8) | Yes |
 | Q11 | Gallery results generated on first open (reusing the latest run of the same scene), CPU quick variants, no precomputed results in the repo/releases? (§9) | Yes |
 | Q12 | Serving the app: embedded with `rust-embed` behind a `web` feature, `--web-dir`, `--open`? (§10) | Yes |
-| Q13 | Acceptance: St and C_D,max within 5 % at D = 20 cells (the suite's tolerance at that resolution), the cylinder example's `endTime` 8 → 12 s, the full check as a local `@full` Playwright test? (§14) | Yes |
+| Q13 | Acceptance: St and C_D,max within 5 % at D = 20 cells (the suite's tolerance at that resolution), the cylinder example's `endTime` 8 → 12 s, the full check as a local `@full` Playwright test? (§14) | Yes (`endTime` changed to 20 s on 2026-10-21, §14) |
 | Q14 | New dependencies: `uPlot` (ADR-005), `mp4-muxer` (export step); Rust: `rust-embed`, `webbrowser`. | Yes |

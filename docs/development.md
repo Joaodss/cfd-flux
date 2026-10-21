@@ -11,7 +11,7 @@
 **Author's machine (verified 2026-10-09; driver updated 2026-10-12):** RTX 4060 8 GB (`sm_89`), driver 617.42 (CUDA 13.4; was 610.62 = CUDA 13.3),
 CUDA Toolkit 13.4, VS Build Tools 2022 (MSVC 14.4x), Rust 1.90 `stable-x86_64-pc-windows-msvc`, Node 24.
 Native `cargo build/test` and a CUDA test kernel (`nvcc -arch=sm_89`) both work. The checkout lives in
-`D:GithubProjectslive-fluids` (moved from `C:Users…DesktopGithubProjects` on 2026-10-21; nothing in the
+`D:\GithubProjects\live-fluids` (moved from `C:\Users\…\Desktop\GithubProjects` on 2026-10-21; nothing in the
 repository names an absolute path). **Use `CARGO_BUILD_JOBS=4`** for the full test build: with the default 16 parallel
 jobs rustc runs out of paging file ("the paging file is too small").
 
@@ -71,6 +71,10 @@ cargo run -p cfd-cli -- library apps/web/src/generated/library.json
 cargo run -p cfd-cli -- colormaps apps/web/src/generated/colormaps.json
 # Frames for the viewer's decoder contract test (apps/web/tests/fixtures/frames/), after changing the frame format
 UPDATE_FIXTURES=1 cargo test -p cfd-io --test browser_fixtures
+# Benchmark references and the suite's tolerances (cfd-verify) for the viewer's statistics; a test checks it
+cargo run -p cfd-cli -- references apps/web/src/generated/references.json
+# The St the viewer must reproduce on apps/web/tests/fixtures/series/cylinder-forces.csv
+UPDATE_FIXTURES=1 cargo test -p cfd-verify --test web_contract
 
 # Check scene files
 cargo run -p cfd-cli -- validate scenes/*.json

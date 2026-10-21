@@ -159,7 +159,7 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 - [ ] M — Field selector (velocity, pressure, temperature, vorticity), vectors, streamlines (RK4 on the client). *(Field selector done: |u|, u_x, u_y, p, ω, T, ρ.)*
 - [ ] M — Animated tracer particles/smoke (GPU on the client).
 - [x] S — Timeline: play/pause/scrub/speed. *(2026-10-20: Live, step ←/→, loop; stored frames fetched in the stream format, `GET …/frames/{n}?fields=&maxSize=`.)*
-- [ ] M — Probe and force plots (e.g. uPlot); statistics (St, C_D, Nu).
+- [ ] M — Probe and force plots (e.g. uPlot); statistics (St, C_D, Nu). *(2026-10-21, plots and force statistics done: the `series` stream message and CSVs flushed at each progress tick; uPlot plots of C_D/C_L (first body by default), probes, mass drift and max Mach, playhead cursor, click to seek; statistics over a draggable window — St, mean/max C_D, mean/amplitude/max C_L — with a contract test against `cfd-verify`'s St and references generated from it. The cylinder example now runs 20 s (second half periodic: St −0.9 %, C_D,max +4.5 % at D = 20). Nu waits for `heat.csv`, design step 10.)*
 - [ ] S — Export PNG, CSV and video (WebCodecs/MediaRecorder).
 - [ ] M — Gallery of **quick examples** (cylinder, natural convection, dam break…) with precomputed or low-resolution results (< 10 s), for education/demo ([ADR-009](07-decisions-and-questions.md)).
 
