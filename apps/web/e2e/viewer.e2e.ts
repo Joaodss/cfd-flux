@@ -90,4 +90,11 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   const [at] = (await position.textContent())!.split(' ')
   expect(Number(at)).toBeGreaterThan(0)
   expect(Number(at)).toBeLessThan(last)
+
+  // The Statistics tab: the force statistics of the second half, compared with Schäfer–Turek
+  // 2D-2 (the run is too short to shed: no St yet).
+  await page.getByTestId('job-tab-stats').click()
+  await expect(page.getByTestId('stats-window')).toHaveText('Window 0.25–0.5 s (second half)')
+  await expect(page.getByTestId('stats-benchmark')).toHaveValue('schaferTurek2D2')
+  await expect(page.getByTestId('stat-cdMax')).toHaveText(/^C_D,max\d/)
 })

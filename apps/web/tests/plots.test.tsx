@@ -2,6 +2,7 @@
 // The Plots tab of the job view: the files and `meta.json` are read once the job runs, stream
 // rows are appended, and each plot is a uPlot chart (replaced here by a stand-in that records its
 // data: happy-dom has no 2D canvas).
+import { readFileSync } from 'node:fs'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Job, RunMeta } from '../src/api/jobs.ts'
@@ -112,5 +113,26 @@ describe('Plots tab', () => {
     // C = 2F / (ρ U² L) = F / 0.06.
     expect(cd.map((v) => +v.toFixed(9))).toEqual([1, 2, 3])
     expect(cl.map((v) => +v.toFixed(9))).toEqual([0, 0.1, -0.1])
+  })
+
+  it('shows the statistics of the second half against the benchmark of the example', async () => {
+    // A finished run of the cylinder example: 8.5–10 s of its real forces, D = 20 cells.
+    FILES['forces.csv'] = readFileSync('tests/fixtures/series/cylinder-forces.csv', 'utf8') // from apps/web
+    FILES['meta.json'] = JSON.stringify({ ...META, units: { dx: 0.005, dt: 1e-4, rho0: 1 } })
+    render(<JobView id="job-1" />)
+    FakeSocket.last.send({ type: 'hello', job: { ...job, status: 'completed' } })
+    FakeSocket.last.send({ type: 'done', status: 'completed', stepsDone: 100, frames: 10 })
+    await act(async () => new Promise((r) => setTimeout(r, 10)))
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByTestId('job-tab-stats'))
+      fireEvent.click(screen.getByTestId('job-tab-stats'))
+    })
+    expect(screen.getByTestId('stats-window').textContent).toBe('Window 9.25–10 s (second half)')
+    expect(screen.getByTestId('stats-benchmark')).toHaveProperty('value', 'schaferTurek2D2')
+    expect(screen.getByTestId('stat-strouhal').textContent).toMatch(/^St0\.297/)
+    expect(screen.getByTestId('stat-strouhal-check').textContent).toMatch(/^−?-?0\.\d % ✓$/)
+    expect(screen.getByTestId('stat-cdMax-check').textContent).toMatch(/^\+4\.\d % ✓$/)
+    expect(screen.getByTestId('stat-clMax-check').textContent).not.toMatch(/[✓✗]/)
+    expect(screen.getByTestId('stats-tolerance').textContent).toMatch(/5 %.* 20 cells/)
   })
 })

@@ -10,8 +10,18 @@ export interface Example {
   /** File name without `.json`, e.g. `cylinder-re100`. */
   id: string
   scene: Scene
+  /** The benchmark it reproduces: a key of `generated/references.json` (the job view's statistics). */
+  benchmark?: string
+}
+
+/** The benchmarks of the examples that reproduce one. */
+const BENCHMARKS: Record<string, string> = {
+  'cylinder-re100': 'schaferTurek2D2',
 }
 
 export const EXAMPLES: Example[] = Object.entries(modules)
-  .map(([path, scene]) => ({ id: path.replace(/^.*\/(.+)\.json$/, '$1'), scene }))
+  .map(([path, scene]) => {
+    const id = path.replace(/^.*\/(.+)\.json$/, '$1')
+    return { id, scene, benchmark: BENCHMARKS[id] }
+  })
   .sort((a, b) => a.id.localeCompare(b.id))

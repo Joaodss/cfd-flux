@@ -6,6 +6,7 @@ import { create } from 'zustand'
 import type { RunMeta, StreamMessage } from '../api/jobs.ts'
 import { shownElement } from './elements.ts'
 import { forceElements } from './plots.ts'
+import { defaultWindow, type Window } from './statistics.ts'
 import { SERIES, SeriesBuffer } from './series.ts'
 
 export interface SeriesSource {
@@ -88,10 +89,13 @@ interface SeriesState {
   bodies: string[]
   /** The element chosen for the force plot and statistics (`null`: the first body). */
   element: string | null
+  /** The statistics window dragged on a plot (`null`: the second half of the run so far). */
+  window: Window | null
   setFeed(feed: SeriesFeed | null): void
   bump(): void
   setBodies(bodies: string[]): void
   setElement(element: string): void
+  setWindow(window: Window | null): void
 }
 
 export const useSeries = create<SeriesState>()((set) => ({
@@ -99,11 +103,27 @@ export const useSeries = create<SeriesState>()((set) => ({
   version: 0,
   bodies: [],
   element: null,
-  setFeed: (feed) => set((s) => ({ feed, version: s.version + 1, bodies: [], element: null })),
+  window: null,
+  setFeed: (feed) =>
+    set((s) => ({ feed, version: s.version + 1, bodies: [], element: null, window: null })),
   bump: () => set((s) => ({ version: s.version + 1 })),
   setBodies: (bodies) => set({ bodies }),
   setElement: (element) => set({ element }),
+  setWindow: (window) => set({ window }),
 }))
+
+/** The statistics window: the one dragged, else the second half of the forces' time so far. */
+export function useWindow(): { window: Window | null; chosen: boolean } {
+  const feed = useSeries((s) => s.feed)
+  const version = useSeries((s) => s.version)
+  const chosen = useSeries((s) => s.window)
+  return useMemo(() => {
+    void version
+    if (chosen) return { window: chosen, chosen: true }
+    const time = feed?.buffer.table('forces')?.data[1] ?? []
+    return { window: defaultWindow(time), chosen: false }
+  }, [feed, version, chosen])
+}
 
 /** The force element shown (chosen, else the first body, else the first) and the choices. */
 export function useElement(): { element: string | null; available: string[] } {

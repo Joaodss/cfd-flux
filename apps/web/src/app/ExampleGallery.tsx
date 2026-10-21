@@ -6,6 +6,7 @@ import type { Layers } from '../editor/layers.ts'
 import { formatLength } from '../panels/format.ts'
 import { EXAMPLES, type Example } from '../scene/examples.ts'
 import { fromScene } from '../scene/io.ts'
+import { BENCHMARKS, isBenchmark } from '../viewer/references.ts'
 import { openExample } from './documents.ts'
 
 /** Draws the cells into an RGBA image, one pixel per cell (y up → image rows from the top). */
@@ -83,6 +84,11 @@ export function ExampleGallery(props: { open: boolean; onOpenChange: (open: bool
                   {ex.scene.description && (
                     <span className="line-clamp-2 text-xs text-muted-foreground">
                       {ex.scene.description}
+                    </span>
+                  )}
+                  {isBenchmark(ex.benchmark) && (
+                    <span className="text-[11px] text-muted-foreground">
+                      Benchmark: {BENCHMARKS[ex.benchmark].title}
                     </span>
                   )}
                   <span className="text-[11px] text-muted-foreground tabular-nums">

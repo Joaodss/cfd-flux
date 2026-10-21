@@ -1,5 +1,5 @@
 // The job view (`#/jobs/{id}`): the field viewer (Phase 5) fed by the job's WebSocket stream,
-// and beside it the tabs Plots (the run's series) and Run (status, progress, log).
+// and beside it the tabs Plots (the run's series), Statistics and Run (status, progress, log).
 import { ArrowLeft, Pause, Play, Square } from 'lucide-react'
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { ApiError } from '../api/client.ts'
@@ -11,6 +11,7 @@ import type { Viewer } from '../viewer/Viewer.ts'
 import { fromScene } from '../scene/io.ts'
 import { bodies } from '../viewer/elements.ts'
 import { PlotsPanel } from '../viewer/PlotsPanel.tsx'
+import { StatsPanel } from '../viewer/StatsPanel.tsx'
 import { SeriesFeed, useSeries } from '../viewer/seriesFeed.ts'
 import { TimelineBar } from '../viewer/TimelineBar.tsx'
 import { ViewerCanvas } from '../viewer/ViewerCanvas.tsx'
@@ -231,12 +232,18 @@ export function JobView({ id }: { id: string }) {
               <TabsTrigger value="plots" data-testid="job-tab-plots">
                 Plots
               </TabsTrigger>
+              <TabsTrigger value="stats" data-testid="job-tab-stats">
+                Statistics
+              </TabsTrigger>
               <TabsTrigger value="run" data-testid="job-tab-run">
                 Run
               </TabsTrigger>
             </TabsList>
             <TabsContent value="plots">
               <PlotsPanel viewer={viewer} />
+            </TabsContent>
+            <TabsContent value="stats">
+              <StatsPanel sceneName={job?.scene} />
             </TabsContent>
             <TabsContent value="run">
               {error && <p className="text-sm text-red-400">{error}</p>}
