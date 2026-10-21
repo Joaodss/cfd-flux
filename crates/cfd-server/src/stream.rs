@@ -19,12 +19,12 @@ use axum::extract::{Path, Query, State};
 use axum::response::Response;
 use cfd_core::sample::{Precision, Sample, SampleData, SampleSpec};
 use cfd_core::scene::OutputField;
-use cfd_job::{Command, FrameEvent};
+use cfd_job::{Command, FrameEvent, SeriesColumns};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch};
 
 use crate::error::ApiError;
-use crate::jobs::{Event, GridInfo, Job, JobStatus, JobView};
+use crate::jobs::{Event, GridInfo, Job, JobStatus, JobView, SeriesRows};
 use crate::AppState;
 
 /// An encoded stream frame (LFFR, f16), shared by every viewer of its format (`Bytes` is
@@ -263,6 +263,8 @@ struct Hello<'a> {
     format: Option<FormatInfo>,
     /// Min/max of each field over the frames so far (velocity: of its magnitude).
     ranges: Ranges,
+    /// The columns of the series (the CSV headers); `null` until the job has started.
+    series: Option<&'a SeriesColumns>,
 }
 
 /// `GET /api/simulations/{id}/stream` (WebSocket): `hello`, then JSON events (`status`,
@@ -329,6 +331,7 @@ async fn viewer(
             grid: None,
             format: None,
             ranges: Ranges::new(),
+            series: None,
         };
         socket.send(text(&hello)).await?;
         socket.send(text(&view.done_event())).await?;
@@ -345,6 +348,7 @@ async fn viewer(
         grid,
         format: grid.map(|g| FormatInfo::new(&format, g.width, g.height)),
         ranges: job.hub.ranges(),
+        series: job.series.get(),
     };
     socket.send(text(&hello)).await?;
     let Some(rx) = frames.as_mut().filter(|_| view.status.is_active()) else {
@@ -368,9 +372,16 @@ async fn viewer(
                     break;
                 }
                 Ok(e) => socket.send(text(&e)).await?,
-                // Fell more than the channel's capacity behind: resynchronise from the view.
+                // Fell more than the channel's capacity behind: resynchronise from the view (and
+                // the series from the files).
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     let v = job.view();
+                    socket
+                        .send(text(&Event::Series {
+                            rows: Arc::new(SeriesRows::default()),
+                            resync: true,
+                        }))
+                        .await?;
                     socket
                         .send(text(&Event::Status {
                             status: v.status,

@@ -30,7 +30,7 @@ use cfd_io::frame::Dtype;
 
 use crate::meta::*;
 use crate::output::{OutputConfig, OutputJob, OutputThread, TrySend};
-use crate::series::Series;
+use crate::series::{Series, SeriesColumns, SeriesRow};
 use crate::store::ResultDir;
 use crate::{output_field_name, Prepared, RunOptions};
 
@@ -97,6 +97,8 @@ pub struct Started<'a> {
     pub scene: &'a str,
     pub domain: &'a Domain,
     pub choice: &'a SolverChoice,
+    /// The columns of `forces.csv`, `probes.csv` and `diagnostics.csv`.
+    pub series: &'a SeriesColumns,
 }
 
 /// Where the run is, after a batch of steps.
@@ -166,10 +168,17 @@ pub struct Outcome {
 /// `Send + Sync` because one observer is shared (`Arc`) by the job's threads: [`frame`] is called
 /// from the output thread, everything else from the thread running the loop.
 ///
+/// Order on the loop's thread: the [`sample`]s taken before a batch, then (the series files
+/// flushed) its [`progress`] — so every row an observer was given before a `progress` is on disk.
+///
 /// [`frame`]: JobObserver::frame
+/// [`sample`]: JobObserver::sample
+/// [`progress`]: JobObserver::progress
 pub trait JobObserver: Send + Sync {
     fn started(&self, _info: &Started) {}
     fn progress(&self, _progress: &Progress) {}
+    /// One row of every series, as written to the CSV files (every sample interval).
+    fn sample(&self, _row: &SeriesRow) {}
     fn paused(&self, _paused: bool) {}
     /// Whether frames should be sampled even when they are not stored (`--no-frames`).
     fn wants_frames(&self) -> bool {
@@ -563,6 +572,7 @@ pub fn run(
         scene: &scene.name,
         domain: solver.domain(),
         choice,
+        series: series.columns(),
     });
 
     let mut r = Runner {
@@ -608,7 +618,8 @@ pub fn run(
             }
         }
         if step >= next_sample {
-            r.series.sample(r.solver.as_mut(), &last)?;
+            let row = r.series.sample(r.solver.as_mut(), &last)?;
+            r.observer.sample(&row);
             next_sample += sample_every;
         }
         let mut request = None;
@@ -663,6 +674,9 @@ pub fn run(
             }
             Err(e) => return Err(e.into()),
         }
+        // Complete lines on disk before the progress that announces them (three small writes
+        // per batch of at most ≈ 50 ms).
+        r.series.flush()?;
         let done = r.solver.steps_done();
         r.observer.progress(&Progress {
             step: done,

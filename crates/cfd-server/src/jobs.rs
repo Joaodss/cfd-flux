@@ -31,7 +31,7 @@ use cfd_core::scene::OutputField;
 use cfd_engines::{EngineKind, Inventory, SolverChoice};
 use cfd_job::{
     Command, FrameEvent, JobContext, JobObserver, LocalStore, Outcome, Prepared, Progress,
-    ResultDir, Started, Status,
+    ResultDir, SeriesColumns, SeriesRow, Started, Status,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -155,6 +155,13 @@ pub enum Event {
         message: Option<String>,
     },
     Progress(ProgressDto),
+    /// The series rows sampled since the last `series` message (sent before each `progress`).
+    Series {
+        rows: Arc<SeriesRows>,
+        /// Some rows were missed (the viewer fell behind): read the files again.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        resync: bool,
+    },
     Log {
         message: String,
     },
@@ -253,6 +260,30 @@ impl JobView {
     }
 }
 
+/// Rows of the three series, `[step, time, …]` each (the columns of `hello.series`). `NaN`
+/// becomes `null` in JSON.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct SeriesRows {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub forces: Vec<Vec<f64>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub probes: Vec<Vec<f64>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub diagnostics: Vec<Vec<f64>>,
+}
+
+impl SeriesRows {
+    fn push(&mut self, row: &SeriesRow) {
+        self.forces.push(row.forces.clone());
+        self.probes.push(row.probes.clone());
+        self.diagnostics.push(row.diagnostics.clone());
+    }
+
+    fn is_empty(&self) -> bool {
+        self.forces.is_empty() && self.probes.is_empty() && self.diagnostics.is_empty()
+    }
+}
+
 /// Grid and units of a running job, for the stream's `hello`.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -273,6 +304,10 @@ pub struct Job {
     commands: mpsc::Sender<Command>,
     events: broadcast::Sender<Event>,
     pub(crate) grid: OnceLock<GridInfo>,
+    /// The series' columns, once the job has started.
+    pub(crate) series: OnceLock<SeriesColumns>,
+    /// Rows sampled since the last `series` event.
+    pending_rows: Mutex<SeriesRows>,
     pub(crate) hub: Hub,
     /// Delete the results once the job has stopped.
     purge: AtomicBool,
@@ -308,6 +343,18 @@ impl Job {
         let _ = self.events.send(e);
     }
 
+    /// Sends the rows sampled since the last `series` event, if any (before a `progress` and
+    /// before `done`). They are on disk already: the job flushes the files first.
+    pub(crate) fn emit_series(&self) {
+        let rows = std::mem::take(&mut *self.pending_rows.lock().unwrap());
+        if !rows.is_empty() {
+            self.emit(Event::Series {
+                rows: Arc::new(rows),
+                resync: false,
+            });
+        }
+    }
+
     pub(crate) fn send(&self, cmd: Command) {
         // Fails only when the job's loop is gone (the job is over): nothing to do then.
         let _ = self.commands.send(cmd);
@@ -332,6 +379,11 @@ impl JobObserver for Reporter {
             dt: d.units.dt,
             thermal: d.physics.thermal(),
         });
+        let _ = self.job.series.set(s.series.clone());
+    }
+
+    fn sample(&self, row: &SeriesRow) {
+        self.job.pending_rows.lock().unwrap().push(row);
     }
 
     fn progress(&self, p: &Progress) {
@@ -343,6 +395,7 @@ impl JobObserver for Reporter {
         let mut last = self.job.last_progress.lock().unwrap();
         if last.is_none_or(|t| t.elapsed() >= PROGRESS_INTERVAL) {
             *last = Some(Instant::now());
+            self.job.emit_series();
             self.job.emit(Event::Progress(dto));
         }
     }
@@ -545,6 +598,8 @@ impl JobManager {
             commands: tx,
             events: broadcast::channel(EVENT_CAPACITY).0,
             grid: OnceLock::new(),
+            series: OnceLock::new(),
+            pending_rows: Mutex::new(SeriesRows::default()),
             hub: Hub::default(),
             purge: AtomicBool::new(false),
             last_progress: Mutex::new(None),
@@ -845,6 +900,8 @@ async fn finish(state: &AppState, job: &Arc<Job>, result: anyhow::Result<Outcome
     ) {
         state.inner.record_mlups(kind, m);
     }
+    // The last rows (sampled after the last progress event), then the end.
+    job.emit_series();
     job.emit(view.done_event());
     jobs.after_end(job).await;
 }

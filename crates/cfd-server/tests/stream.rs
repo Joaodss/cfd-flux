@@ -264,6 +264,72 @@ async fn unknown_and_finished_jobs() {
     s.stop().await;
 }
 
+/// A run's file through the API, as text.
+async fn file(s: &TestServer, id: &str, name: &str) -> String {
+    let r = client()
+        .get(s.url(&format!("/api/simulations/{id}/files/{name}")))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success(), "{name}: {}", r.status());
+    r.text().await.unwrap()
+}
+
+/// `hello.series` names the columns and the `series` messages carry the rows: together, from
+/// the moment the viewer joined, exactly the end of each CSV file (Phase 5 design proposal §7.1).
+/// The last rows come before `done`, and every `series` message right before a `progress`.
+#[tokio::test]
+async fn series_rows_reach_viewers_and_end_the_files() {
+    let s = TestServer::start("ws-series").await;
+    let id = submit(&s, &examples::channel(), channel_options(0.3, 0.02)).await;
+    // Wait until it runs, so `hello` has the columns.
+    while job(&s, &id).await["stepsDone"].as_u64().unwrap_or(0) == 0 {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    let mut ws = connect(&s, &id, "").await;
+    let Msg::Text(hello) = next(&mut ws).await else {
+        panic!("hello first")
+    };
+    let (texts, _) = drain(&mut ws).await;
+    let kinds: Vec<&str> = texts.iter().map(|t| t["type"].as_str().unwrap()).collect();
+    assert_eq!(kinds[kinds.len() - 2..], ["series", "done"], "{kinds:?}");
+    for w in kinds.windows(2) {
+        if w[0] == "series" {
+            assert!(matches!(w[1], "progress" | "done"), "{kinds:?}");
+        }
+    }
+
+    for name in ["forces", "probes", "diagnostics"] {
+        let text = file(&s, &id, &format!("{name}.csv")).await;
+        let mut lines = text.lines();
+        let header: Vec<&str> = lines.next().unwrap().split(',').collect();
+        assert_eq!(hello["series"][name], json!(header), "{name} columns");
+        let on_disk: Vec<Vec<f64>> = lines
+            .map(|l| l.split(',').map(|v| v.parse().unwrap()).collect())
+            .collect();
+        let streamed: Vec<Vec<f64>> = texts
+            .iter()
+            .filter(|t| t["type"] == "series")
+            .flat_map(|t| t["rows"][name].as_array().cloned().unwrap_or_default())
+            .map(|r| {
+                r.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_f64().unwrap())
+                    .collect()
+            })
+            .collect();
+        assert!(!streamed.is_empty(), "{name}: rows streamed");
+        let tail = &on_disk[on_disk.len() - streamed.len()..];
+        // JSON numbers parse back to within an ulp (serde_json's fast float parsing).
+        for (a, b) in tail.iter().flatten().zip(streamed.iter().flatten()) {
+            assert!((a - b).abs() <= 1e-15 * a.abs(), "{name}: {a} vs {b}");
+        }
+        assert_eq!(tail.last().unwrap()[0], 300.0, "{name}: the last step");
+    }
+    s.stop().await;
+}
+
 /// Stored frames fetched in a stream format (`fields`, `maxSize`) equal the stream's frames of
 /// the same index byte for byte (on the CPU engine, where both come from the same f32 values), so
 /// the viewer can mix live and stored frames (Phase 5 design proposal §3.1).
