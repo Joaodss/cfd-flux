@@ -15,6 +15,7 @@ import {
   type VectorStyle,
 } from './overlays.ts'
 import { FIELD_FRAGMENT } from './shaders.ts'
+import { SimLayer, type StepParams } from './simulation.ts'
 
 const COMPONENT: Record<Component, number> = { scalar: 0, magnitude: 1, x: 2, y: 3 }
 
@@ -29,6 +30,11 @@ export interface FieldStyle {
 export interface Overlays {
   vectors: VectorStyle | null
   streamlines: Colour4 | null
+  /** The dye texture over the field. */
+  dye: boolean
+  particles: { colour: Colour4; size: number } | null
+  /** A marker line (the release line being drawn). */
+  mark: Colour4 | null
 }
 
 export interface ViewerColours {
@@ -69,6 +75,8 @@ export class FieldRenderer {
   private readonly lutTex: WebGLTexture
   private readonly vectorLayer: VectorLayer
   private readonly lineLayer: LineLayer
+  private readonly markLayer: LineLayer
+  private readonly sim: SimLayer
   private grid: [number, number] | null = null
   /** The field texture's size in blocks and the box factor k. */
   private field: { width: number; height: number; k: number } | null = null
@@ -115,6 +123,50 @@ export class FieldRenderer {
     this.lutTex = filteredTexture(gl)
     this.vectorLayer = new VectorLayer(gl)
     this.lineLayer = new LineLayer(gl)
+    this.markLayer = new LineLayer(gl)
+    this.sim = new SimLayer(gl)
+  }
+
+  /** Whether particles and dye can run (float textures can be rendered to). */
+  get floatTargets(): boolean {
+    return this.sim.supported
+  }
+
+  /** The release line to mark, as segments in cells, or null. */
+  setMark(segments: Float32Array | null): void {
+    this.markLayer.set(segments)
+  }
+
+  /** Empties the dye and the particles. */
+  clearSim(): void {
+    this.sim.clear()
+  }
+
+  /** Released particles and the dye's total (tests). */
+  measureSim(): { particles: number; dye: number } {
+    return this.sim.measure()
+  }
+
+  /** Advances the particles and the dye (needs the velocity of a frame to have been uploaded). */
+  stepSim(view: View, dpr: number, params: StepParams): void {
+    const ctx = this.context(view, dpr)
+    if (ctx && this.hasVelocity) this.sim.step(ctx, params)
+  }
+
+  private context(view: View, dpr: number): LayerContext | null {
+    const { grid, field } = this
+    if (!grid || !field) return null
+    const zoom = view.zoom * dpr
+    return {
+      canvas: [this.canvas.width, this.canvas.height],
+      origin: [view.offsetX * dpr, this.canvas.height - (view.offsetY * dpr + grid[1] * zoom)],
+      zoom,
+      grid,
+      fieldCells: [field.width * field.k, field.height * field.k],
+      cellTex: this.cellTex,
+      fieldTex: this.velocityTex,
+      fractionTex: this.fractionTex,
+    }
   }
 
   /** Streamline segments held (tests). */
@@ -134,6 +186,7 @@ export class FieldRenderer {
     height: number,
     fraction: Float32Array,
     blocks: { width: number; height: number; k: number },
+    spawns: Float32Array = new Float32Array(0),
   ): void {
     const { gl } = this
     if (width > this.maxTextureSize || height > this.maxTextureSize) {
@@ -172,6 +225,7 @@ export class FieldRenderer {
     this.field = { ...blocks }
     this.hasField = false
     this.hasVelocity = false
+    this.sim.setCells([width, height], blocks, spawns)
   }
 
   /**
@@ -259,7 +313,13 @@ export class FieldRenderer {
     dpr: number,
     style: FieldStyle,
     colours: ViewerColours,
-    overlays: Overlays = { vectors: null, streamlines: null },
+    overlays: Overlays = {
+      vectors: null,
+      streamlines: null,
+      dye: false,
+      particles: null,
+      mark: null,
+    },
   ): void {
     const { gl, u, grid, field } = this
     gl.viewport(0, 0, this.canvas.width, this.canvas.height)
@@ -295,17 +355,13 @@ export class FieldRenderer {
     gl.uniform4fv(u.u_noData, norm(colours.noData))
     gl.drawArrays(gl.TRIANGLES, 0, 3)
     if (!this.hasField) return
-    const ctx: LayerContext = {
-      canvas: [this.canvas.width, this.canvas.height],
-      origin: [view.offsetX * dpr, this.canvas.height - (view.offsetY * dpr + grid[1] * zoom)],
-      zoom,
-      grid,
-      fieldCells: [field.width * field.k, field.height * field.k],
-      cellTex: this.cellTex,
-      fieldTex: this.velocityTex,
-      fractionTex: this.fractionTex,
-    }
+    const ctx = this.context(view, dpr)!
+    if (overlays.dye && this.hasVelocity) this.sim.drawDye(ctx)
     if (overlays.streamlines) this.lineLayer.draw(ctx, overlays.streamlines)
+    if (overlays.mark) this.markLayer.draw(ctx, overlays.mark)
+    if (overlays.particles && this.hasVelocity) {
+      this.sim.drawParticles(ctx, overlays.particles.colour, overlays.particles.size)
+    }
     if (overlays.vectors && this.hasVelocity) this.vectorLayer.draw(ctx, overlays.vectors)
   }
 
@@ -325,5 +381,7 @@ export class FieldRenderer {
     gl.deleteVertexArray(this.vao)
     this.vectorLayer.dispose()
     this.lineLayer.dispose()
+    this.markLayer.dispose()
+    this.sim.dispose()
   }
 }

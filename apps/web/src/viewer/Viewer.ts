@@ -16,6 +16,7 @@ import { componentValue } from './quantities.ts'
 import { FieldRenderer, type Overlays, type ViewerColours } from './render/fieldRenderer.ts'
 import { colormapOf, currentQuantity, currentRange, useViewer, type ViewerState } from './store.ts'
 import { advance, prefetch } from './timeline.ts'
+import { inletSpawns, simulatedStep, substeps } from './simulation.ts'
 import { ARROW_SPACING, arrowScale } from './vectors.ts'
 
 const COLOURS: ViewerColours = {
@@ -68,6 +69,14 @@ export class Viewer {
     busy: false,
   }
   private overlays = useViewer.getState().overlays
+  /** Particles and dye: the animation loop, simulated seconds between frames, queued brush stamps. */
+  private sim = {
+    request: 0,
+    last: 0,
+    frameInterval: 0,
+    stamps: [] as [number, number, number, number][],
+  }
+  private marked: unknown = null
   private frameRequest = 0
   /** Playback: the fractional frame position and the time of the last animation frame. */
   private playback = { position: 0, time: 0, request: 0 }
@@ -76,6 +85,7 @@ export class Viewer {
 
   constructor(canvas: HTMLCanvasElement, decoder?: FrameDecoder, cache?: FrameCache) {
     this.renderer = new FieldRenderer(canvas)
+    useViewer.getState().setFloatTargets(this.renderer.floatTargets)
     this.decoder = decoder ?? new FrameDecoder()
     this.cache = cache ?? new FrameCache()
     this.unsubscribe = useViewer.subscribe((s) => {
@@ -83,6 +93,7 @@ export class Viewer {
         const streamlinesChanged = s.overlays.streamlines !== this.overlays.streamlines
         this.overlays = s.overlays
         if (streamlinesChanged) this.updateStreamlines(true)
+        this.syncAnimation()
       }
       this.schedule()
     })
@@ -109,7 +120,12 @@ export class Viewer {
     const blocks = { width: Math.ceil(width / k), height: Math.ceil(height / k), k }
     const fraction = fluidFraction(cellType, width, height, k)
     this.cells = { cellType, width, height, blocks, fraction }
-    this.renderer.setCells(cellType, width, height, fraction, blocks)
+    const spawns = inletSpawns(cellType, width, height)
+    this.renderer.setCells(cellType, width, height, fraction, blocks, spawns)
+    // Without inlets (a closed cavity) particles are released anywhere in the fluid.
+    if (spawns.length === 0 && useViewer.getState().release === 'inlets') {
+      useViewer.getState().setRelease('domain')
+    }
     this.decoder.setMask(fraction)
     this.decoder.setCells(cellType, width, height)
     this.streamlines = { frame: null, index: -1, busy: this.streamlines.busy }
@@ -173,6 +189,10 @@ export class Viewer {
     this.current = d.frame
     const s = useViewer.getState()
     s.setFrame(header, d.stats)
+    // Simulated seconds between frames, for the particles’ physical speed.
+    if (header.frameIndex > 0 && header.simTime > 0) {
+      this.sim.frameInterval = header.simTime / header.frameIndex
+    }
     s.setTimeline({ index, buffering: false, note: null })
     this.updateStreamlines(false)
   }
@@ -228,6 +248,83 @@ export class Viewer {
           console.warn('streamlines skipped:', e.message)
         },
       )
+  }
+
+  /** Starts or stops the animation loop that advects particles and dye. */
+  private syncAnimation(): void {
+    const { particles, dye } = useViewer.getState().overlays
+    const want = (particles || dye) && !this.disposed && this.renderer.floatTargets
+    if (want && this.sim.request === 0) {
+      this.sim.last = performance.now()
+      this.sim.request = requestAnimationFrame(this.animate)
+    } else if (!want && this.sim.request !== 0) {
+      cancelAnimationFrame(this.sim.request)
+      this.sim.request = 0
+    }
+  }
+
+  private readonly animate = (now: number): void => {
+    this.sim.request = 0
+    if (this.disposed) return
+    this.stepSim((now - this.sim.last) / 1000)
+    this.sim.last = now
+    this.draw()
+    this.syncAnimation()
+  }
+
+  /**
+   * One animation frame of the particles and the dye: the shown frame's velocity moves them at the
+   * playback's physical rate (frames per second × simulated time between frames).
+   */
+  private stepSim(wall: number): void {
+    const s = useViewer.getState()
+    const { particles, dye } = s.overlays
+    const g = s.grid
+    const dt = simulatedStep(wall, s.timeline.speed, this.sim.frameInterval)
+    if (!g || !this.current || !(dt > 0)) return
+    this.ensureVelocity()
+    const { count } = substeps(s.seen['velocity']?.max ?? 0, dt, g.cellSize)
+    this.renderer.stepSim(s.view, window.devicePixelRatio, {
+      dt,
+      cellSize: g.cellSize,
+      passes: count,
+      particles,
+      dye,
+      release: s.release,
+      line: s.releaseLine,
+      stamps: this.sim.stamps.splice(0, 8),
+      releaseRate: 0.03,
+    })
+  }
+
+  /** Uploads the shown frame's velocity for the arrows, particles and dye. */
+  private ensureVelocity(): void {
+    const frame = this.current
+    const velocity = frame?.fields.find((f) => f.name === 'velocity' && f.components === 2)
+    if (frame && velocity && this.uploaded.velocity !== frame) {
+      this.renderer.setVelocity(velocity, frame.header.width, frame.header.height)
+      this.uploaded.velocity = frame
+    }
+  }
+
+  /** Paints dye with the brush at a cell (the next simulation step adds it). */
+  paint(x: number, y: number): void {
+    const { grid, paintDye } = useViewer.getState()
+    if (!grid) return
+    const radius = Math.max(2, Math.min(grid.width, grid.height) / 40)
+    this.sim.stamps.push([x, y, radius, paintDye])
+    if (this.sim.stamps.length > 64) this.sim.stamps.shift()
+  }
+
+  /** Empties the dye and releases the particles afresh. */
+  clearSim(): void {
+    this.renderer.clearSim()
+    this.schedule()
+  }
+
+  /** Released particles and the dye's total (tests). */
+  measureSim(): { particles: number; dye: number } {
+    return this.renderer.measureSim()
   }
 
   /** A frame from the cache or the server (one request per frame at a time). */
@@ -413,10 +510,12 @@ export class Viewer {
     const s: ViewerState = useViewer.getState()
     const q = currentQuantity(s)
     const frame = this.current
-    const velocity = frame?.fields.find((f) => f.name === 'velocity' && f.components === 2)
-    if (frame && velocity && s.overlays.vectors && this.uploaded.velocity !== frame) {
-      this.renderer.setVelocity(velocity, frame.header.width, frame.header.height)
-      this.uploaded.velocity = frame
+    const o = s.overlays
+    if (o.vectors || o.particles || o.dye) this.ensureVelocity()
+    if (s.releaseLine !== this.marked) {
+      const l = s.releaseLine
+      this.renderer.setMark(l ? Float32Array.of(...l) : null)
+      this.marked = l
     }
     if (q && frame) {
       const field = frame.fields.find((f) => f.name === q.field)
@@ -457,12 +556,18 @@ export class Viewer {
           }
         : null,
       streamlines: s.overlays.streamlines ? [1, 1, 1, 0.55] : null,
+      dye: s.overlays.dye,
+      particles: s.overlays.particles
+        ? { colour: [0.9, 0.97, 1, 0.95], size: Math.max(2, 2 * dpr) }
+        : null,
+      mark: s.releaseLine && (s.tool === 'line' || s.overlays.particles) ? [1, 0.85, 0.2, 1] : null,
     }
   }
 
   dispose(): void {
     this.disposed = true
     cancelAnimationFrame(this.frameRequest)
+    cancelAnimationFrame(this.sim.request)
     this.stopLoop()
     this.cache.clear()
     this.unsubscribe()

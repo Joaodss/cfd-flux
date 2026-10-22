@@ -8,7 +8,16 @@ import { formatValue } from '../panels/format.ts'
 import { COLORMAPS, colormap, cssGradient } from './colormaps.ts'
 import { RANGE_MODES, ticks, type RangeMode } from './ranges.ts'
 import { ARROW_SPACING, arrowScale } from './vectors.ts'
-import { colormapOf, currentQuantity, currentRange, modeOf, useViewer } from './store.ts'
+import type { ReleaseMode } from './simulation.ts'
+import {
+  colormapOf,
+  currentQuantity,
+  currentRange,
+  modeOf,
+  useViewer,
+  type ViewerState,
+} from './store.ts'
+import type { Viewer } from './Viewer.ts'
 
 const SELECT =
   'h-7 rounded-md border border-border bg-background px-1 text-xs outline-none focus:border-primary'
@@ -22,7 +31,8 @@ function Labelled(props: { label: string; children: ReactNode }) {
   )
 }
 
-export function ViewerToolbar() {
+export function ViewerToolbar(props: { viewer: Viewer | null }) {
+  const { viewer } = props
   const s = useViewer()
   const q = currentQuantity(s)
   if (!q) {
@@ -35,7 +45,7 @@ export function ViewerToolbar() {
   const mode = modeOf(s, q)
   const range = currentRange(s) ?? [0, 1]
   return (
-    <div className="flex h-10 shrink-0 items-center gap-4 border-b border-border px-3">
+    <div className="flex min-h-10 shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-border px-3 py-1">
       <Labelled label="Field">
         <select
           className={SELECT}
@@ -129,6 +139,91 @@ export function ViewerToolbar() {
         />
         Streamlines
       </label>
+      <label
+        className="flex items-center gap-1.5 text-xs text-muted-foreground"
+        title={
+          s.floatTargets
+            ? 'Tracer particles advected by the frame shown, at the playback rate'
+            : 'This GPU cannot render to float textures'
+        }
+      >
+        <input
+          type="checkbox"
+          data-testid="viewer-particles"
+          disabled={!s.floatTargets}
+          checked={s.overlays.particles}
+          onChange={(e) => s.setOverlay('particles', e.target.checked)}
+        />
+        Particles
+      </label>
+      <label
+        className="flex items-center gap-1.5 text-xs text-muted-foreground"
+        title={
+          s.floatTargets
+            ? 'Dye released at the inlets or painted with the brush'
+            : 'This GPU cannot render to float textures'
+        }
+      >
+        <input
+          type="checkbox"
+          data-testid="viewer-dye"
+          disabled={!s.floatTargets}
+          checked={s.overlays.dye}
+          onChange={(e) => s.setOverlay('dye', e.target.checked)}
+        />
+        Dye
+      </label>
+      {(s.overlays.particles || s.overlays.dye) && (
+        <>
+          <Labelled label="Drag">
+            <select
+              className={SELECT}
+              data-testid="viewer-tool"
+              value={s.tool}
+              onChange={(e) => s.setTool(e.target.value as ViewerState['tool'])}
+            >
+              <option value="pan">Pan</option>
+              <option value="line">Draw release line</option>
+              <option value="paint">Paint dye</option>
+            </select>
+          </Labelled>
+          {s.overlays.particles && (
+            <Labelled label="Release">
+              <select
+                className={SELECT}
+                data-testid="viewer-release"
+                value={s.release}
+                onChange={(e) => s.setRelease(e.target.value as ReleaseMode)}
+              >
+                <option value="inlets">At the inlets</option>
+                <option value="line" disabled={!s.releaseLine}>
+                  Along the line
+                </option>
+                <option value="domain">Anywhere</option>
+              </select>
+            </Labelled>
+          )}
+          {s.tool === 'paint' && (
+            <Labelled label="Dye">
+              <select
+                className={SELECT}
+                data-testid="viewer-paint-dye"
+                value={s.paintDye}
+                onChange={(e) => s.setPaintDye(Number(e.target.value))}
+              >
+                <option value={0}>White</option>
+                <option value={1}>Orange</option>
+                <option value={2}>Cyan</option>
+              </select>
+            </Labelled>
+          )}
+          {viewer && (
+            <Button variant="ghost" size="sm" onClick={() => viewer.clearSim()}>
+              Clear
+            </Button>
+          )}
+        </>
+      )}
       <Button variant="ghost" size="sm" className="ml-auto" onClick={s.fit} title="Fit the domain">
         <Maximize /> Fit
       </Button>

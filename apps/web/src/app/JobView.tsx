@@ -218,7 +218,7 @@ export function JobView({ id }: { id: string }) {
       </header>
       <div className="flex min-h-0 flex-1">
         <section className="flex min-w-0 flex-1 flex-col" data-testid="viewer">
-          <ViewerToolbar />
+          <ViewerToolbar viewer={viewer} />
           <ViewerCanvas onReady={onViewer} />
           <TimelineBar
             viewer={viewer}

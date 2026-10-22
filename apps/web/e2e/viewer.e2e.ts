@@ -17,6 +17,7 @@ type Pixel = [number, number, number, number]
 interface ViewerHook {
   snapshot(): string
   streamlineSegments: number
+  measureSim(): { particles: number; dye: number }
 }
 
 /** The canvas pixel at the centre of a cell (through the development-only test hook). */
@@ -96,6 +97,22 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   await page.getByTestId('viewer-vectors').uncheck()
   await page.getByTestId('viewer-streamlines').uncheck()
   await expect.poll(() => segments()).toBe(0)
+  expect(await image()).toEqual(plain)
+
+  // Particles and dye live in float textures (EXT_color_buffer_float, also in SwiftShader):
+  // particles are released at the inlet and carried by the last frame's flow; dye is injected
+  // there and advected; clearing empties both.
+  const sim = () =>
+    page.evaluate(() => (globalThis as unknown as { __viewer: ViewerHook }).__viewer.measureSim())
+  await expect(page.getByTestId('viewer-particles')).toBeEnabled()
+  await page.getByTestId('viewer-particles').check()
+  await page.getByTestId('viewer-dye').check()
+  await expect.poll(async () => (await sim()).particles, { timeout: 30_000 }).toBeGreaterThan(200)
+  await expect.poll(async () => (await sim()).dye, { timeout: 30_000 }).toBeGreaterThan(5)
+  const flowing = await image()
+  expect(flowing).not.toEqual(plain)
+  await page.getByTestId('viewer-particles').uncheck()
+  await page.getByTestId('viewer-dye').uncheck()
   expect(await image()).toEqual(plain)
 
   // Another field: vorticity, symmetric range around zero.

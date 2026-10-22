@@ -4,6 +4,7 @@
 import { create } from 'zustand'
 import { fitView, stepZoom, zoomAt, type View } from '../editor/view.ts'
 import type { FrameHeader } from '../frames/lffr.ts'
+import type { ReleaseMode } from './simulation.ts'
 import { quantitiesOf, type Quantity } from './quantities.ts'
 import { accumulate, rangeFor, type RangeMode, type Seen } from './ranges.ts'
 import type { FrameStats } from './stats.ts'
@@ -22,7 +23,16 @@ export interface ViewerState {
   /** Show blocks as they are, without bilinear interpolation. */
   nearest: boolean
   /** Overlays over the field. */
-  overlays: { vectors: boolean; streamlines: boolean }
+  overlays: { vectors: boolean; streamlines: boolean; particles: boolean; dye: boolean }
+  /** Where particles are released, and the line drawn for `line`. */
+  release: ReleaseMode
+  releaseLine: [number, number, number, number] | null
+  /** What dragging on the canvas does. */
+  tool: 'pan' | 'line' | 'paint'
+  /** The dye the brush paints (0-2). */
+  paintDye: number
+  /** Whether this GPU can render to float textures (particles and dye need it). */
+  floatTargets: boolean
   /** What the frames so far span (seeded from the stream's `hello`). */
   seen: Seen
   frame: { header: FrameHeader; stats: FrameStats } | null
@@ -44,7 +54,12 @@ export interface ViewerState {
   setMode(key: string, mode: RangeMode): void
   setManual(key: string, range: [number, number]): void
   setNearest(nearest: boolean): void
-  setOverlay(key: 'vectors' | 'streamlines', on: boolean): void
+  setOverlay(key: keyof ViewerState['overlays'], on: boolean): void
+  setRelease(release: ReleaseMode): void
+  setReleaseLine(line: ViewerState['releaseLine']): void
+  setTool(tool: ViewerState['tool']): void
+  setPaintDye(dye: number): void
+  setFloatTargets(ok: boolean): void
   setView(view: View): void
   setViewport(width: number, height: number): void
   zoomStep(direction: 1 | -1, at?: [number, number]): void
@@ -61,7 +76,12 @@ const INITIAL = {
   modes: {},
   manual: {},
   nearest: false,
-  overlays: { vectors: false, streamlines: false },
+  overlays: { vectors: false, streamlines: false, particles: false, dye: false },
+  release: 'inlets',
+  releaseLine: null,
+  tool: 'pan',
+  paintDye: 0,
+  floatTargets: true,
   seen: {},
   frame: null,
   received: 0,
@@ -73,7 +93,7 @@ const INITIAL = {
 
 export const useViewer = create<ViewerState>()((set, get) => ({
   ...INITIAL,
-  reset: () => set({ ...INITIAL, viewport: get().viewport }),
+  reset: () => set({ ...INITIAL, viewport: get().viewport, floatTargets: get().floatTargets }),
   setGrid: (grid) => {
     const { viewport } = get()
     set({
@@ -117,6 +137,11 @@ export const useViewer = create<ViewerState>()((set, get) => ({
     set((s) => ({ manual: { ...s.manual, [key]: range }, modes: { ...s.modes, [key]: 'manual' } })),
   setNearest: (nearest) => set({ nearest }),
   setOverlay: (key, on) => set((s) => ({ overlays: { ...s.overlays, [key]: on } })),
+  setRelease: (release) => set({ release }),
+  setReleaseLine: (releaseLine) => set({ releaseLine }),
+  setTool: (tool) => set({ tool }),
+  setPaintDye: (paintDye) => set({ paintDye }),
+  setFloatTargets: (floatTargets) => set({ floatTargets }),
   setView: (view) => set({ view }),
   setViewport: (width, height) => {
     const { viewport, grid } = get()

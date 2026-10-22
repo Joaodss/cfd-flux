@@ -51,8 +51,26 @@ export function ViewerCanvas(props: { onReady: (viewer: Viewer | null) => void }
       return [e.clientX - r.left, e.clientY - r.top]
     }
     let pan: { id: number; x: number; y: number } | null = null
+    // The brush or the release line being dragged (the toolbar's tool), instead of a pan.
+    let tool: { id: number; kind: 'paint' | 'line'; from: [number, number] } | null = null
+    const cellAt = (e: { clientX: number; clientY: number }): [number, number] | null => {
+      const s = useViewer.getState()
+      if (!s.grid) return null
+      const [sx, sy] = local(e)
+      return screenToCell(s.view, s.grid.height, sx, sy)
+    }
     const onPointerDown = (e: PointerEvent) => {
-      if (pan || (e.button !== 0 && e.button !== 1)) return
+      if (pan || tool || (e.button !== 0 && e.button !== 1)) return
+      const s = useViewer.getState()
+      const cell = cellAt(e)
+      if (e.button === 0 && s.tool !== 'pan' && cell) {
+        tool = { id: e.pointerId, kind: s.tool, from: cell }
+        canvas.setPointerCapture(e.pointerId)
+        if (s.tool === 'paint') viewer.paint(cell[0], cell[1])
+        else s.setReleaseLine([cell[0], cell[1], cell[0], cell[1]])
+        e.preventDefault()
+        return
+      }
       pan = { id: e.pointerId, x: e.clientX, y: e.clientY }
       canvas.setPointerCapture(e.pointerId)
       canvas.style.cursor = 'grabbing'
@@ -73,12 +91,26 @@ export function ViewerCanvas(props: { onReady: (viewer: Viewer | null) => void }
       if (!s.grid) return
       const [sx, sy] = local(e)
       const cell = screenToCell(s.view, s.grid.height, sx, sy)
+      if (tool && e.pointerId === tool.id) {
+        if (tool.kind === 'paint') viewer.paint(cell[0], cell[1])
+        else s.setReleaseLine([tool.from[0], tool.from[1], cell[0], cell[1]])
+      }
+      if (!pan) canvas.style.cursor = s.tool === 'pan' ? 'grab' : 'crosshair'
       s.setCursor({ cell, value: viewer.valueAt(cell[0], cell[1]) })
     }
     const onPointerUp = (e: PointerEvent) => {
       if (pan && e.pointerId === pan.id) {
         pan = null
-        canvas.style.cursor = 'grab'
+        canvas.style.cursor = useViewer.getState().tool === 'pan' ? 'grab' : 'crosshair'
+      }
+      if (tool && e.pointerId === tool.id) {
+        const s = useViewer.getState()
+        const l = s.releaseLine
+        // A click without a drag leaves no line.
+        if (tool.kind === 'line' && l && Math.hypot(l[2] - l[0], l[3] - l[1]) < 1) {
+          s.setReleaseLine(null)
+        }
+        tool = null
       }
     }
     const onPointerLeave = () => useViewer.getState().setCursor(null)
