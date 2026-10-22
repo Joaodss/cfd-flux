@@ -14,10 +14,12 @@ use std::thread::JoinHandle;
 
 use anyhow::{anyhow, Context, Result};
 use cfd_core::domain::Domain;
-use cfd_core::sample::SampleSet;
+use cfd_core::sample::{SampleData, SampleSet};
+use cfd_core::scene::OutputField;
 
 use crate::encode_sample;
 use crate::runner::{FrameEvent, JobObserver};
+use crate::series::HeatSeries;
 use crate::store::ResultDir;
 
 /// Frames queued between the solver and the output thread.
@@ -83,6 +85,7 @@ impl OutputThread {
         domain: &Domain,
         config: OutputConfig,
         observer: Arc<dyn JobObserver>,
+        mut heat: Option<HeatSeries>,
     ) -> Result<Self> {
         let domain = sampling_domain(domain);
         let (tx, rx) = sync_channel::<OutputJob>(QUEUE);
@@ -124,10 +127,24 @@ impl OutputThread {
                             written = true;
                         }
                     }
+                    // The heat through the thermal walls, from the stored frame's temperature at
+                    // full resolution (so it is the same for every engine). The line is on disk
+                    // before the observer hears of it.
+                    let mut heat_row = None;
+                    if let (Some(h), true, Some(_)) = (&mut heat, job.store, job.index) {
+                        let s = &samples[0];
+                        if let Some(t) = s.field(OutputField::Temperature) {
+                            heat_row = Some(match &t.data {
+                                SampleData::F32(v) => h.row(s.step, s.time, v)?,
+                                data => h.row(s.step, s.time, &data.to_f32())?,
+                            });
+                        }
+                    }
                     observer.frame(&FrameEvent {
                         index: job.index,
                         stored: written,
                         samples: &samples,
+                        heat: heat_row.as_deref(),
                     });
                 }
                 Ok(stored)

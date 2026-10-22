@@ -523,6 +523,7 @@ mod tests {
                 index: Some(0),
                 stored: true,
                 samples: &[sample],
+                heat: None,
             },
         );
         assert!(a.has_changed().unwrap());
@@ -546,6 +547,7 @@ mod tests {
                 index: Some(1),
                 stored: true,
                 samples: &[],
+                heat: None,
             },
         );
         assert!(!b.has_changed().unwrap());

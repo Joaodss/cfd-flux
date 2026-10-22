@@ -126,6 +126,8 @@ pub struct FrameEvent<'a> {
     /// One per spec requested: when frames are stored, first the stored frame's (full resolution,
     /// the frame dtype), then those of [`JobObserver::stream_specs`] that differ from it.
     pub samples: &'a [Sample],
+    /// The row of `heat.csv` of this frame, `[step, time, q₁, length₁, …]`, already on disk.
+    pub heat: Option<&'a [f64]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -540,7 +542,9 @@ pub fn run(
     if options.write_frames {
         std::fs::create_dir_all(dir.frames_dir())?;
     }
-    let series = Series::create(dir, &scene, &domain)?;
+    // `heat.csv` (heat through the thermal walls, per stored frame) needs the stored temperature.
+    let heat = options.write_frames && frame_fields.contains(&OutputField::Temperature);
+    let mut series = Series::create(dir, &scene, &domain, heat)?;
     // From here on the solver owns the domain (`make` takes it by value: a move, not a copy);
     // `solver.domain()` lends it back read-only.
     let mut solver = choice.make(domain)?;
@@ -567,6 +571,7 @@ pub fn run(
             max_stored_bytes: options.max_stored_bytes,
         },
         observer.clone(),
+        series.take_heat(),
     )?;
     observer.started(&Started {
         scene: &scene.name,

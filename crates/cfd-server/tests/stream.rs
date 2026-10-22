@@ -330,6 +330,141 @@ async fn series_rows_reach_viewers_and_end_the_files() {
     s.stop().await;
 }
 
+/// `heat.csv` (Phase 5 design proposal §7.3) reaches viewers like the other series: its columns in
+/// `hello.series.heat`, a row per stored frame in the `series` messages, and every row a viewer
+/// has been sent is already on disk when it arrives. Only thermal runs with stored frames get it.
+#[tokio::test]
+async fn heat_rows_are_flushed_before_they_are_sent() {
+    let s = TestServer::start("ws-heat").await;
+    // The quick heated cavity (66 × 66 cells): 5 frames, a few hundred steps.
+    let cavity = examples::quick("heated-cavity-ra1e5").unwrap();
+    let options = json!({ "endTime": 2.0, "outputInterval": 0.5 });
+    let id = submit(&s, &cavity, options.clone()).await;
+    while job(&s, &id).await["stepsDone"].as_u64().unwrap_or(0) == 0 {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+    let mut ws = connect(&s, &id, "").await;
+    let Msg::Text(hello) = next(&mut ws).await else {
+        panic!("hello first")
+    };
+    let columns = json!([
+        "step",
+        "time_s",
+        "Hot_wall.q_W_m",
+        "Hot_wall.length_m",
+        "Cold_wall.q_W_m",
+        "Cold_wall.length_m"
+    ]);
+    assert_eq!(hello["series"]["heat"], columns);
+
+    let mut streamed: Vec<Vec<f64>> = Vec::new();
+    loop {
+        match next(&mut ws).await {
+            Msg::Text(t) if t["type"] == "series" => {
+                let rows: Vec<Vec<f64>> = t["rows"]["heat"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|r| {
+                        r.as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|v| v.as_f64().unwrap())
+                            .collect()
+                    })
+                    .collect();
+                if let Some(last) = rows.last() {
+                    // On disk already: the file ends with (at least) the rows just received.
+                    let text = file(&s, &id, "heat.csv").await;
+                    let last_on_disk: f64 = text
+                        .lines()
+                        .last()
+                        .unwrap()
+                        .split(',')
+                        .next()
+                        .unwrap()
+                        .parse()
+                        .unwrap();
+                    assert!(last_on_disk >= last[0], "{last_on_disk} < {}", last[0]);
+                }
+                streamed.extend(rows);
+            }
+            Msg::Closed => break,
+            _ => {}
+        }
+    }
+
+    let text = file(&s, &id, "heat.csv").await;
+    let mut lines = text.lines();
+    assert_eq!(
+        lines.next().unwrap(),
+        columns
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let on_disk: Vec<Vec<f64>> = lines
+        .map(|l| l.split(',').map(|v| v.parse().unwrap()).collect())
+        .collect();
+    // A row per stored frame, at the frame's time.
+    assert_eq!(on_disk.len(), 5);
+    let times: Vec<f64> = on_disk.iter().map(|r| r[1]).collect();
+    for (t, expected) in times.iter().zip([0.0, 0.5, 1.0, 1.5, 2.0]) {
+        assert!((t - expected).abs() < 1e-3, "{times:?}");
+    }
+    // The hot wall gives heat to the fluid, the cold wall takes it; each is 64 cells long.
+    let length = 64.0 * cavity.grid.cell_size;
+    for r in &on_disk {
+        assert!(r[2] > 0.0 && r[4] < 0.0, "{r:?}");
+        assert!((r[3] - length).abs() < 1e-12 && (r[5] - length).abs() < 1e-12);
+    }
+    // The stream's rows are the end of the file.
+    assert!(!streamed.is_empty());
+    let tail = &on_disk[on_disk.len() - streamed.len()..];
+    for (a, b) in tail.iter().flatten().zip(streamed.iter().flatten()) {
+        assert!((a - b).abs() <= 1e-15 * a.abs(), "{a} vs {b}");
+    }
+
+    // No stored frames, no heat; and a run without thermal walls has none either.
+    let id = submit(
+        &s,
+        &cavity,
+        json!({ "endTime": 0.2, "outputInterval": 0.1, "storeFrames": false }),
+    )
+    .await;
+    wait_done(&s, &id).await;
+    assert_eq!(heat_status(&s, &id).await, 404);
+    let id = submit(&s, &examples::channel(), channel_options(0.1, 0.05)).await;
+    wait_done(&s, &id).await;
+    assert_eq!(heat_status(&s, &id).await, 404);
+    let mut ws = connect(&s, &id, "").await;
+    let Msg::Text(hello) = next(&mut ws).await else {
+        panic!("hello first")
+    };
+    assert!(hello["series"].get("heat").is_none() || hello["series"]["heat"].is_null());
+    s.stop().await;
+}
+
+async fn wait_done(s: &TestServer, id: &str) {
+    while job(s, id).await["status"] != "completed" {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+async fn heat_status(s: &TestServer, id: &str) -> u16 {
+    client()
+        .get(s.url(&format!("/api/simulations/{id}/files/heat.csv")))
+        .send()
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
 /// Stored frames fetched in a stream format (`fields`, `maxSize`) equal the stream's frames of
 /// the same index byte for byte (on the CPU engine, where both come from the same f32 values), so
 /// the viewer can mix live and stored frames (Phase 5 design proposal §3.1).

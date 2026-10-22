@@ -620,14 +620,15 @@ fn convert_frame(mut frame: Frame, format: &StreamFormat, dtype: Dtype) -> Frame
     frame
 }
 
-/// `GET /api/simulations/{id}/files/{name}`: `scene.json`, `meta.json` or a CSV series.
+/// `GET /api/simulations/{id}/files/{name}`: `scene.json`, `meta.json` or a CSV series (`heat.csv`
+/// only for thermal runs with stored frames).
 pub async fn file(
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
 ) -> Result<([(HeaderName, &'static str); 1], Vec<u8>), ApiError> {
     let content_type = match name.as_str() {
         "scene.json" | "meta.json" => "application/json",
-        "probes.csv" | "forces.csv" | "diagnostics.csv" => "text/csv; charset=utf-8",
+        "probes.csv" | "forces.csv" | "diagnostics.csv" | "heat.csv" => "text/csv; charset=utf-8",
         _ => return Err(ApiError::NotFound(format!("no file {name:?}"))),
     };
     let dir = state

@@ -7,6 +7,7 @@ use std::io::{BufWriter, Write};
 
 use anyhow::Result;
 use cfd_core::domain::Domain;
+use cfd_core::heat::HeatWalls;
 use cfd_core::solver::{Diagnostics, Solver};
 use cfd_core::Scene;
 
@@ -31,6 +32,9 @@ pub struct SeriesColumns {
     pub forces: Vec<String>,
     pub probes: Vec<String>,
     pub diagnostics: Vec<String>,
+    /// `heat.csv` (thermal runs with stored frames); empty otherwise.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub heat: Vec<String>,
 }
 
 /// One sample of every series: `[step, time, …]` in the order of [`SeriesColumns`]. A missing
@@ -50,6 +54,18 @@ pub(crate) struct Series {
     force_columns: Vec<(u16, String)>,
     thermal: bool,
     columns: SeriesColumns,
+    heat: Option<HeatSeries>,
+}
+
+/// The name of an element in the columns of the series: its name, or `element{id}`; 0 is the
+/// implicit wall at the domain edges.
+fn element_column(scene: &Scene, id: u16) -> String {
+    let name = match scene.elements.iter().find(|e| e.id == id) {
+        _ if id == 0 => "edges".to_string(),
+        Some(e) => e.name.clone().unwrap_or_else(|| format!("element{id}")),
+        None => format!("element{id}"),
+    };
+    column_name(&name)
 }
 
 /// Writes `values` as one CSV line. `f64`'s `Display` is the shortest text that reads back as
@@ -70,8 +86,51 @@ fn write_header(w: &mut impl Write, columns: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// `heat.csv`: the heat through every thermal wall element at each stored frame (design proposal
+/// §7.3). Unlike the three series it is written by the *output thread*, from the stored frame's
+/// temperature, so it is engine-independent; the thread flushes each line before handing it to
+/// the observer, so every row an observer has been given is on disk.
+pub(crate) struct HeatSeries {
+    walls: HeatWalls,
+    file: BufWriter<File>,
+}
+
+impl HeatSeries {
+    /// Creates `heat.csv` (header only) if the scene has thermal walls; the columns are
+    /// `step, time_s, {element}.q_W_m, {element}.length_m` for each, in element order.
+    fn create(dir: &ResultDir, scene: &Scene) -> Result<Option<(Self, Vec<String>)>> {
+        let Some(walls) = HeatWalls::new(scene) else {
+            return Ok(None);
+        };
+        let mut columns = vec!["step".to_string(), "time_s".to_string()];
+        for id in walls.element_ids() {
+            let name = element_column(scene, id);
+            columns.push(format!("{name}.q_W_m"));
+            columns.push(format!("{name}.length_m"));
+        }
+        let mut file = dir.create_file("heat.csv")?;
+        write_header(&mut file, &columns)?;
+        file.flush()?;
+        Ok(Some((Self { walls, file }, columns)))
+    }
+
+    /// Measures the walls on a temperature field, writes (and flushes) the line, and returns it:
+    /// `[step, time, q₁, length₁, q₂, length₂, …]`.
+    pub fn row(&mut self, step: u64, time: f64, temperature: &[f32]) -> Result<Vec<f64>> {
+        let mut row = vec![step as f64, time];
+        for h in self.walls.measure(temperature) {
+            row.extend([h.q_w_per_m, h.length_m]);
+        }
+        write_row(&mut self.file, &row)?;
+        self.file.flush()?;
+        Ok(row)
+    }
+}
+
 impl Series {
-    pub fn create(dir: &ResultDir, scene: &Scene, domain: &Domain) -> Result<Self> {
+    /// With `heat`, also creates `heat.csv` if the scene has thermal walls; its writer is for
+    /// [`take_heat`](Self::take_heat).
+    pub fn create(dir: &ResultDir, scene: &Scene, domain: &Domain, heat: bool) -> Result<Self> {
         let thermal = domain.physics.thermal();
         let start = || vec!["step".to_string(), "time_s".to_string()];
         let mut probe_columns = start();
@@ -91,14 +150,7 @@ impl Series {
         ids.dedup();
         let force_columns: Vec<(u16, String)> = ids
             .into_iter()
-            .map(|id| {
-                let name = match scene.elements.iter().find(|e| e.id == id) {
-                    _ if id == 0 => "edges".to_string(),
-                    Some(e) => e.name.clone().unwrap_or_else(|| format!("element{id}")),
-                    None => format!("element{id}"),
-                };
-                (id, column_name(&name))
-            })
+            .map(|id| (id, element_column(scene, id)))
             .collect();
         let mut forces_columns = start();
         for (_, n) in &force_columns {
@@ -117,10 +169,15 @@ impl Series {
         if thermal {
             diagnostics_columns.push("thermal_energy_lu".into());
         }
+        let (heat, heat_columns) = match heat {
+            true => HeatSeries::create(dir, scene)?.unzip(),
+            false => (None, None),
+        };
         let columns = SeriesColumns {
             forces: forces_columns,
             probes: probe_columns,
             diagnostics: diagnostics_columns,
+            heat: heat_columns.unwrap_or_default(),
         };
 
         let mut probes = dir.create_file("probes.csv")?;
@@ -136,6 +193,7 @@ impl Series {
             force_columns,
             thermal,
             columns,
+            heat,
         };
         // The headers are on disk from the start, for viewers that read the files.
         series.flush()?;
@@ -144,6 +202,11 @@ impl Series {
 
     pub fn columns(&self) -> &SeriesColumns {
         &self.columns
+    }
+
+    /// The writer of `heat.csv`, for the output thread (which owns it from then on).
+    pub fn take_heat(&mut self) -> Option<HeatSeries> {
+        self.heat.take()
     }
 
     /// Writes one sample of every series and returns it.

@@ -270,6 +270,9 @@ pub struct SeriesRows {
     pub probes: Vec<Vec<f64>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub diagnostics: Vec<Vec<f64>>,
+    /// One row per stored frame (`heat.csv`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub heat: Vec<Vec<f64>>,
 }
 
 impl SeriesRows {
@@ -280,7 +283,10 @@ impl SeriesRows {
     }
 
     fn is_empty(&self) -> bool {
-        self.forces.is_empty() && self.probes.is_empty() && self.diagnostics.is_empty()
+        self.forces.is_empty()
+            && self.probes.is_empty()
+            && self.diagnostics.is_empty()
+            && self.heat.is_empty()
     }
 }
 
@@ -436,6 +442,15 @@ impl JobObserver for Reporter {
     fn frame(&self, f: &FrameEvent) {
         if let Some(i) = f.index {
             self.job.update(|v| v.frames = v.frames.max(i + 1));
+        }
+        if let Some(row) = f.heat {
+            // Already on disk (the output thread flushed it first): sent with the next progress.
+            self.job
+                .pending_rows
+                .lock()
+                .unwrap()
+                .heat
+                .push(row.to_vec());
         }
         self.job.hub.publish(&self.job.id, f);
     }
