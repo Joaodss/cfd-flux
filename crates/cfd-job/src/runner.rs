@@ -475,6 +475,12 @@ fn initial_meta(
                 temperature_difference: n.reference.temperature_difference,
                 reynolds: n.reference.reynolds,
                 rayleigh: n.reference.rayleigh,
+                conductivity: scene
+                    .fluids
+                    .iter()
+                    .find(|f| f.id == scene.initial.fluid)
+                    .and_then(|f| f.thermal_conductivity)
+                    .filter(|_| domain.physics.thermal()),
             },
         },
         warnings: domain
@@ -501,6 +507,7 @@ fn initial_meta(
                 Dtype::F16 => "f16",
             },
             frame_fields: frame_fields.iter().map(|f| output_field_name(*f)).collect(),
+            heat: false,
         },
         timings: TimingsMeta::default(),
         diagnostics: DiagnosticsMeta {
@@ -559,6 +566,7 @@ pub fn run(
         &frame_fields,
         &initial,
     );
+    meta.run.heat = !series.columns().heat.is_empty();
     let write_meta = |meta: &Meta| -> Result<()> {
         dir.write("meta.json", serde_json::to_string_pretty(meta)? + "\n")
     };

@@ -1,4 +1,4 @@
-// The run's time series (`forces.csv`, `probes.csv`, `diagnostics.csv`; 03 §6.2), live and
+// The run's time series (`forces.csv`, `probes.csv`, `diagnostics.csv` and, for thermal runs, `heat.csv`; 03 §6.2), live and
 // afterwards (design proposal §7.1).
 //
 // A viewer that joins a running job reads the files (complete lines up to some step: the server
@@ -10,7 +10,7 @@
 // arrays that only grow; a version number tells React that something changed (the arrays are
 // never part of React state, like the frames).
 
-export const SERIES = ['forces', 'probes', 'diagnostics'] as const
+export const SERIES = ['forces', 'probes', 'diagnostics', 'heat'] as const
 export type SeriesName = (typeof SERIES)[number]
 
 /** A value of a row: `null` where the server wrote `NaN` (JSON has no NaN). */
@@ -26,7 +26,7 @@ export interface Table {
 export type Rows = Partial<Record<SeriesName, Value[][]>>
 
 /** Column names per series (`hello.series`), `null` until the job has started. */
-export type Columns = Record<SeriesName, string[]>
+export type Columns = Record<Exclude<SeriesName, 'heat'>, string[]> & { heat?: string[] }
 
 /**
  * A CSV file of the run: the header and the complete lines (a last line without its newline is
@@ -66,7 +66,7 @@ export class SeriesBuffer {
   /** The column names announced by `hello` (rows can then be shown before the file is read). */
   setColumns(columns: Columns): void {
     for (const name of SERIES) {
-      if (!this.tables.has(name) && columns[name]) {
+      if (!this.tables.has(name) && columns[name]?.length) {
         this.tables.set(name, { columns: columns[name], data: columns[name].map(() => []) })
       }
     }

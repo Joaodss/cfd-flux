@@ -23,6 +23,7 @@ export interface Example {
 /** The benchmarks of the examples that reproduce one (a quick variant inherits it). */
 const BENCHMARKS: Record<string, string> = {
   'cylinder-re100': 'schaferTurek2D2',
+  'heated-cavity-ra1e5': 'deVahlDavis1e5',
 }
 
 const QUICK_SUFFIX = '-quick'

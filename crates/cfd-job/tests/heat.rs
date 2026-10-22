@@ -98,3 +98,46 @@ fn only_thermal_runs_with_stored_frames_have_heat() {
     assert!(!dir.join("heat.csv").exists());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// `meta.json` says there is a `heat.csv` and gives what the Nusselt number needs.
+#[test]
+fn meta_json_announces_the_heat_series() {
+    let scene = examples::quick("heated-cavity-ra1e5").unwrap();
+    let dir = temp_dir("meta");
+    run(
+        &scene,
+        &dir,
+        RunOptions {
+            end_time: Some(0.1),
+            output_interval: Some(0.05),
+            ..Default::default()
+        },
+    );
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
+    assert_eq!(meta["run"]["heat"], true);
+    let reference = &meta["dimensionless"]["reference"];
+    assert_eq!(
+        reference["conductivity"].as_f64(),
+        scene.fluids[0].thermal_conductivity
+    );
+    assert!(reference["temperatureDifference"].as_f64().unwrap() > 0.0);
+    let _ = std::fs::remove_dir_all(dir);
+    // Not announced for a run without thermal walls.
+    let dir = temp_dir("meta-channel");
+    run(
+        &examples::quick("channel").unwrap(),
+        &dir,
+        RunOptions {
+            end_time: Some(0.1),
+            ..Default::default()
+        },
+    );
+    let meta: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("meta.json")).unwrap()).unwrap();
+    assert!(meta["run"].get("heat").is_none());
+    assert!(meta["dimensionless"]["reference"]
+        .get("conductivity")
+        .is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}

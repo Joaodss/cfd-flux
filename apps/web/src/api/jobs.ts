@@ -47,8 +47,23 @@ export const ACTIVE: readonly JobStatus[] = ['queued', 'running', 'paused']
 /** The parts of a run's `meta.json` (03 §6.2) the viewer uses; written when the job starts. */
 export interface RunMeta {
   units: { dx: number; dt: number; rho0: number }
-  dimensionless: { reference: { length: number; velocity: number; reynolds: number } }
-  run: { outputEverySteps: number; sampleEverySteps: number; endTime: number }
+  dimensionless: {
+    reference: {
+      length: number
+      velocity: number
+      reynolds: number
+      temperatureDifference: number
+      /** W/(m·K), thermal runs: for the Nusselt number. */
+      conductivity?: number
+    }
+  }
+  run: {
+    outputEverySteps: number
+    sampleEverySteps: number
+    endTime: number
+    /** The run has a `heat.csv` (thermal walls, stored frames). */
+    heat?: boolean
+  }
 }
 
 const path = (id: string, rest = '') => `/api/simulations/${encodeURIComponent(id)}${rest}`

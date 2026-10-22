@@ -7,8 +7,10 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::cases::cylinder_tolerances;
-use crate::references::{schafer_turek, SCHAFER_TUREK_CITATION};
+use crate::cases::{cylinder_tolerances, heated_cavity_tolerances};
+use crate::references::{
+    de_vahl_davis, schafer_turek, DE_VAHL_DAVIS_CITATION, SCHAFER_TUREK_CITATION,
+};
 
 /// One benchmark. Quantities are named like the viewer's statistics (`strouhal`, `cdMax`, …).
 #[derive(Serialize)]
@@ -37,16 +39,38 @@ fn interval(case: &str, quantity: &str) -> [f64; 2] {
         .unwrap_or_else(|| panic!("Schäfer-Turek {case} {quantity} is in the reference table"))
 }
 
-fn tolerances(periodic: bool) -> Vec<Tolerance> {
-    cylinder_tolerances(periodic)
-        .into_iter()
+fn tolerances(list: Vec<(u32, f64)>) -> Vec<Tolerance> {
+    list.into_iter()
         .map(|(cells, relative)| Tolerance { cells, relative })
         .collect()
 }
 
+/// The cavity's tolerance is the same at every size it is checked at; the viewer needs it once.
+fn cavity_tolerances(ra: f64) -> Vec<Tolerance> {
+    let mut list = heated_cavity_tolerances(ra);
+    list.dedup_by_key(|t| t.1.to_bits());
+    tolerances(list)
+}
+
 /// The JSON of `apps/web/src/generated/references.json` (pretty, with a final newline).
 pub fn references_json() -> String {
+    let cavity = de_vahl_davis(1e5).expect("de Vahl Davis Ra = 1e5 is in the reference table");
     let benchmarks = BTreeMap::from([
+        (
+            "deVahlDavis1e5",
+            Benchmark {
+                title: "de Vahl Davis (heated cavity, Ra = 1e5, air)",
+                citation: DE_VAHL_DAVIS_CITATION,
+                // The benchmark gives values, not intervals. `nuHot` is the Nusselt number on the hot
+                // wall, `nuMean` the cavity average (which a wall flux cannot give).
+                quantities: BTreeMap::from([
+                    ("nuHot", [cavity.nu_hot; 2]),
+                    ("nuMean", [cavity.nu_mean; 2]),
+                ]),
+                checked: vec!["nuHot"],
+                tolerances: cavity_tolerances(1e5),
+            },
+        ),
         (
             "schaferTurek2D1",
             Benchmark {
@@ -57,7 +81,7 @@ pub fn references_json() -> String {
                     ("clMean", interval("2D-1", "c_l")),
                 ]),
                 checked: vec!["cdMean"],
-                tolerances: tolerances(false),
+                tolerances: tolerances(cylinder_tolerances(false)),
             },
         ),
         (
@@ -71,7 +95,7 @@ pub fn references_json() -> String {
                     ("clMax", interval("2D-2", "c_l_max")),
                 ]),
                 checked: vec!["strouhal", "cdMax"],
-                tolerances: tolerances(true),
+                tolerances: tolerances(cylinder_tolerances(true)),
             },
         ),
     ]);

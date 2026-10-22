@@ -1,4 +1,27 @@
 {
+  "deVahlDavis1e5": {
+    "title": "de Vahl Davis (heated cavity, Ra = 1e5, air)",
+    "citation": "de Vahl Davis (1983), Int. J. Numer. Meth. Fluids 3, 249–264",
+    "quantities": {
+      "nuHot": [
+        4.509,
+        4.509
+      ],
+      "nuMean": [
+        4.519,
+        4.519
+      ]
+    },
+    "checked": [
+      "nuHot"
+    ],
+    "tolerances": [
+      {
+        "cells": 64,
+        "relative": 0.02
+      }
+    ]
+  },
   "schaferTurek2D1": {
     "title": "Schäfer–Turek 2D-1 (cylinder, Re = 20, steady)",
     "citation": "Schäfer & Turek (1996), Notes Numer. Fluid Mech. 52, 547–566",

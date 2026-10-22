@@ -97,6 +97,9 @@ pub(crate) struct ReferenceMeta {
     pub reynolds: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rayleigh: Option<f64>,
+    /// W/(m·K): the initial fluid's thermal conductivity (thermal scenes), for the Nusselt number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conductivity: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -124,6 +127,9 @@ pub(crate) struct RunMeta {
     pub frames_stored: u32,
     pub frame_dtype: &'static str,
     pub frame_fields: Vec<&'static str>,
+    /// The run has a `heat.csv` (thermal walls, stored frames).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub heat: bool,
 }
 
 #[derive(Serialize, Default, Clone, Copy, Debug)]

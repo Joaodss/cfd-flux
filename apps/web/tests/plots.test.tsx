@@ -41,7 +41,9 @@ const job: Job = {
 
 const META: RunMeta = {
   units: { dx: 0.005, dt: 0.001, rho0: 1.2 },
-  dimensionless: { reference: { length: 0.1, velocity: 1, reynolds: 100 } },
+  dimensionless: {
+    reference: { length: 0.1, velocity: 1, reynolds: 100, temperatureDifference: 1 },
+  },
   run: { outputEverySteps: 10, sampleEverySteps: 1, endTime: 0.1 },
 }
 
@@ -134,5 +136,45 @@ describe('Plots tab', () => {
     expect(screen.getByTestId('stat-cdMax-check').textContent).toMatch(/^\+4\.\d % ✓$/)
     expect(screen.getByTestId('stat-clMax-check').textContent).not.toMatch(/[✓✗]/)
     expect(screen.getByTestId('stats-tolerance').textContent).toMatch(/5 %.* 20 cells/)
+  })
+
+  it('shows the Nusselt numbers of a thermal run against de Vahl Davis', async () => {
+    // The quick heated cavity: 40–80 s of its real heat.csv, L = 0.1 m = 64 cells.
+    FILES['heat.csv'] = readFileSync('tests/fixtures/series/cavity-heat.csv', 'utf8')
+    FILES['forces.csv'] =
+      'step,time_s,Hot_wall.fx_N_m,Hot_wall.fy_N_m,Cold_wall.fx_N_m,Cold_wall.fy_N_m\n0,0,0,0,0,0\n1,80,0,0,0,0\n'
+    FILES['meta.json'] = JSON.stringify({
+      units: { dx: 0.1 / 64, dt: 0.001, rho0: 1.2 },
+      dimensionless: {
+        reference: {
+          length: 0.1,
+          velocity: 0.1,
+          reynolds: 374,
+          temperatureDifference: 0.9572000000000003,
+          conductivity: 0.0257,
+        },
+      },
+      run: { outputEverySteps: 10, sampleEverySteps: 1, endTime: 80, heat: true },
+    })
+    render(<JobView id="job-1" />)
+    FakeSocket.last.send({
+      type: 'hello',
+      job: { ...job, status: 'completed', scene: 'Heated cavity Ra=1e5 (quick)' },
+    })
+    FakeSocket.last.send({ type: 'done', status: 'completed', stepsDone: 100, frames: 10 })
+    await act(async () => new Promise((r) => setTimeout(r, 10)))
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByTestId('job-tab-stats'))
+      fireEvent.click(screen.getByTestId('job-tab-stats'))
+    })
+    expect(screen.getByTestId('stats-benchmark')).toHaveProperty('value', 'deVahlDavis1e5')
+    // No cylinder statistics for a run without bodies.
+    expect(screen.queryByTestId('stat-strouhal')).toBeNull()
+    expect(screen.getByTestId('nu-Hot_wall').textContent).toMatch(/^Hot wall4.54/)
+    expect(screen.getByTestId('nu-Hot_wall-check').textContent).toBe('+0.7 % ✓')
+    // The cold wall takes the heat the hot one gives (Nu < 0) and has no reference of its own.
+    expect(screen.getByTestId('nu-Cold_wall').textContent).toMatch(/^Cold wall-4.54/)
+    expect(screen.getByTestId('nu-Cold_wall-check').textContent).toBe('')
+    expect(screen.getByTestId('stats-tolerance').textContent).toMatch(/2 %.* 64 cells/)
   })
 })

@@ -6,8 +6,15 @@ import { create } from 'zustand'
 import type { RunMeta, StreamMessage } from '../api/jobs.ts'
 import { shownElement } from './elements.ts'
 import { coefficients, forceElements } from './plots.ts'
-import { defaultWindow, forceStatistics, type ForceStatistics, type Window } from './statistics.ts'
-import { SERIES, SeriesBuffer } from './series.ts'
+import {
+  defaultWindow,
+  forceStatistics,
+  wallNusselt,
+  type ForceStatistics,
+  type WallNusselt,
+  type Window,
+} from './statistics.ts'
+import { SERIES, SeriesBuffer, type SeriesName } from './series.ts'
 
 export interface SeriesSource {
   meta(): Promise<RunMeta>
@@ -55,25 +62,38 @@ export class SeriesFeed {
 
   /** Reads what is still missing (files, meta), one round at a time; failures retry later. */
   private async load(): Promise<void> {
-    const missing = SERIES.filter((n) => this.buffer.needsFile(n))
-    if (this.loading || !this.started || (missing.length === 0 && this.meta)) return
+    if (this.loading || !this.started) return
     this.loading = true
-    await Promise.all([
-      this.meta
-        ? null
-        : this.source.meta().then(
-            (m) => (this.meta = m),
+    for (;;) {
+      const missing = this.missingFiles()
+      if (missing.length === 0 && this.meta) break
+      const hadMeta = this.meta !== null
+      await Promise.all([
+        this.meta
+          ? null
+          : this.source.meta().then(
+              (m) => (this.meta = m),
+              () => {},
+            ),
+        ...missing.map((n) =>
+          this.source.text(`${n}.csv`).then(
+            (t) => !this.disposed && this.buffer.setFile(n, t),
             () => {},
           ),
-      ...missing.map((n) =>
-        this.source.text(`${n}.csv`).then(
-          (t) => !this.disposed && this.buffer.setFile(n, t),
-          () => {},
         ),
-      ),
-    ])
+      ])
+      // `meta.json` says whether there is a `heat.csv`: read it in a second round if so.
+      if (hadMeta || !this.meta?.run.heat) break
+    }
     this.loading = false
     if (!this.disposed) this.onChange()
+  }
+
+  /** The series files still to read; `heat.csv` only when `meta.json` says the run has one. */
+  private missingFiles(): SeriesName[] {
+    return SERIES.filter(
+      (n) => this.buffer.needsFile(n) && (n !== 'heat' || this.meta?.run.heat === true),
+    )
   }
 
   dispose(): void {
@@ -153,4 +173,23 @@ export function useStatistics(): ForceStatistics | null {
     const c = coefficients(forces, element, meta)
     return c && forceStatistics(forces.data[1], c.cd, c.cl, window, meta)
   }, [feed, version, element, window])
+}
+
+/** The Nusselt number of every thermal wall element over the window (thermal runs with `heat.csv`). */
+export function useNusselt(): WallNusselt[] {
+  const feed = useSeries((s) => s.feed)
+  const version = useSeries((s) => s.version)
+  const { window } = useWindow()
+  return useMemo(() => {
+    void version
+    const heat = feed?.buffer.table('heat')
+    const meta = feed?.meta
+    const reference = meta?.dimensionless.reference
+    if (!heat || !reference?.conductivity || !window) return []
+    return wallNusselt(heat.columns, heat.data, window, {
+      length: reference.length,
+      conductivity: reference.conductivity,
+      deltaT: reference.temperatureDifference,
+    })
+  }, [feed, version, window])
 }

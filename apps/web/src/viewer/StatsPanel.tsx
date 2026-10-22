@@ -10,11 +10,12 @@ import {
   benchmarkOfScene,
   BENCHMARKS,
   check,
+  type Benchmark,
   isBenchmark,
   toleranceAt,
   type BenchmarkId,
 } from './references.ts'
-import { useSeries, useStatistics, useWindow } from './seriesFeed.ts'
+import { useNusselt, useSeries, useStatistics, useWindow } from './seriesFeed.ts'
 import type { ForceStatistics } from './statistics.ts'
 
 const ROWS: { key: keyof ForceStatistics; label: string }[] = [
@@ -30,8 +31,77 @@ const SELECT = 'h-7 rounded-md border border-border bg-background px-1.5 text-xs
 
 const percent = (v: number) => `${v >= 0 ? '+' : ''}${(100 * v).toFixed(1)} %`
 
+/**
+ * The Nusselt numbers of the thermal walls (design proposal §7.3): `Nu = q L / (k ΔT · length)`
+ * from `heat.csv`, averaged over the window. The heated cavity is steady, so the mean is the
+ * value; the spread says how steady the window is. The heated element (the one that gives heat
+ * to the fluid) is compared with the benchmark's Nusselt number on the hot wall.
+ */
+function NusseltTable({
+  benchmark,
+  relative,
+}: {
+  benchmark: Benchmark | null
+  relative: number | null
+}) {
+  const walls = useNusselt()
+  if (walls.length === 0) return null
+  const heated = walls.reduce((a, b) => (b.mean > a.mean ? b : a))
+  const quantity = benchmark && 'nuHot' in benchmark.quantities ? 'nuHot' : null
+  return (
+    <div className="flex flex-col gap-1" data-testid="nusselt">
+      <table className="w-full text-xs tabular-nums">
+        <thead className="text-muted-foreground">
+          <tr className="text-left">
+            <th className="font-normal">Wall</th>
+            <th className="font-normal">Nu (mean)</th>
+            <th className="font-normal">Spread</th>
+            {quantity && <th className="font-normal">Reference</th>}
+            {quantity && <th className="font-normal">Error</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {walls.map((w) => {
+            const c =
+              quantity && benchmark && relative !== null && w === heated
+                ? check(benchmark, quantity, w.mean, relative)
+                : null
+            return (
+              <tr key={w.element} data-testid={`nu-${w.element}`}>
+                <td className="py-0.5">{w.element.replace(/_/g, ' ')}</td>
+                <td>{w.mean.toPrecision(4)}</td>
+                <td>{(100 * w.spread).toPrecision(2)} %</td>
+                {quantity && <td>{c ? c.interval[0] : ''}</td>}
+                {quantity && (
+                  <td data-testid={`nu-${w.element}-check`}>
+                    {c && (
+                      <span className={c.pass === false ? 'text-red-400' : 'text-green-500'}>
+                        {percent(c.error)}
+                        {c.pass === true ? ' ✓' : c.pass === false ? ' ✗' : ''}
+                      </span>
+                    )}
+                  </td>
+                )}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      <p className="text-xs text-muted-foreground">
+        Nu = q L / (k ΔT · length) per wall, mean over {walls[0].samples} frames of the window (a
+        steady flow has settled: the spread is (max − min) / mean). Negative: the wall takes heat
+        from the fluid.
+      </p>
+    </div>
+  )
+}
+
 export function StatsPanel({ sceneName }: { sceneName: string | undefined }) {
   const stats = useStatistics()
+  const nuWalls = useNusselt()
+  const bodies = useSeries((s) => s.bodies)
+  // A thermal run without bodies (the heated cavity) has no force coefficients to show.
+  const showForces = bodies.length > 0 || nuWalls.length === 0
   const meta = useSeries((s) => s.feed?.meta ?? null)
   const { window, chosen } = useWindow()
   // The benchmark to compare with: the example's by default, or the user's choice.
@@ -47,7 +117,7 @@ export function StatsPanel({ sceneName }: { sceneName: string | undefined }) {
   }
   return (
     <div className="flex flex-col gap-3 text-sm" data-testid="stats">
-      <ElementSelect />
+      {showForces && <ElementSelect />}
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span data-testid="stats-window">
           Window {formatValue(window.from)}–{formatValue(window.to)} s
@@ -60,7 +130,8 @@ export function StatsPanel({ sceneName }: { sceneName: string | undefined }) {
         )}
       </div>
       <p className="text-xs text-muted-foreground">Drag across a plot to choose the window.</p>
-      {stats ? (
+      <NusseltTable benchmark={benchmark} relative={tolerance?.relative ?? null} />
+      {!showForces ? null : stats ? (
         <table className="w-full text-xs tabular-nums">
           <thead className="text-muted-foreground">
             <tr className="text-left">
@@ -108,7 +179,7 @@ export function StatsPanel({ sceneName }: { sceneName: string | undefined }) {
       ) : (
         <p className="text-xs text-muted-foreground">Too few samples in the window.</p>
       )}
-      {stats && (
+      {showForces && stats && (
         <p className="text-xs text-muted-foreground">
           {stats.samples.toLocaleString('en')} samples, {stats.periods} periods
           {stats.frequency !== null && `, f = ${formatValue(stats.frequency)} Hz`}. Reference

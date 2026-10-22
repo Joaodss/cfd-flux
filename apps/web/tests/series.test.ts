@@ -18,7 +18,9 @@ const line = (step: number) => row(step).join(',') + '\n'
 
 const META: RunMeta = {
   units: { dx: 0.005, dt: 0.001, rho0: 1.2 },
-  dimensionless: { reference: { length: 0.1, velocity: 1, reynolds: 100 } },
+  dimensionless: {
+    reference: { length: 0.1, velocity: 1, reynolds: 100, temperatureDifference: 1 },
+  },
   run: { outputEverySteps: 10, sampleEverySteps: 1, endTime: 1 },
 }
 

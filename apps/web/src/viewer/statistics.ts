@@ -104,3 +104,74 @@ export function forceStatistics(
     periods: Math.max(0, crossings.length - 1),
   }
 }
+
+/**
+ * The Nusselt number `Nu = (q / length) L / (k ΔT)` of a boundary that carries `q` W per metre of
+ * span over `length` metres: the same operations, in the same order, as `cfd_core::heat::nusselt`.
+ */
+export function nusselt(
+  q: number,
+  length: number,
+  referenceLength: number,
+  conductivity: number,
+  deltaT: number,
+): number {
+  return ((q / length) * referenceLength) / (conductivity * deltaT)
+}
+
+/** The Nusselt number of one thermal wall element over a window. */
+export interface WallNusselt {
+  /** The element's name as in `heat.csv` (`{name}.q_W_m`). */
+  element: string
+  samples: number
+  /** Mean over the window (a steady flow, like the heated cavity, has settled: see `spread`). */
+  mean: number
+  min: number
+  max: number
+  /** `(max − min) / |mean|`: how far from steady the window is. */
+  spread: number
+}
+
+/** The elements of `heat.csv`, from its `{name}.q_W_m` columns. */
+export function heatElements(columns: string[]): string[] {
+  return columns.filter((c) => c.endsWith('.q_W_m')).map((c) => c.slice(0, -'.q_W_m'.length))
+}
+
+/**
+ * The mean Nusselt number of every thermal wall element over the frames of `heat.csv` inside the
+ * window (`columns` and `data` as the series table holds them; rows with gaps are left out). The
+ * scales are the run's reference length and temperature difference and the fluid's conductivity.
+ */
+export function wallNusselt(
+  columns: string[],
+  data: Value[][],
+  window: Window,
+  scales: { length: number; conductivity: number; deltaT: number },
+): WallNusselt[] {
+  const time = data[1] ?? []
+  const out: WallNusselt[] = []
+  for (const element of heatElements(columns)) {
+    const q = data[columns.indexOf(`${element}.q_W_m`)]
+    const length = data[columns.indexOf(`${element}.length_m`)]
+    if (!q || !length) continue
+    let sum = 0
+    let min = Infinity
+    let max = -Infinity
+    let n = 0
+    for (let i = 0; i < time.length; i++) {
+      const t = time[i]
+      const qi = q[i]
+      const li = length[i]
+      if (t === null || qi === null || li === null || t < window.from || t > window.to) continue
+      const nu = nusselt(qi, li, scales.length, scales.conductivity, scales.deltaT)
+      sum += nu
+      min = Math.min(min, nu)
+      max = Math.max(max, nu)
+      n++
+    }
+    if (n === 0) continue
+    const mean = sum / n
+    out.push({ element, samples: n, mean, min, max, spread: (max - min) / Math.abs(mean) })
+  }
+  return out
+}

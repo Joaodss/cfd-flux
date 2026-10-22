@@ -14,13 +14,16 @@ import { SeriesBuffer } from '../src/viewer/series.ts'
 import {
   defaultWindow,
   forceStatistics,
+  heatElements,
+  nusselt,
   oscillationFrequency,
   upwardCrossings,
+  wallNusselt,
 } from '../src/viewer/statistics.ts'
 
 const meta = (rho0: number, velocity: number, length: number): RunMeta => ({
   units: { dx: 0.005, dt: 1e-4, rho0 },
-  dimensionless: { reference: { length, velocity, reynolds: 100 } },
+  dimensionless: { reference: { length, velocity, reynolds: 100, temperatureDifference: 1 } },
   run: { outputEverySteps: 60, sampleEverySteps: 6, endTime: 12 },
 })
 
@@ -116,5 +119,76 @@ describe('references', () => {
     expect(check(st, 'cdMax', 3.42, 0.05)?.pass).toBe(false)
     expect(check(st, 'clMax', 2, 0.05)?.pass).toBeNull() // information only
     expect(check(st, 'cdMean', 3, 0.05)).toBeNull()
+  })
+})
+
+describe('Nusselt number', () => {
+  const csv = readFileSync(new URL('./fixtures/series/cavity-heat.csv', import.meta.url), 'utf8')
+  const expected = JSON.parse(
+    readFileSync(new URL('./fixtures/series/cavity-nusselt.json', import.meta.url), 'utf8'),
+  ) as {
+    reference: { length: number; conductivity: number; deltaT: number }
+    elements: {
+      element: string
+      samples: number
+      mean: number
+      min: number
+      max: number
+      spread: number
+    }[]
+  }
+
+  it('is q L / (k ΔT · length)', () => {
+    // Pure conduction through a wall of length 0.1 m: q = k ΔT / L per metre of wall length.
+    expect(nusselt(0.0257 * 10, 0.1, 0.1, 0.0257, 10)).toBeCloseTo(1, 12)
+    expect(nusselt(-2, 0.5, 0.1, 0.5, 4)).toBeCloseTo(-0.2, 12)
+  })
+
+  it('averages the frames of the window, per element', () => {
+    const columns = ['step', 'time_s', 'A.q_W_m', 'A.length_m']
+    const data = [
+      [0, 1, 2, 3],
+      [0, 1, 2, 3],
+      [1, 2, null, 4],
+      [1, 1, 1, 1],
+    ]
+    const scales = { length: 1, conductivity: 1, deltaT: 1 }
+    expect(heatElements(columns)).toEqual(['A'])
+    const [a] = wallNusselt(columns, data, { from: 1, to: 3 }, scales)
+    // Rows at t = 1 and 3 (the gap at t = 2 is left out): Nu = 2 and 4.
+    expect(a).toEqual({ element: 'A', samples: 2, mean: 3, min: 2, max: 4, spread: 2 / 3 })
+    expect(wallNusselt(columns, data, { from: 10, to: 11 }, scales)).toEqual([])
+  })
+
+  it('finds the same Nusselt numbers as Rust, to 1e-12', () => {
+    const b = new SeriesBuffer()
+    b.setFile('heat', csv)
+    const heat = b.table('heat')!
+    const { length, conductivity, deltaT } = expected.reference
+    const got = wallNusselt(
+      heat.columns,
+      heat.data,
+      { from: -Infinity, to: Infinity },
+      { length, conductivity, deltaT },
+    )
+    expect(got.map((g) => g.element)).toEqual(expected.elements.map((e) => e.element))
+    for (const [i, e] of expected.elements.entries()) {
+      expect(got[i].samples).toBe(e.samples)
+      for (const key of ['mean', 'min', 'max', 'spread'] as const) {
+        expect(Math.abs(got[i][key] - e[key]), `${e.element}.${key}`).toBeLessThan(1e-12)
+      }
+    }
+  })
+
+  it('has a benchmark for the heated cavity examples, checked at the suite’s tolerance', () => {
+    const b = BENCHMARKS.deVahlDavis1e5
+    expect(b.checked).toEqual(['nuHot'])
+    expect(b.quantities.nuHot).toEqual([4.509, 4.509])
+    expect(toleranceAt(b, 64)).toEqual({ relative: 0.02, coarser: false })
+    expect(toleranceAt(b, 32).coarser).toBe(true)
+    expect(benchmarkOfScene('Heated cavity Ra=1e5')).toBe('deVahlDavis1e5')
+    expect(benchmarkOfScene('Heated cavity Ra=1e5 (quick)')).toBe('deVahlDavis1e5')
+    expect(check(b, 'nuHot', 4.5417, 0.02)?.pass).toBe(true)
+    expect(check(b, 'nuHot', 4.7, 0.02)?.pass).toBe(false)
   })
 })
