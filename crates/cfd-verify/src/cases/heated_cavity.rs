@@ -2,6 +2,7 @@
 //! (type B/C).
 
 use anyhow::{anyhow, Result};
+use cfd_core::heat;
 use cfd_core::solver::LatticeFields;
 use cfd_core::DomainOptions;
 use cfd_io::image::Colormap;
@@ -204,7 +205,8 @@ impl Geometry {
         let nu_hot = (0..n)
             .map(|y| {
                 let (t1, t2) = (theta[y * w + 1] as f64, theta[y * w + 2] as f64);
-                let grad = (-8.0 * self.theta_hot + 9.0 * t1 - t2) / 3.0;
+                // The same wall gradient the viewer's Nusselt number uses (`cfd_core::heat`).
+                let grad = heat::wall_gradient(self.theta_hot, t1, Some(t2));
                 -grad * l / self.theta_span
             })
             .sum::<f64>()
