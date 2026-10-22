@@ -19,7 +19,7 @@ there if long; step 6 only with room left).
 | 6–8 | Vectors/streamlines, particles and dye, export | ✅ 2026-10-22 |
 | 9 | `cfd-server` serves the app (`web` feature, `--web-dir`, `--open`); gallery: Open with results, quick variants | ✅ 2026-10-22 (below) |
 | 10 | Nusselt number: `heat.csv`, Statistics tab, de Vahl Davis | ✅ 2026-10-22 (below) |
-| 11 | Acceptance, ADR-031 | next session |
+| 11 | Acceptance (`@full` Playwright test), ADR-031, docs | ✅ 2026-10-22 (below) |
 
 ## Found along the way
 
@@ -190,3 +190,18 @@ Branch `feat/phase5-viewer` was checked out in another worktree again; this work
 - Web: `typecheck`, `lint`, `format:check`, `build` clean; `npm test`: **201 pass** (was 183); `test:e2e`: the new gallery test passes (full cavity on CUDA; CI runs the quick variant on the CPU).
 - Rust: `fmt --check`; `clippy --workspace --all-targets -D warnings`, `--no-default-features` and `-p cfd-server --features web` clean; `CFD_REQUIRE_GPU=1 CFD_REQUIRE_CUDA=1 cargo test --workspace` all pass; `cargo test -p cfd-server --features web --test web` passes with a built `dist`.
 - Not done: step 11 (acceptance, ADR-031); a Nu plot in the Plots tab; the CPU quick path of the gallery e2e was not run locally (no CPU-only server).
+
+## Session of 2026-10-22 (third): step 11 (acceptance, ADR-031)
+
+Branch `feat/phase5-viewer` was checked out in another worktree; this worktree was reset to `origin/feat/phase5-viewer` (`e8c1a73`) and pushes `HEAD:feat/phase5-viewer`.
+
+- **Test:** `apps/web/e2e/acceptance-full.e2e.ts`, tagged `@full`. It follows the §14 criterion: the gallery's *Cylinder Re=100* (it asserts that the server's `auto` engine is a GPU, so the quick variant cannot be the one opened), Run, the job view, a `MutationObserver` installed before the page loads that records the job status and the timeline position at every change (the street forms live if the playhead moves while the status is not yet `completed`), the vorticity sign changes along the wake's centre line at the end (the street) and at frame 0 (none), scrub to 0 and play at 60 fps to the end, the Statistics tab (St and C_D,max against 0.300 and 3.23, ±5 %, and the tab's own ✓), then PNG (signature, IHDR size, IEND, size), the force CSV (header, rows, last time, C_D,max over 10–20 s against the tab), the run's `forces.csv` and a 51-frame video (MP4 `ftyp` or WebM EBML header, size).
+- **How it is kept out of CI:** `playwright.config.ts` has `grepInvert: /@full/`, so `npm run test:e2e` lists 3 tests; `playwright.full.config.ts` spreads the same config, selects `@full` and allows 10 minutes; `npm run test:e2e:full`. Shared helpers (`pixel`, `SOLID`, `saved`) moved to `e2e/helpers.ts` (not matched by `testMatch`) and `viewer.e2e.ts` uses them.
+- **Measured (RTX 4060, CUDA, twice):** **St 0.2973 (−0.9 %) ✓, C_D,max 3.375 (+4.5 %) ✓**, C_L,max 1.040 (information); 860 playhead positions seen before the job completed; 11 sign changes in the wake at the end; PNG 119,861 B (884 × 216); 10,001 coefficient rows and 10,001 `forces.csv` rows; MP4 154,358 B; the test takes ≈ 45 s. The thresholds are not tight to these values (≥ 3 live positions, ≥ 8 sign changes, ≥ 4 half way through, < 2 at frame 0).
+- **Docs:** ADR-031; the plan's Phase 5 acceptance line; `CLAUDE.md` and `README.md` status; 02 §2.1 (the Runs bullet still said frames were ignored; the timeline and the cache were missing; the stack line), 03 §6.1 (it still offered `lz4js` for the decoder) and the `heat.csv` read of a late viewer in §7; `development.md` has `test:e2e:full`.
+- **Not done / left open:** a Nusselt plot in the Plots tab; `heat.csv` has no download link in the Export tab (the run's files list is fixed); the MediaRecorder fallback and the video's picture were not looked at by eye; open question Q14 (editor discoverability, the hand-timed Phase 4 run) is unchanged. The main JavaScript chunk has grown to 500,590 bytes (494 kB at step 5), just past Vite's 500 kB warning; the job view is its own chunk (174 kB).
+
+### Final check (2026-10-22, third session)
+
+- Web (`apps/web`): `typecheck`, `lint`, `format:check`, `build` clean; `npm test`: **201 pass**; `npm run test:e2e`: **3 pass** (Phase 4 acceptance, the gallery's Nusselt number on CUDA, the viewer); `npm run test:e2e:full`: **1 pass**.
+- Rust (`CARGO_BUILD_JOBS=4`): `cargo fmt --check`; `clippy --workspace --all-targets -D warnings`, with `--no-default-features` and `-p cfd-server --features web` clean; `CFD_REQUIRE_GPU=1 CFD_REQUIRE_CUDA=1 cargo test --workspace`: **230 tests pass**; `cargo test --release -p cfd-server --features web --test web` passes.
