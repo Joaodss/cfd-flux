@@ -5,8 +5,8 @@ import { useMemo } from 'react'
 import { create } from 'zustand'
 import type { RunMeta, StreamMessage } from '../api/jobs.ts'
 import { shownElement } from './elements.ts'
-import { forceElements } from './plots.ts'
-import { defaultWindow, type Window } from './statistics.ts'
+import { coefficients, forceElements } from './plots.ts'
+import { defaultWindow, forceStatistics, type ForceStatistics, type Window } from './statistics.ts'
 import { SERIES, SeriesBuffer } from './series.ts'
 
 export interface SeriesSource {
@@ -137,4 +137,20 @@ export function useElement(): { element: string | null; available: string[] } {
     const available = forces ? forceElements(forces) : []
     return { element: shownElement(available, bodies, chosen), available }
   }, [feed, version, bodies, chosen])
+}
+
+/** The force statistics of the shown element over the window, or null. */
+export function useStatistics(): ForceStatistics | null {
+  const feed = useSeries((s) => s.feed)
+  const version = useSeries((s) => s.version)
+  const { element } = useElement()
+  const { window } = useWindow()
+  return useMemo(() => {
+    void version
+    const forces = feed?.buffer.table('forces')
+    const meta = feed?.meta
+    if (!forces || !meta || !element || !window) return null
+    const c = coefficients(forces, element, meta)
+    return c && forceStatistics(forces.data[1], c.cd, c.cl, window, meta)
+  }, [feed, version, element, window])
 }

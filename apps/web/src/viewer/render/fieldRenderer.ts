@@ -127,6 +127,13 @@ export class FieldRenderer {
     this.sim = new SimLayer(gl)
   }
 
+  /** The largest image side this GPU can draw (viewport and render buffer limits). */
+  get maxImage(): number {
+    const { gl } = this
+    const dims = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array
+    return Math.min(dims[0], dims[1], gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number)
+  }
+
   /** Whether particles and dye can run (float textures can be rendered to). */
   get floatTargets(): boolean {
     return this.sim.supported

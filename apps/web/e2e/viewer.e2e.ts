@@ -121,6 +121,42 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   const ticks = (await page.getByTestId('viewer-legend').innerText()).split('\n')
   expect(Number(ticks[0])).toBeCloseTo(-Number(ticks[4]))
 
+  // Export: a PNG of the whole domain at 2 px per cell with its footer, the CSVs, and a video of
+  // five frames (H.264/VP9 in MP4 with WebCodecs, else a WebM recording).
+  await page.getByTestId('job-tab-export').click()
+  const saved = async (button: string) => {
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByTestId(button).click(),
+    ])
+    return { name: download.suggestedFilename(), bytes: readFileSync((await download.path())!) }
+  }
+  await page.getByTestId('export-size').selectOption('2')
+  const png = await saved('export-png')
+  expect(png.name).toMatch(/-vorticity-frame\d{4}\.png$/)
+  expect([...png.bytes.subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47])
+  // IHDR: the domain at 2 px per cell, plus the 48 px footer.
+  expect([png.bytes.readUInt32BE(16), png.bytes.readUInt32BE(20)]).toEqual([
+    scene.grid.width * 2,
+    scene.grid.height * 2 + 48,
+  ])
+  const fields = await saved('export-fields')
+  expect(fields.bytes.toString().split('\n')[0]).toBe(
+    'x_m,y_m,velocity_x,velocity_y,pressure,vorticity',
+  )
+  const coefficients = await saved('export-cd')
+  expect(coefficients.bytes.toString().split('\n')[0]).toBe('step,time_s,cd,cl')
+  expect(coefficients.bytes.toString().split('\n').length).toBeGreaterThan(50)
+  await page.getByTestId('video-to').fill('4')
+  await page.getByTestId('video-to').press('Enter')
+  const video = await saved('video-record')
+  expect(video.name).toMatch(/-frames0-4\.(mp4|webm)$/)
+  expect(video.bytes.length).toBeGreaterThan(1000)
+  if (video.name.endsWith('.mp4')) expect(video.bytes.subarray(4, 8).toString()).toBe('ftyp')
+  await expect(page.getByTestId('export-message')).toHaveText(/Saved 5 frames as /)
+  // The timeline is where it was.
+  await expect(position).toHaveText(new RegExp(`^${last} / ${last} `))
+
   // The Plots tab: the force coefficients of the body in the flow, the cylinder (not the channel's
   // walls; uPlot draws into a canvas); a click on the plot moves the playhead to the frame at that
   // time.

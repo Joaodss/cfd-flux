@@ -2,11 +2,10 @@
 // window (the second half of the run so far, or what was dragged on a plot), compared with the
 // benchmark the run's scene reproduces, with the tolerance the validation suite uses at the
 // run's resolution.
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Button } from '../components/ui/button.tsx'
 import { formatValue } from '../panels/format.ts'
 import { ElementSelect } from './PlotsPanel.tsx'
-import { coefficients } from './plots.ts'
 import {
   benchmarkOfScene,
   BENCHMARKS,
@@ -15,8 +14,8 @@ import {
   toleranceAt,
   type BenchmarkId,
 } from './references.ts'
-import { useElement, useSeries, useWindow } from './seriesFeed.ts'
-import { forceStatistics, type ForceStatistics } from './statistics.ts'
+import { useSeries, useStatistics, useWindow } from './seriesFeed.ts'
+import type { ForceStatistics } from './statistics.ts'
 
 const ROWS: { key: keyof ForceStatistics; label: string }[] = [
   { key: 'strouhal', label: 'St' },
@@ -28,21 +27,6 @@ const ROWS: { key: keyof ForceStatistics; label: string }[] = [
 ]
 
 const SELECT = 'h-7 rounded-md border border-border bg-background px-1.5 text-xs'
-
-function useStatistics(): ForceStatistics | null {
-  const feed = useSeries((s) => s.feed)
-  const version = useSeries((s) => s.version)
-  const { element } = useElement()
-  const { window } = useWindow()
-  return useMemo(() => {
-    void version
-    const forces = feed?.buffer.table('forces')
-    const meta = feed?.meta
-    if (!forces || !meta || !element || !window) return null
-    const c = coefficients(forces, element, meta)
-    return c && forceStatistics(forces.data[1], c.cd, c.cl, window, meta)
-  }, [feed, version, element, window])
-}
 
 const percent = (v: number) => `${v >= 0 ? '+' : ''}${(100 * v).toFixed(1)} %`
 

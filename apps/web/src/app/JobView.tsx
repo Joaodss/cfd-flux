@@ -11,6 +11,7 @@ import type { Viewer } from '../viewer/Viewer.ts'
 import { fromScene } from '../scene/io.ts'
 import { bodies } from '../viewer/elements.ts'
 import { PlotsPanel } from '../viewer/PlotsPanel.tsx'
+import { ExportPanel } from '../viewer/ExportPanel.tsx'
 import { StatsPanel } from '../viewer/StatsPanel.tsx'
 import { SeriesFeed, useSeries } from '../viewer/seriesFeed.ts'
 import { TimelineBar } from '../viewer/TimelineBar.tsx'
@@ -235,6 +236,9 @@ export function JobView({ id }: { id: string }) {
               <TabsTrigger value="stats" data-testid="job-tab-stats">
                 Statistics
               </TabsTrigger>
+              <TabsTrigger value="export" data-testid="job-tab-export">
+                Export
+              </TabsTrigger>
               <TabsTrigger value="run" data-testid="job-tab-run">
                 Run
               </TabsTrigger>
@@ -244,6 +248,9 @@ export function JobView({ id }: { id: string }) {
             </TabsContent>
             <TabsContent value="stats">
               <StatsPanel sceneName={job?.scene} />
+            </TabsContent>
+            <TabsContent value="export">
+              <ExportPanel viewer={viewer} jobId={id} />
             </TabsContent>
             <TabsContent value="run">
               {error && <p className="text-sm text-red-400">{error}</p>}

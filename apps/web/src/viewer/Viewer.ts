@@ -2,7 +2,7 @@
 // the run's cells and the WebGL renderer. React components drive it and read `useViewer`.
 import { CELL_COLOURS } from '../editor/colours.ts'
 import type { Rgba } from '../editor/colours.ts'
-import { cellToScreen } from '../editor/view.ts'
+import { cellToScreen, type View } from '../editor/view.ts'
 import { FrameCache } from '../frames/cache.ts'
 import { DecodeError, FrameDecoder } from '../frames/decoder.ts'
 import { halfToFloat } from '../frames/half.ts'
@@ -10,6 +10,9 @@ import type { DecodedFrame } from '../frames/lffr.ts'
 import type { Decoded } from '../frames/protocol.ts'
 import type { Scene } from '../generated/scene.ts'
 import { fromScene } from '../scene/io.ts'
+import { annotate, type Annotation } from './export/annotate.ts'
+import { frameCsv } from './export/csv.ts'
+import { encodeVideo, type VideoResult } from './export/video.ts'
 import { colormap, lut } from './colormaps.ts'
 import { boxFactor, fluidFraction } from './mask.ts'
 import { componentValue } from './quantities.ts'
@@ -77,6 +80,8 @@ export class Viewer {
     stamps: [] as [number, number, number, number][],
   }
   private marked: unknown = null
+  /** A video is being recorded: the live animation leaves the particles and dye alone. */
+  private exporting = false
   private frameRequest = 0
   /** Playback: the fractional frame position and the time of the last animation frame. */
   private playback = { position: 0, time: 0, request: 0 }
@@ -266,6 +271,10 @@ export class Viewer {
   private readonly animate = (now: number): void => {
     this.sim.request = 0
     if (this.disposed) return
+    if (this.exporting) {
+      this.syncAnimation()
+      return
+    }
     this.stepSim((now - this.sim.last) / 1000)
     this.sim.last = now
     this.draw()
@@ -277,10 +286,15 @@ export class Viewer {
    * playback's physical rate (frames per second × simulated time between frames).
    */
   private stepSim(wall: number): void {
+    const { speed } = useViewer.getState().timeline
+    this.stepSimBy(simulatedStep(wall, speed, this.sim.frameInterval))
+  }
+
+  /** Advances the particles and the dye by `dt` simulated seconds. */
+  private stepSimBy(dt: number): void {
     const s = useViewer.getState()
     const { particles, dye } = s.overlays
     const g = s.grid
-    const dt = simulatedStep(wall, s.timeline.speed, this.sim.frameInterval)
     if (!g || !this.current || !(dt > 0)) return
     this.ensureVelocity()
     const { count } = substeps(s.seen['velocity']?.max ?? 0, dt, g.cellSize)
@@ -506,7 +520,7 @@ export class Viewer {
     }
   }
 
-  private draw(): void {
+  private draw(override?: { view: View; dpr: number }): void {
     const s: ViewerState = useViewer.getState()
     const q = currentQuantity(s)
     const frame = this.current
@@ -531,21 +545,21 @@ export class Viewer {
       }
     }
     this.renderer.draw(
-      s.view,
-      window.devicePixelRatio,
+      override?.view ?? s.view,
+      override?.dpr ?? window.devicePixelRatio,
       {
         component: q?.component ?? 'scalar',
         range: currentRange(s) ?? [0, 1],
         nearest: s.nearest,
       },
       COLOURS,
-      this.overlayStyle(s),
+      this.overlayStyle(s, override?.dpr),
     )
   }
 
   /** The overlays to draw: arrows scaled to the fastest speed seen so far, translucent lines. */
-  private overlayStyle(s: ViewerState): Overlays {
-    const dpr = window.devicePixelRatio
+  private overlayStyle(s: ViewerState, ratio?: number): Overlays {
+    const dpr = ratio ?? window.devicePixelRatio
     const arrows = s.overlays.vectors ? arrowScale(s.seen['velocity']?.max ?? 0) : null
     return {
       vectors: arrows
@@ -561,6 +575,137 @@ export class Viewer {
         ? { colour: [0.9, 0.97, 1, 0.95], size: Math.max(2, 2 * dpr) }
         : null,
       mark: s.releaseLine && (s.tool === 'line' || s.overlays.particles) ? [1, 0.85, 0.2, 1] : null,
+    }
+  }
+
+  /** What the footer of an exported image says, or null before the first frame. */
+  private annotation(): Annotation | null {
+    const s = useViewer.getState()
+    const q = currentQuantity(s)
+    const range = currentRange(s)
+    const header = s.frame?.header
+    if (!q || !range || !header) return null
+    return {
+      lut: lut(colormap(colormapOf(s, q))),
+      range,
+      unit: q.unit,
+      label: q.label,
+      time: header.simTime,
+      frame: header.frameIndex,
+      step: header.step,
+    }
+  }
+
+  /**
+   * The picture as a canvas: the view as it is on screen (`scale` null), or the whole domain at
+   * `scale` pixels per cell, overlays included, with the legend and time in a footer if asked.
+   * The domain is drawn by resizing the canvas for a moment: the browser shows nothing in between.
+   */
+  renderImage(scale: number | null, withFooter = true): HTMLCanvasElement {
+    const s = useViewer.getState()
+    const canvas = this.renderer.canvas
+    const copy = () => {
+      const c = document.createElement('canvas')
+      c.width = canvas.width
+      c.height = canvas.height
+      c.getContext('2d')!.drawImage(canvas, 0, 0)
+      return c
+    }
+    let image: HTMLCanvasElement
+    if (scale === null) {
+      this.draw()
+      image = copy()
+    } else {
+      const g = s.grid
+      if (!g) throw new Error('Nothing to export yet')
+      const w = g.width * scale
+      const h = g.height * scale
+      if (Math.max(w, h) > this.renderer.maxImage) {
+        throw new Error(
+          `${w} × ${h} pixels is more than this GPU can draw (${this.renderer.maxImage}); use a smaller size`,
+        )
+      }
+      this.renderer.resize(w, h, 1)
+      // View zoom 1 at a device-pixel ratio of `scale`: `scale` pixels per cell, overlays scaled too.
+      this.draw({ view: { zoom: 1, offsetX: 0, offsetY: 0 }, dpr: scale })
+      image = copy()
+      this.renderer.resize(s.viewport.width, s.viewport.height, window.devicePixelRatio)
+      this.schedule()
+    }
+    const info = withFooter ? this.annotation() : null
+    return info ? annotate(image, info) : image
+  }
+
+  /** The fields of the frame shown as CSV, or null before the first frame. */
+  frameCsv(): string | null {
+    const s = useViewer.getState()
+    if (!this.current || !this.cells || !s.grid) return null
+    return frameCsv(this.current, this.cells.fraction, s.grid, this.cells.blocks.k)
+  }
+
+  /** Shows frame `index` and waits until everything drawn over it (streamlines) is ready. */
+  private async showFrame(index: number): Promise<boolean> {
+    const d = await this.load(index)
+    if (!d || this.disposed) return false
+    this.display(index, d)
+    this.ensureVelocity()
+    if (useViewer.getState().overlays.streamlines) {
+      for (let n = 0; n < 250; n++) {
+        if (!this.streamlines.busy && this.streamlines.frame === this.current) break
+        await new Promise((r) => setTimeout(r, 20))
+      }
+    }
+    return true
+  }
+
+  /**
+   * Records frames `from`..`to` as a video, one video frame per output frame (frame-exact with
+   * WebCodecs), with the overlays and footer. Particles and dye advance by the simulated time
+   * between frames, after a short warm-up so the first frame is not empty. The timeline goes back
+   * to the frame it was on.
+   */
+  async exportVideo(
+    range: { from: number; to: number; fps: number; scale: number },
+    onProgress: (done: number, total: number) => void,
+    signal: AbortSignal,
+  ): Promise<VideoResult> {
+    const before = useViewer.getState().timeline.index
+    this.pause()
+    this.exporting = true
+    try {
+      const { from, to, fps, scale } = range
+      if (!(await this.showFrame(from))) throw new Error(`Frame ${from} is not available`)
+      const size = this.renderImage(scale)
+      const width = size.width - (size.width % 2)
+      const height = size.height - (size.height % 2)
+      const surface = document.createElement('canvas')
+      surface.width = width
+      surface.height = height
+      const ctx = surface.getContext('2d')!
+      const { particles, dye } = useViewer.getState().overlays
+      if (particles || dye) {
+        for (let i = 0; i < 40; i++) this.stepSimBy(this.sim.frameInterval / 4)
+      }
+      const total = to - from + 1
+      return await encodeVideo({
+        width,
+        height,
+        fps,
+        count: total,
+        signal,
+        onProgress: (done) => onProgress(done, total),
+        draw: async (i) => {
+          if (!(await this.showFrame(from + i)))
+            throw new Error(`Frame ${from + i} is not available`)
+          if (i > 0 && (particles || dye)) this.stepSimBy(this.sim.frameInterval)
+          ctx.drawImage(this.renderImage(scale), 0, 0)
+          return surface
+        },
+      })
+    } finally {
+      this.exporting = false
+      if (before !== null) this.request(before)
+      this.syncAnimation()
     }
   }
 

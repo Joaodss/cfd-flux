@@ -136,3 +136,19 @@ there if long; step 6 only with room left).
   SwiftShader.
 - Not done: step 8 (export: PNG, CSV, video) and steps 9–11. `npm test`: **176 pass** (was 160); `npm run test:e2e`
   viewer test passes with the new overlays.
+
+### Step 8: export (2026-10-22)
+
+- `viewer/ExportPanel.tsx` (the *Export* tab) over `viewer/export/`: `csv.ts` (coefficients, statistics, the shown
+  frame), `annotate.ts` (footer), `video.ts` (codec choice, `mp4-muxer`, `MediaRecorder` fallback), `download.ts`.
+  New dependency: `mp4-muxer`.
+- The domain image is drawn by resizing the WebGL canvas to `cells × scale`, drawing with view zoom 1 at a
+  device-pixel ratio of `scale` (so arrows and particles scale too) and restoring the size in the same task.
+- Video: `Viewer.exportVideo` pauses the timeline, loads every frame of the range (cache or server), waits for its
+  streamlines, steps particles and dye by the frames\’ simulated interval and hands the composed canvas to the
+  encoder; the timeline returns to its frame. Sizes are cropped to even numbers.
+- Tests: CSV and footer text, codec choice with stand-in support, bit rates (Vitest); the Playwright test saves a
+  PNG (IHDR size = domain × 2 + footer), the three CSVs and a five-frame video (MP4 `ftyp` when WebCodecs offers a
+  codec, else WebM). `npm test`: **183 pass**; `npm run test:e2e`: **2 pass**.
+- Not done: steps 9–11 (the server serving the app, Nu, acceptance and ADR-031). The MediaRecorder fallback and
+  the video\’s image content were not looked at by eye.
