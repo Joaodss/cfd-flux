@@ -7,21 +7,38 @@ const modules = import.meta.glob<Scene>('../../../../scenes/*.json', {
 })
 
 export interface Example {
-  /** File name without `.json`, e.g. `cylinder-re100`. */
+  /** File name without `.json`, e.g. `cylinder-re100` (`cylinder-re100-quick` for its quick variant). */
   id: string
   scene: Scene
   /** The benchmark it reproduces: a key of `generated/references.json` (the job view's statistics). */
   benchmark?: string
+  /**
+   * The quick variant (`cfd-cli example --quick`): a coarser grid and a shorter run, so the
+   * example finishes in seconds on the CPU engine. Absent on the variants themselves and on the
+   * examples that have none (the dam break).
+   */
+  quick?: Example
 }
 
-/** The benchmarks of the examples that reproduce one. */
+/** The benchmarks of the examples that reproduce one (a quick variant inherits it). */
 const BENCHMARKS: Record<string, string> = {
   'cylinder-re100': 'schaferTurek2D2',
 }
 
-export const EXAMPLES: Example[] = Object.entries(modules)
-  .map(([path, scene]) => {
-    const id = path.replace(/^.*\/(.+)\.json$/, '$1')
-    return { id, scene, benchmark: BENCHMARKS[id] }
-  })
-  .sort((a, b) => a.id.localeCompare(b.id))
+const QUICK_SUFFIX = '-quick'
+
+function example(id: string, scene: Scene): Example {
+  return { id, scene, benchmark: BENCHMARKS[id.replace(new RegExp(`${QUICK_SUFFIX}$`), '')] }
+}
+
+const all = Object.entries(modules).map(([path, scene]) =>
+  example(path.replace(/^.*\/(.+)\.json$/, '$1'), scene),
+)
+
+/** Every example, quick variants included (for finding the example of a scene by its name). */
+export const ALL_EXAMPLES: Example[] = [...all].sort((a, b) => a.id.localeCompare(b.id))
+
+/** The examples of the gallery, each with its quick variant if it has one. */
+export const EXAMPLES: Example[] = ALL_EXAMPLES.filter((e) => !e.id.endsWith(QUICK_SUFFIX)).map(
+  (e) => ({ ...e, quick: ALL_EXAMPLES.find((q) => q.id === `${e.id}${QUICK_SUFFIX}`) }),
+)

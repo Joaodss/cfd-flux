@@ -53,7 +53,7 @@ describe('fromScene', () => {
   })
 
   it('reads the cylinder where examples.rs drew it', async () => {
-    const [, scene] = scenes.find(([f]) => f.startsWith('cylinder'))!
+    const [, scene] = scenes.find(([f]) => f === 'cylinder-re100.json')!
     const { layers } = await fromScene(scene)
     const at = (x: number, y: number) => [
       layers.cellType[layers.index(x, y)],

@@ -134,7 +134,16 @@ export interface SavedScene {
   name: string
 }
 
+/** The engines of `GET /api/capabilities` the web app looks at. */
+export interface Capabilities {
+  version: string
+  engines: { kind: 'cpu' | 'wgpu' | 'cuda'; available: boolean; device?: string }[]
+  /** The engine `auto` takes. */
+  auto: 'cpu' | 'wgpu' | 'cuda' | null
+}
+
 export const api = {
+  capabilities: () => request<Capabilities>('GET', '/api/capabilities'),
   listScenes: () => request<SceneSummary[]>('GET', '/api/scenes'),
   getScene: (id: string) => request<Scene>('GET', `/api/scenes/${encodeURIComponent(id)}`),
   saveScene: (scene: Scene) => request<SavedScene>('POST', '/api/scenes', scene),

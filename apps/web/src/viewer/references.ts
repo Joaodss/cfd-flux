@@ -2,7 +2,7 @@
 // into `src/generated/references.json` by `cfd-cli references` (a Rust test keeps it current),
 // with the relative tolerance the validation suite checks each one with at each resolution.
 import references from '../generated/references.json' with { type: 'json' }
-import { EXAMPLES } from '../scene/examples.ts'
+import { ALL_EXAMPLES } from '../scene/examples.ts'
 
 export type BenchmarkId = keyof typeof references
 
@@ -25,7 +25,7 @@ export function isBenchmark(id: string | undefined): id is BenchmarkId {
 
 /** The benchmark of a run whose scene has a gallery example's name, if that example has one. */
 export function benchmarkOfScene(sceneName: string | undefined): BenchmarkId | null {
-  const id = EXAMPLES.find((e) => e.scene.name === sceneName)?.benchmark
+  const id = ALL_EXAMPLES.find((e) => e.scene.name === sceneName)?.benchmark
   return isBenchmark(id) ? id : null
 }
 

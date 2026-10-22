@@ -54,7 +54,12 @@ export interface RunMeta {
 const path = (id: string, rest = '') => `/api/simulations/${encodeURIComponent(id)}${rest}`
 
 export const jobs = {
-  submit: (scene: Scene) => api.request<Job>('POST', '/api/simulations', { scene }),
+  /**
+   * Queues a run. With `reuse`, the latest completed job of the same scene and options is
+   * returned instead if there is one ("Open with results").
+   */
+  submit: (scene: Scene, opts: { reuse?: boolean } = {}) =>
+    api.request<Job>('POST', `/api/simulations${opts.reuse ? '?reuse=completed' : ''}`, { scene }),
   list: () => api.request<Job[]>('GET', '/api/simulations?limit=100'),
   get: (id: string) => api.request<Job>('GET', `/api/simulations/${encodeURIComponent(id)}`),
   pause: (id: string) =>

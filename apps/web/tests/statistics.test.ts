@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { RunMeta } from '../src/api/jobs.ts'
 import { coefficients } from '../src/viewer/plots.ts'
-import { EXAMPLES } from '../src/scene/examples.ts'
+import { ALL_EXAMPLES } from '../src/scene/examples.ts'
 import {
   benchmarkOfScene,
   BENCHMARKS,
@@ -99,7 +99,7 @@ describe('references', () => {
   it('come from cfd-verify, and every example names a known benchmark', () => {
     expect(st.quantities.strouhal).toEqual([0.295, 0.305])
     expect(st.checked).toEqual(['strouhal', 'cdMax'])
-    for (const ex of EXAMPLES) {
+    for (const ex of ALL_EXAMPLES) {
       if (ex.benchmark !== undefined) expect(isBenchmark(ex.benchmark), ex.id).toBe(true)
     }
     expect(benchmarkOfScene('Cylinder Re=100')).toBe('schaferTurek2D2')
