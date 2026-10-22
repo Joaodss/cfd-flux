@@ -187,4 +187,6 @@ Branch `feat/phase5-viewer` was checked out in another worktree again; this work
 
 ### Final check (2026-10-22)
 
-See below (filled in at the end of the session).
+- Web: `typecheck`, `lint`, `format:check`, `build` clean; `npm test`: **201 pass** (was 183); `test:e2e`: the new gallery test passes (full cavity on CUDA; CI runs the quick variant on the CPU).
+- Rust: `fmt --check`; `clippy --workspace --all-targets -D warnings`, `--no-default-features` and `-p cfd-server --features web` clean; `CFD_REQUIRE_GPU=1 CFD_REQUIRE_CUDA=1 cargo test --workspace` all pass; `cargo test -p cfd-server --features web --test web` passes with a built `dist`.
+- Not done: step 11 (acceptance, ADR-031); a Nu plot in the Plots tab; the CPU quick path of the gallery e2e was not run locally (no CPU-only server).
