@@ -125,6 +125,11 @@ jobs:
         working-directory: apps/web
       - run: npx playwright install --with-deps chromium
         working-directory: apps/web
+      # The web app embedded in the server binary (`--features web`): the release build the
+      # users get (docs/development.md). The Rust job does not build it (no Node there).
+      - run: npm run build
+        working-directory: apps/web
+      - run: cargo test --release -p cfd-server --features web --test web
       # The Phase 4 acceptance scenario: draw the cylinder in a channel, validate, run it.
       - run: npm run test:e2e
         working-directory: apps/web

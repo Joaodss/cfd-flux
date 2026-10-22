@@ -107,6 +107,11 @@ cargo run --release -p cfd-cli -- compare --validation   # writes validation/com
 # Server (Phase 3): API on http://127.0.0.1:7878, data (SQLite + results/) in ./data
 cargo run --release -p cfd-server
 cargo run --release -p cfd-server -- --listen 127.0.0.1:8080 --data /tmp/lf --cpu-jobs 2
+# The web app from the server itself (same origin, no Vite): a directory...
+cargo run --release -p cfd-server -- --web-dir apps/web/dist --open
+# ...or embedded in the binary (the release build: Node first, then Cargo; `dist` must exist at compile time)
+(cd apps/web && npm ci && npm run build)
+cargo build --release -p cfd-server --features web   # then: target/release/cfd-server --open
 # Its test client: submit a scene, follow the stream, optionally cancel (prints the latency)
 cargo run --release -p cfd-cli -- submit scenes/cylinder-re100.json --backend cuda --cancel-after 3
 cargo run --release -p cfd-cli -- submit scenes/channel.json --end-time 2 --fields velocity --max-size 256
@@ -134,6 +139,17 @@ npm run typecheck && npm run lint && npm run format:check && npm run build
   server stops become `failed/interrupted`.
 - The API and the WebSocket messages are in [03 §7](03-data-model.md#7-api). Quick checks with `curl`:
   `POST /api/scenes/validate` with a scene file as the body; `POST /api/simulations` with `{"scene": …}`.
+- **The web app** is served from the same origin as the API (design §10, ADR-010): `/api/*` is the API (an unknown
+  `/api/…` path is the JSON 404), every other path a static file, `/` is `index.html` (hash routes need no fallback).
+  Files under `assets/` (Vite's hashed names, the decode worker too) get `Cache-Control: immutable`, everything else
+  `no-cache`. Source: `--web-dir DIR` (`tower-http`'s `ServeDir`) or, if `--web-dir` is absent and the binary was built
+  with the Cargo feature `web` (default off, so `cargo build` and the Rust CI need no Node), the `apps/web/dist` folder
+  embedded by `rust-embed`. `--open` opens the browser once the socket is bound (`0.0.0.0` / `[::]` open `127.0.0.1`;
+  no browser — headless, CI — is a warning). Release build: `npm run build` in `apps/web`, then
+  `cargo build --release -p cfd-server --features web`. The web job of the CI does it and runs
+  `cargo test --release -p cfd-server --features web --test web` (`tests/web.rs`: a temporary `--web-dir` with `/`,
+  an asset and its headers, unknown `/api/…` paths, `..` traversal; the embedded build's `/`, ETag and first asset).
+  `cargo clippy -p cfd-server --features web` needs `apps/web/dist` to exist.
 - Tests: `crates/cfd-server/tests/` start the server in-process on an ephemeral port with an in-memory database
   (`api.rs`: capabilities, validation, limits, CORS; `jobs.rs`: lifecycle, cancel, pause, queueing, purge,
   restart; `stream.rs`: WebSocket, backpressure, and the acceptance scenario on every available engine, skipped

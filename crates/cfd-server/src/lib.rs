@@ -10,6 +10,7 @@
 //! - [`jobs`]: job states, the job manager, per-device slots, the bridge to the job threads.
 //! - [`stream`]: the latest frame per stream format, for WebSocket viewers.
 //! - [`db`]: job and scene metadata in SQLite.
+//! - [`web`]: the web app served from the same origin (a directory, or embedded with the `web` feature).
 
 pub mod api;
 pub mod config;
@@ -17,6 +18,7 @@ pub mod db;
 pub mod error;
 pub mod jobs;
 pub mod stream;
+pub mod web;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -35,6 +37,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 pub use config::{Config, Limits};
+pub use web::Web;
 
 /// What every handler can reach. Cloning it clones an `Arc` (one shared instance, like a
 /// singleton registered in ASP.NET's dependency injection); axum hands a clone to each handler
@@ -111,27 +114,32 @@ pub fn router(state: AppState) -> Router {
     let compression = CompressionLayer::new().compress_when(
         SizeAbove::new(1024).and(NotForContentType::const_new("application/octet-stream")),
     );
-    Router::new()
-        .route("/api/capabilities", get(api::capabilities))
-        .route("/api/scenes/validate", post(api::validate))
-        .route("/api/scenes", get(api::list_scenes).post(api::save_scene))
+    let api = Router::new()
+        .route("/capabilities", get(api::capabilities))
+        .route("/scenes/validate", post(api::validate))
+        .route("/scenes", get(api::list_scenes).post(api::save_scene))
         .route(
-            "/api/scenes/{id}",
+            "/scenes/{id}",
             get(api::get_scene)
                 .put(api::update_scene)
                 .delete(api::delete_scene),
         )
-        .route("/api/simulations", get(api::list_jobs).post(api::submit))
+        .route("/simulations", get(api::list_jobs).post(api::submit))
         .route(
-            "/api/simulations/{id}",
+            "/simulations/{id}",
             get(api::get_job).delete(api::delete_job),
         )
-        .route("/api/simulations/{id}/pause", post(api::pause))
-        .route("/api/simulations/{id}/resume", post(api::resume))
-        .route("/api/simulations/{id}/frames/{n}", get(api::frame))
-        .route("/api/simulations/{id}/files/{name}", get(api::file))
-        .route("/api/simulations/{id}/stream", get(stream::stream))
-        .fallback(api::not_found)
+        .route("/simulations/{id}/pause", post(api::pause))
+        .route("/simulations/{id}/resume", post(api::resume))
+        .route("/simulations/{id}/frames/{n}", get(api::frame))
+        .route("/simulations/{id}/files/{name}", get(api::file))
+        .route("/simulations/{id}/stream", get(stream::stream))
+        // An unknown `/api/…` path is a JSON 404, never the web app.
+        .fallback(api::not_found);
+    // Everything else is the web app (or a 404 when there is none).
+    config
+        .web
+        .attach(Router::new().nest("/api", api))
         // Layers wrap the routes above, like ASP.NET middleware: the last one added runs first.
         .layer(DefaultBodyLimit::max(config.limits.max_body_bytes))
         .layer(compression)
