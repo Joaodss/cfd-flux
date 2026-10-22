@@ -21,6 +21,8 @@ export interface ViewerState {
   manual: Record<string, [number, number]>
   /** Show blocks as they are, without bilinear interpolation. */
   nearest: boolean
+  /** Overlays over the field. */
+  overlays: { vectors: boolean; streamlines: boolean }
   /** What the frames so far span (seeded from the stream's `hello`). */
   seen: Seen
   frame: { header: FrameHeader; stats: FrameStats } | null
@@ -42,6 +44,7 @@ export interface ViewerState {
   setMode(key: string, mode: RangeMode): void
   setManual(key: string, range: [number, number]): void
   setNearest(nearest: boolean): void
+  setOverlay(key: 'vectors' | 'streamlines', on: boolean): void
   setView(view: View): void
   setViewport(width: number, height: number): void
   zoomStep(direction: 1 | -1, at?: [number, number]): void
@@ -58,6 +61,7 @@ const INITIAL = {
   modes: {},
   manual: {},
   nearest: false,
+  overlays: { vectors: false, streamlines: false },
   seen: {},
   frame: null,
   received: 0,
@@ -112,6 +116,7 @@ export const useViewer = create<ViewerState>()((set, get) => ({
   setManual: (key, range) =>
     set((s) => ({ manual: { ...s.manual, [key]: range }, modes: { ...s.modes, [key]: 'manual' } })),
   setNearest: (nearest) => set({ nearest }),
+  setOverlay: (key, on) => set((s) => ({ overlays: { ...s.overlays, [key]: on } })),
   setView: (view) => set({ view }),
   setViewport: (width, height) => {
     const { viewport, grid } = get()

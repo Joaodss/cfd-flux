@@ -24,7 +24,7 @@ export class FrameDecoder {
   private next = 1
   private readonly pending = new Map<
     number,
-    { resolve: (d: Decoded) => void; reject: (e: Error) => void }
+    { resolve: (d: never) => void; reject: (e: Error) => void }
   >()
 
   constructor(worker?: WorkerLike) {
@@ -40,7 +40,7 @@ export class FrameDecoder {
       const p = this.pending.get(r.id)
       if (!p) return
       this.pending.delete(r.id)
-      if (r.ok) p.resolve({ frame: r.frame, stats: r.stats })
+      if (r.ok) p.resolve(('segments' in r ? r : { frame: r.frame, stats: r.stats }) as never)
       else p.reject(new DecodeError(r.error, r.status))
     })
   }
@@ -50,14 +50,33 @@ export class FrameDecoder {
     this.worker.postMessage({ id: 0, kind: 'mask', fraction })
   }
 
+  /** Sets the run's cells (full resolution, 0 = fluid) for the streamlines. */
+  setCells(cellType: Uint8Array, width: number, height: number): void {
+    this.worker.postMessage({ id: 0, kind: 'cells', cellType, width, height })
+  }
+
+  /**
+   * Traces the streamlines of a velocity field (a copy is sent: the page keeps its own) and
+   * answers with their line segments in cells.
+   */
+  streamlines(
+    velocity: Extract<Request, { kind: 'streamlines' }>['velocity'],
+    options: Extract<Request, { kind: 'streamlines' }>['options'] = {},
+  ): Promise<{ segments: Float32Array; lines: number }> {
+    return this.request<{ segments: Float32Array; lines: number }>(
+      { id: 0, kind: 'streamlines', velocity, options },
+      [],
+    )
+  }
+
   /** Decodes a compressed frame. The buffer is *moved* to the worker: it is empty afterwards. */
   decode(buffer: ArrayBuffer): Promise<Decoded> {
-    return this.request({ id: 0, kind: 'decode', buffer }, [buffer])
+    return this.request<Decoded>({ id: 0, kind: 'decode', buffer }, [buffer])
   }
 
   /** Fetches and decodes a stored frame in the worker (the bytes never reach this thread). */
   fetch(url: string): Promise<Decoded> {
-    return this.request({ id: 0, kind: 'fetch', url }, [])
+    return this.request<Decoded>({ id: 0, kind: 'fetch', url }, [])
   }
 
   /** Requests still waiting for the worker. */
@@ -71,7 +90,7 @@ export class FrameDecoder {
     this.pending.clear()
   }
 
-  private request(req: Request, transfer: Transferable[]): Promise<Decoded> {
+  private request<T>(req: Request, transfer: Transferable[]): Promise<T> {
     const id = this.next++
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject })

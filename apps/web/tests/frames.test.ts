@@ -177,6 +177,36 @@ describe('FrameDecoder (worker protocol)', () => {
     expect(d.busy).toBe(0)
   })
 
+  it('traces streamlines in the worker from the run’s cells and a velocity copy', async () => {
+    const d = new FrameDecoder(fakeWorker(fetch))
+    const [w, h] = [40, 20]
+    const uniform = (dtype: 'f16' | 'f32') => {
+      const one = dtype === 'f16' ? 0x3c00 : 1 // 1.0 as f16 bits
+      const data = dtype === 'f16' ? new Uint16Array(w * h * 2) : new Float32Array(w * h * 2)
+      for (let b = 0; b < w * h; b++) data[2 * b] = one
+      return { data, dtype, k: 1 }
+    }
+    // The cells come first.
+    await expect(d.streamlines(uniform('f32'))).rejects.toThrow(/cells/)
+    const cellType = new Uint8Array(w * h)
+    for (let y = 8; y < 12; y++) cellType[y * w + 20] = 1
+    d.setCells(cellType, w, h)
+    for (const dtype of ['f16', 'f32'] as const) {
+      const r = await d.streamlines(uniform(dtype), { separation: 4, maxLength: 100 })
+      expect(r.lines).toBeGreaterThan(2)
+      expect(r.segments.length % 4).toBe(0)
+      // Horizontal lines (v = 0) that stop at the wall of solid cells at x = 20.
+      for (let i = 0; i < r.segments.length; i += 4) {
+        expect(r.segments[i + 1]).toBeCloseTo(r.segments[i + 3], 5)
+        const y = Math.floor(r.segments[i + 1])
+        if (y >= 8 && y < 12) expect(Math.max(r.segments[i], r.segments[i + 2])).toBeLessThan(20.01)
+      }
+    }
+    // A block factor that does not match the cells is refused.
+    await expect(d.streamlines({ ...uniform('f32'), k: 2 })).rejects.toThrow(/match/)
+    expect(d.busy).toBe(0)
+  })
+
   it('lists every field buffer for transfer', () => {
     const frame = decodeFrame(fixture('stored-f32.lffr'))
     expect(transferables(frame)).toEqual(frame.fields.map((f) => f.data.buffer))

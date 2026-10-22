@@ -7,6 +7,7 @@ import { Button } from '../components/ui/button.tsx'
 import { formatValue } from '../panels/format.ts'
 import { COLORMAPS, colormap, cssGradient } from './colormaps.ts'
 import { RANGE_MODES, ticks, type RangeMode } from './ranges.ts'
+import { ARROW_SPACING, arrowScale } from './vectors.ts'
 import { colormapOf, currentQuantity, currentRange, modeOf, useViewer } from './store.ts'
 
 const SELECT =
@@ -104,6 +105,30 @@ export function ViewerToolbar() {
         />
         Blocks
       </label>
+      <label
+        className="flex items-center gap-1.5 text-xs text-muted-foreground"
+        title="Velocity arrows on a regular grid on the screen"
+      >
+        <input
+          type="checkbox"
+          data-testid="viewer-vectors"
+          checked={s.overlays.vectors}
+          onChange={(e) => s.setOverlay('vectors', e.target.checked)}
+        />
+        Vectors
+      </label>
+      <label
+        className="flex items-center gap-1.5 text-xs text-muted-foreground"
+        title="Streamlines of the frame shown"
+      >
+        <input
+          type="checkbox"
+          data-testid="viewer-streamlines"
+          checked={s.overlays.streamlines}
+          onChange={(e) => s.setOverlay('streamlines', e.target.checked)}
+        />
+        Streamlines
+      </label>
       <Button variant="ghost" size="sm" className="ml-auto" onClick={s.fit} title="Fit the domain">
         <Maximize /> Fit
       </Button>
@@ -117,6 +142,7 @@ export function Legend() {
   const range = currentRange(s)
   const header = s.frame?.header
   const stats = q ? s.frame?.stats[q.key] : undefined
+  const arrows = s.overlays.vectors ? arrowScale(s.seen['velocity']?.max ?? 0, ARROW_SPACING) : null
   return (
     <div className="flex h-12 shrink-0 items-center gap-4 border-t border-border px-3 text-xs tabular-nums">
       {q && range ? (
@@ -135,6 +161,30 @@ export function Legend() {
         <div className="w-80" />
       )}
       <span className="text-muted-foreground">{q?.unit}</span>
+      {arrows && (
+        <span
+          className="flex items-center gap-1.5 text-muted-foreground"
+          data-testid="viewer-arrow-reference"
+        >
+          <svg width={arrows.reference.length + 2} height="10" aria-hidden>
+            <line
+              x1="1"
+              y1="5"
+              x2={arrows.reference.length + 1}
+              y2="5"
+              stroke="currentColor"
+              strokeWidth="1.5"
+            />
+            <path
+              d={`M${arrows.reference.length + 1} 5 l-4 -2.5 M${arrows.reference.length + 1} 5 l-4 2.5`}
+              stroke="currentColor"
+              strokeWidth="1.5"
+              fill="none"
+            />
+          </svg>
+          {formatValue(arrows.reference.value)} m/s
+        </span>
+      )}
       {header && (
         <span data-testid="viewer-frame">
           t = {formatValue(header.simTime)} s · frame {header.frameIndex} · step{' '}

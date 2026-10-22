@@ -13,9 +13,10 @@ import { fromScene } from '../scene/io.ts'
 import { colormap, lut } from './colormaps.ts'
 import { boxFactor, fluidFraction } from './mask.ts'
 import { componentValue } from './quantities.ts'
-import { FieldRenderer, type ViewerColours } from './render/fieldRenderer.ts'
+import { FieldRenderer, type Overlays, type ViewerColours } from './render/fieldRenderer.ts'
 import { colormapOf, currentQuantity, currentRange, useViewer, type ViewerState } from './store.ts'
 import { advance, prefetch } from './timeline.ts'
+import { ARROW_SPACING, arrowScale } from './vectors.ts'
 
 const COLOURS: ViewerColours = {
   // Fluid cells before the first frame: a neutral dark grey.
@@ -49,11 +50,24 @@ export class Viewer {
   private running = true
   private readonly inFlight = new Map<number, Promise<Decoded | null>>()
   /** What the textures hold, to upload only on change. */
-  private uploaded: { frame: DecodedFrame | null; field: string | null; lut: string | null } = {
+  private uploaded: {
+    frame: DecodedFrame | null
+    velocity: DecodedFrame | null
+    field: string | null
+    lut: string | null
+  } = {
     frame: null,
+    velocity: null,
     field: null,
     lut: null,
   }
+  /** The streamlines drawn: the frame they belong to, and the request in the worker. */
+  private streamlines: { frame: DecodedFrame | null; index: number; busy: boolean } = {
+    frame: null,
+    index: -1,
+    busy: false,
+  }
+  private overlays = useViewer.getState().overlays
   private frameRequest = 0
   /** Playback: the fractional frame position and the time of the last animation frame. */
   private playback = { position: 0, time: 0, request: 0 }
@@ -64,7 +78,14 @@ export class Viewer {
     this.renderer = new FieldRenderer(canvas)
     this.decoder = decoder ?? new FrameDecoder()
     this.cache = cache ?? new FrameCache()
-    this.unsubscribe = useViewer.subscribe(() => this.schedule())
+    this.unsubscribe = useViewer.subscribe((s) => {
+      if (s.overlays !== this.overlays) {
+        const streamlinesChanged = s.overlays.streamlines !== this.overlays.streamlines
+        this.overlays = s.overlays
+        if (streamlinesChanged) this.updateStreamlines(true)
+      }
+      this.schedule()
+    })
   }
 
   /**
@@ -90,7 +111,10 @@ export class Viewer {
     this.cells = { cellType, width, height, blocks, fraction }
     this.renderer.setCells(cellType, width, height, fraction, blocks)
     this.decoder.setMask(fraction)
-    this.uploaded = { frame: null, field: null, lut: this.uploaded.lut }
+    this.decoder.setCells(cellType, width, height)
+    this.streamlines = { frame: null, index: -1, busy: this.streamlines.busy }
+    this.renderer.setStreamlines(null)
+    this.uploaded = { frame: null, velocity: null, field: null, lut: this.uploaded.lut }
   }
 
   /** A compressed frame from the stream (moved to the worker). */
@@ -150,6 +174,60 @@ export class Viewer {
     const s = useViewer.getState()
     s.setFrame(header, d.stats)
     s.setTimeline({ index, buffering: false, note: null })
+    this.updateStreamlines(false)
+  }
+
+  /**
+   * Recomputes the streamlines for the shown frame (in the worker) when they are on and out of
+   * date: at once when paused or toggled on; while playing, every few frames, so the worker keeps
+   * up. Only one request runs at a time; the frame shown when it ends is looked at again.
+   */
+  private updateStreamlines(force: boolean): void {
+    const s = useViewer.getState()
+    if (!s.overlays.streamlines) {
+      this.streamlines = { frame: null, index: -1, busy: this.streamlines.busy }
+      this.renderer.setStreamlines(null)
+      this.schedule()
+      return
+    }
+    const frame = this.current
+    const c = this.cells
+    const velocity = frame?.fields.find((f) => f.name === 'velocity' && f.components === 2)
+    if (!frame || !c || !velocity || this.streamlines.busy || this.streamlines.frame === frame) {
+      return
+    }
+    const index = frame.header.frameIndex
+    const playing = s.timeline.mode !== 'paused'
+    if (
+      playing &&
+      !force &&
+      this.streamlines.frame &&
+      Math.abs(index - this.streamlines.index) < 4
+    ) {
+      return
+    }
+    this.streamlines.busy = true
+    const k = c.blocks.k
+    const data = velocity.data.slice() // the page keeps its own copy of the frame
+    const separation = Math.max(3, Math.min(c.width, c.height) / 24)
+    void this.decoder
+      .streamlines(
+        { data, dtype: velocity.dtype, k },
+        { separation, step: Math.max(0.5, k * 0.5), maxLength: 1.5 * Math.max(c.width, c.height) },
+      )
+      .then(
+        (r) => {
+          this.streamlines = { frame, index, busy: false }
+          if (this.disposed) return
+          if (useViewer.getState().overlays.streamlines) this.renderer.setStreamlines(r.segments)
+          this.schedule()
+          this.updateStreamlines(false) // the frame shown may have changed meanwhile
+        },
+        (e: Error) => {
+          this.streamlines.busy = false
+          console.warn('streamlines skipped:', e.message)
+        },
+      )
   }
 
   /** A frame from the cache or the server (one request per frame at a time). */
@@ -268,6 +346,17 @@ export class Viewer {
     this.playback.request = requestAnimationFrame(this.tick)
   }
 
+  /** Streamline segments being drawn (tests). */
+  get streamlineSegments(): number {
+    return this.renderer.streamlineCount
+  }
+
+  /** The canvas as a PNG data URL (tests compare images). */
+  snapshot(): string {
+    this.draw()
+    return this.renderer.canvas.toDataURL()
+  }
+
   /** The current frame's header (the timeline) or null. */
   get frame(): DecodedFrame | null {
     return this.current
@@ -324,6 +413,11 @@ export class Viewer {
     const s: ViewerState = useViewer.getState()
     const q = currentQuantity(s)
     const frame = this.current
+    const velocity = frame?.fields.find((f) => f.name === 'velocity' && f.components === 2)
+    if (frame && velocity && s.overlays.vectors && this.uploaded.velocity !== frame) {
+      this.renderer.setVelocity(velocity, frame.header.width, frame.header.height)
+      this.uploaded.velocity = frame
+    }
     if (q && frame) {
       const field = frame.fields.find((f) => f.name === q.field)
       if (field && (this.uploaded.frame !== frame || this.uploaded.field !== q.field)) {
@@ -346,7 +440,24 @@ export class Viewer {
         nearest: s.nearest,
       },
       COLOURS,
+      this.overlayStyle(s),
     )
+  }
+
+  /** The overlays to draw: arrows scaled to the fastest speed seen so far, translucent lines. */
+  private overlayStyle(s: ViewerState): Overlays {
+    const dpr = window.devicePixelRatio
+    const arrows = s.overlays.vectors ? arrowScale(s.seen['velocity']?.max ?? 0) : null
+    return {
+      vectors: arrows
+        ? {
+            spacing: ARROW_SPACING * dpr,
+            scale: arrows.scale * dpr,
+            colour: [1, 1, 1, 0.9],
+          }
+        : null,
+      streamlines: s.overlays.streamlines ? [1, 1, 1, 0.55] : null,
+    }
   }
 
   dispose(): void {

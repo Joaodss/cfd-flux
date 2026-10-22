@@ -13,6 +13,12 @@ const scene = JSON.parse(
 
 type Pixel = [number, number, number, number]
 
+/** The parts of the development-only viewer hook the test uses. */
+interface ViewerHook {
+  snapshot(): string
+  streamlineSegments: number
+}
+
 /** The canvas pixel at the centre of a cell (through the development-only test hook). */
 function pixel(page: Page, x: number, y: number): Promise<Pixel> {
   return page.evaluate(
@@ -69,6 +75,28 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   await expect(position).toHaveText(new RegExp(`^${last} / ${last} `), { timeout: 30_000 })
   await expect(page.getByTestId('timeline-play')).toBeVisible()
   expect(await pixel(page, ...WAKE)).toEqual(wakeLast)
+
+  // Overlays: streamlines come from the decode worker; arrows are drawn by the GPU from the
+  // velocity texture (the image changes with each).
+  const image = () =>
+    page.evaluate(() => (globalThis as unknown as { __viewer: ViewerHook }).__viewer.snapshot())
+  const segments = () =>
+    page.evaluate(
+      () => (globalThis as unknown as { __viewer: ViewerHook }).__viewer.streamlineSegments,
+    )
+  const plain = await image()
+  await page.getByTestId('viewer-vectors').check()
+  await expect(page.getByTestId('viewer-arrow-reference')).toHaveText(/m.s$/)
+  const arrows = await image()
+  expect(arrows).not.toEqual(plain)
+  await page.getByTestId('viewer-streamlines').check()
+  await expect.poll(() => segments(), { timeout: 30_000 }).toBeGreaterThan(100)
+  const both = await image()
+  expect(both).not.toEqual(arrows)
+  await page.getByTestId('viewer-vectors').uncheck()
+  await page.getByTestId('viewer-streamlines').uncheck()
+  await expect.poll(() => segments()).toBe(0)
+  expect(await image()).toEqual(plain)
 
   // Another field: vorticity, symmetric range around zero.
   await page.getByTestId('viewer-quantity').selectOption('vorticity')

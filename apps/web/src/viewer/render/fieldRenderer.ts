@@ -7,6 +7,13 @@ import type { View } from '../../editor/view.ts'
 import type { DecodedField } from '../../frames/lffr.ts'
 import { bind, integerTexture, link } from '../../gl/gl.ts'
 import type { Component } from '../quantities.ts'
+import {
+  LineLayer,
+  VectorLayer,
+  type Colour4,
+  type LayerContext,
+  type VectorStyle,
+} from './overlays.ts'
 import { FIELD_FRAGMENT } from './shaders.ts'
 
 const COMPONENT: Record<Component, number> = { scalar: 0, magnitude: 1, x: 2, y: 3 }
@@ -16,6 +23,12 @@ export interface FieldStyle {
   range: [number, number]
   /** Show the field's blocks as they are (no bilinear interpolation). */
   nearest: boolean
+}
+
+/** The overlays to draw over the field (null: not drawn). */
+export interface Overlays {
+  vectors: VectorStyle | null
+  streamlines: Colour4 | null
 }
 
 export interface ViewerColours {
@@ -49,8 +62,13 @@ export class FieldRenderer {
   private readonly u: Record<string, WebGLUniformLocation | null>
   private readonly cellTex: WebGLTexture
   private readonly fieldTex: WebGLTexture
+  /** The velocity, for the arrows (the shown field may be another one). */
+  private readonly velocityTex: WebGLTexture
+  private hasVelocity = false
   private readonly fractionTex: WebGLTexture
   private readonly lutTex: WebGLTexture
+  private readonly vectorLayer: VectorLayer
+  private readonly lineLayer: LineLayer
   private grid: [number, number] | null = null
   /** The field texture's size in blocks and the box factor k. */
   private field: { width: number; height: number; k: number } | null = null
@@ -92,8 +110,21 @@ export class FieldRenderer {
     )
     this.cellTex = integerTexture(gl)
     this.fieldTex = filteredTexture(gl)
+    this.velocityTex = filteredTexture(gl)
     this.fractionTex = filteredTexture(gl)
     this.lutTex = filteredTexture(gl)
+    this.vectorLayer = new VectorLayer(gl)
+    this.lineLayer = new LineLayer(gl)
+  }
+
+  /** Streamline segments held (tests). */
+  get streamlineCount(): number {
+    return this.lineLayer.count
+  }
+
+  /** Replaces the streamline segments (cells) or clears them. */
+  setStreamlines(segments: Float32Array | null): void {
+    this.lineLayer.set(segments)
   }
 
   /** The run's cells (full resolution; 0 = fluid) and the fluid fraction of each block (size w × h). */
@@ -140,6 +171,7 @@ export class FieldRenderer {
     this.grid = [width, height]
     this.field = { ...blocks }
     this.hasField = false
+    this.hasVelocity = false
   }
 
   /**
@@ -147,9 +179,25 @@ export class FieldRenderer {
    * filters half floats linearly without extensions), or f32 values into R32F/RG32F.
    */
   setField(field: DecodedField, width: number, height: number): void {
+    this.upload(this.fieldTex, field, width, height)
+    this.filter(field.dtype === 'f32' || this.nearest)
+    this.hasField = true
+  }
+
+  /** Uploads the frame's velocity for the arrows. */
+  setVelocity(field: DecodedField, width: number, height: number): void {
+    this.upload(this.velocityTex, field, width, height)
+    const { gl } = this
+    const f = field.dtype === 'f32' ? gl.NEAREST : gl.LINEAR
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f)
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f)
+    this.hasVelocity = true
+  }
+
+  private upload(tex: WebGLTexture, field: DecodedField, width: number, height: number): void {
     const { gl } = this
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
-    gl.bindTexture(gl.TEXTURE_2D, this.fieldTex)
+    gl.bindTexture(gl.TEXTURE_2D, tex)
     const two = field.components === 2
     if (field.dtype === 'f16') {
       gl.texImage2D(
@@ -177,8 +225,6 @@ export class FieldRenderer {
         field.data,
       )
     }
-    this.filter(field.dtype === 'f32' || this.nearest)
-    this.hasField = true
   }
 
   /** Uploads a colour map's 256-entry lookup table. */
@@ -208,7 +254,13 @@ export class FieldRenderer {
     }
   }
 
-  draw(view: View, dpr: number, style: FieldStyle, colours: ViewerColours): void {
+  draw(
+    view: View,
+    dpr: number,
+    style: FieldStyle,
+    colours: ViewerColours,
+    overlays: Overlays = { vectors: null, streamlines: null },
+  ): void {
     const { gl, u, grid, field } = this
     gl.viewport(0, 0, this.canvas.width, this.canvas.height)
     const bg = colours.background
@@ -242,6 +294,19 @@ export class FieldRenderer {
     gl.uniform4fv(u.u_borderColour, norm(colours.border))
     gl.uniform4fv(u.u_noData, norm(colours.noData))
     gl.drawArrays(gl.TRIANGLES, 0, 3)
+    if (!this.hasField) return
+    const ctx: LayerContext = {
+      canvas: [this.canvas.width, this.canvas.height],
+      origin: [view.offsetX * dpr, this.canvas.height - (view.offsetY * dpr + grid[1] * zoom)],
+      zoom,
+      grid,
+      fieldCells: [field.width * field.k, field.height * field.k],
+      cellTex: this.cellTex,
+      fieldTex: this.velocityTex,
+      fractionTex: this.fractionTex,
+    }
+    if (overlays.streamlines) this.lineLayer.draw(ctx, overlays.streamlines)
+    if (overlays.vectors && this.hasVelocity) this.vectorLayer.draw(ctx, overlays.vectors)
   }
 
   /** The RGBA pixel at a device-pixel position from the top-left corner (tests, eyedropper). */
@@ -254,9 +319,11 @@ export class FieldRenderer {
 
   dispose(): void {
     const { gl } = this
-    for (const t of [this.cellTex, this.fieldTex, this.fractionTex, this.lutTex])
+    for (const t of [this.cellTex, this.fieldTex, this.velocityTex, this.fractionTex, this.lutTex])
       gl.deleteTexture(t)
     gl.deleteProgram(this.program)
     gl.deleteVertexArray(this.vao)
+    this.vectorLayer.dispose()
+    this.lineLayer.dispose()
   }
 }
