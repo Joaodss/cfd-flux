@@ -16,7 +16,10 @@ there if long; step 6 only with room left).
 | 3 | Timeline: frame cache, stored frames in the viewer format, play/pause/scrub/speed/Live | ✅ (end-of-run fix 2026-10-21) |
 | 4 | Series: `JobObserver::sample`, `series` messages, flushed CSVs; Plots tab with uPlot | ✅ 2026-10-21 |
 | 5 | Statistics: window, St/C_D/C_L, contract test, generated references, example benchmarks, cylinder `endTime` | ✅ 2026-10-21 (`endTime` 20 s, not 12 — below) |
-| 6–11 | Vectors/streamlines, particles, export, serving the app, gallery, Nu, acceptance | next session |
+| 6–8 | Vectors/streamlines, particles and dye, export | ✅ 2026-10-22 |
+| 9 | `cfd-server` serves the app (`web` feature, `--web-dir`, `--open`); gallery: Open with results, quick variants | ✅ 2026-10-22 (below) |
+| 10 | Nusselt number: `heat.csv`, Statistics tab, de Vahl Davis | ✅ 2026-10-22 (below) |
+| 11 | Acceptance, ADR-031 | next session |
 
 ## Found along the way
 
@@ -152,3 +155,36 @@ there if long; step 6 only with room left).
   codec, else WebM). `npm test`: **183 pass**; `npm run test:e2e`: **2 pass**.
 - Not done: steps 9–11 (the server serving the app, Nu, acceptance and ADR-031). The MediaRecorder fallback and
   the video\’s image content were not looked at by eye.
+
+## Session of 2026-10-22 (second): steps 9–10 (serving the app, gallery, Nusselt)
+
+Branch `feat/phase5-viewer` was checked out in another worktree again; this worktree was reset to `origin/feat/phase5-viewer` and pushes `HEAD:feat/phase5-viewer`.
+
+### Step 9: the server serves the app
+
+- `crates/cfd-server/src/web.rs`: `Web::{None, Dir, Embedded}` in `Config`. The API routes are nested under `/api` with their own fallback, so an unknown `/api/…` path stays the JSON 404 and every other path goes to the static files; a small middleware sets `Cache-Control` (`immutable` under `assets/`, `no-cache` elsewhere, none on `/api`). `--web-dir` is `tower-http`'s `ServeDir` (no hand-rolled reads); the embedded files are `rust-embed` behind the Cargo feature `web` (`debug-embed`, so debug and release serve the same bytes), with an ETag and `304`. `--open` uses `webbrowser` once the socket is bound; `0.0.0.0`/`[::]` open `127.0.0.1`; a failure is a warning.
+- Tests (`tests/web.rs`): a temporary `--web-dir` with `/`, an asset (content type and cache headers), unknown `/api…` paths (also `/api`), `..` traversal sent percent-encoded, POST refused; with `--features web` the embedded `/`, its ETag/`304` and its first asset. Unit test for the browser URL. CI: the web-e2e job now also runs `npm run build` and `cargo test --release -p cfd-server --features web --test web` (the release server it builds anyway, so the extra cost is one crate); documented in `development.md`.
+- Rust idioms met: a Cargo feature is a compile-time `#[cfg(feature = …)]` switch (like `#if` with a define); `#[derive(RustEmbed)]` is a source generator that reads the folder when compiling; `Router::nest` is `MapGroup`; `middleware::from_fn` is `app.Use`.
+
+### Step 9: gallery
+
+- **Open with results:** migration `0002_scene_hash.sql` adds `jobs.scene_hash`: the SHA-256 of the validated scene's canonical JSON (the serialisation of the parsed `Scene`, so formatting does not matter) plus the options that change the result (everything but the engine). `POST /api/simulations?reuse=completed` answers `200` with the latest completed job of that hash whose results are still on disk, else starts one (`201`); other values of `reuse` are `request.reuse` (400). Test: new job, a second one while the first is running, reuse after completion, another engine/format still hits, other options/scene/no `reuse` do not, a purged job is skipped.
+- **Quick variants** (`cfd_core::examples::quick`, `cfd-cli example NAME --quick`, `--all` writes them too, `scenes/*-quick.json`, tests keep them valid, round-tripping and current). CPU timings (16 threads, release):
+  - channel 200 × 50 cells, 10 s: 5,000 steps, 0.7 s;
+  - heated cavity 64² (the suite's N), 80 s: 58,104 steps, 5.9 s (kinetic energy within 0.1 % after ≈ 60 s);
+  - **cylinder: half resolution cannot work.** D = 10 cells (τ = 0.5100) diverges at step 1,290 of 30,000 at the default lattice velocity (Ma 0.087; a higher lattice velocity breaks the Mach limit). 58 cells across the channel (D ≈ 14.1, dx = 7.07 mm, τ = 0.5141) is stable: 42,439 steps for 10 s in 6.1 s (123 MLUPS), C_L amplitude ≈ 1.1. It is a 0.7× coarsening, and the description says "a coarser grid".
+  The gallery fetches `/api/capabilities` and, when `auto` is the CPU, offers the variants (a checkbox, on by default); the dam break has none and its button is disabled. Quick runs use the same benchmark as their example, with `toleranceAt` at their own resolution; the cylinder's St/C_D acceptance applies to the full example only.
+
+### Step 10: Nusselt number
+
+- `cfd_core::heat`: `wall_gradient` (the second-order one-sided difference at the half-way wall, moved from `cfd-verify`'s heated cavity, which calls it now; same expression, same results), `HeatWalls` (the cell faces of each counted element, found once from the scene) and `nusselt`. **Counted elements:** `Wall` and `HeatSource` with a `Fixed` (heat from the gradient, `-k Σ gradient`) or `Flux` (the prescribed flux × length) condition; adiabatic, convective (unsupported) and inlets/outlets are not (inlets carry heat by advection). Faces across periodic edges are not followed.
+- `heat.csv` (`step, time_s, {element}.q_W_m, {element}.length_m`): written and flushed by the **output thread** from the stored frame's temperature before it tells the observer (`FrameEvent::heat`), so it is the same for every engine and every row a viewer is sent is on disk. The server adds it to the `series` messages (`rows.heat`) and `hello.series.heat`; `meta.json` says `run.heat` and gives `dimensionless.reference.conductivity`. Only thermal runs with stored frames (and a `temperature` frame field) have it. Tests: `cfd-job` recomputes every row from the frame files alone (bit-identical), `meta.json`, absent without frames/thermal walls; the server test streams a cavity run and checks, on each `series` message, that the file already holds the streamed rows.
+- Statistics tab: Nu per wall = `(q / length) L / (k ΔT)` averaged over the window, with the spread ((max − min)/mean: "steady" is a number), compared with de Vahl Davis for the heated wall; the force table is hidden for a run without bodies. `references.json` gained `deVahlDavis1e5` (`nuHot` checked, `nuMean` for information; 2 % from `cfd-verify`'s own constant); the heated-cavity example names it, so does its quick variant.
+- **Rayleigh number: Ra = 10⁵** — the suite's case `heated-cavity-ra1e5` (it also has 10³, 10⁴, 10⁶; the example's name was already Ra = 1e5, and the run's Ra from `meta.json` is 99,994.9 with ΔT = 0.9572 K, air, L = 0.1 m). The suite checks both Nusselt numbers within 2 % at N = 128 (full level); at N = 64 its table reads +0.84 %. The viewer applies 2 % at N ≥ 64.
+- Numbers: the quick cavity (N = 64, CPU), window 40–80 s: **Nu_hot = 4.5416 (+0.72 % vs 4.509 ✓)**, Nu_cold = −4.5416, spread 0.83 % (still settling from above); the last frame 4.548. The full example on the CUDA engine passes the same check in the Playwright test.
+- **Contract:** `apps/web/tests/fixtures/series/cavity-heat.csv` (a real run, 40–80 s, 40 rows) and `cavity-nusselt.json` (written by `UPDATE_FIXTURES=1 cargo test -p cfd-verify --test web_contract`); TypeScript's mean/min/max/spread agree to 1e-12. Only arithmetic is involved, no libm functions, so Linux CI computes the same numbers.
+- Note: frames store temperature as f32 kelvin (≈ 3·10⁻⁵ K at 293 K); with ΔT ≈ 1 K the wall gradient of a single face has a rounding error of a few 0.1 %, which averages out over the faces (a synthetic linear profile shows 0.5 %, a real run is within the suite's 0.84 %).
+
+### Final check (2026-10-22)
+
+See below (filled in at the end of the session).

@@ -2,7 +2,7 @@
 //! a function of the files on disk (and of nothing the engine does), and only thermal runs with
 //! stored frames have it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
 
@@ -18,7 +18,7 @@ fn temp_dir(name: &str) -> PathBuf {
     d
 }
 
-fn run(scene: &cfd_core::Scene, dir: &PathBuf, opts: RunOptions) {
+fn run(scene: &cfd_core::Scene, dir: &Path, opts: RunOptions) {
     let prepared = cfd_job::prepare(scene.to_json_pretty(), opts).unwrap();
     let rd = ResultDir::create(dir, false).unwrap();
     let (_tx, rx) = mpsc::channel();

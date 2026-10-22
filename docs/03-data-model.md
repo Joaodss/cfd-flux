@@ -166,9 +166,13 @@ results/{job_id}/
   probes.csv          # probe time series (u, v, p, T per probe)
   forces.csv          # force per element (N/m, gauge)
   diagnostics.csv     # mass, kinetic energy, max velocity/Mach, heat
+  heat.csv            # thermal runs with stored frames: heat through each thermal wall, per frame
 ```
+`heat.csv` has a row per *stored frame* (`step, time_s, {element}.q_W_m, {element}.length_m` for each element that is a `wall` or `heatSource` with a fixed-temperature or flux condition and touches the fluid; the element is named like its columns in `forces.csv`). `q_W_m` is the heat per metre of span in W/m, positive into the fluid: for a fixed temperature, -k times the wall-normal temperature gradient summed over the element's fluid-facing cell faces (`cfd_core::heat`: a second-order one-sided difference at the half-way wall, from the stored full-resolution temperature, so it does not depend on the engine); for a flux, the prescribed value times the length. `length_m` is the number of faces times dx. Adiabatic, convective (unsupported) and inlet/outlet elements are not listed. The output thread writes and flushes each line before it tells observers, so a `heat` row in a `series` message is on disk. The Nusselt number is `Nu = (q / length) L / (k ΔT)` with `L` and `ΔT` from `meta.json`'s `dimensionless.reference` and `k` from its `conductivity`.
+
 The CSV series get a row every sample interval; the files are flushed before each progress report (so a viewer that reads them while the run goes on gets whole lines, up to some step) and the same rows reach viewers as `series` messages (§7). Written by `cfd-job` for both `cfd-cli run --out DIR` and server jobs (`<data>/results/{job id}/`), so `cfd-cli render` works on server results. `meta.json` records:
 - `run.status`: `running` while the job runs, then `completed`, `diverged` (with a message and hints) or `cancelled`;
+- `run.heat`: `true` when the run has a `heat.csv`; `dimensionless.reference.conductivity` (W/(m·K), thermal runs): the initial fluid's, for the Nusselt number;
 - `run.frames` (output events) and `run.framesStored` (frame files; fewer with `--no-frames` / `storeFrames: false`, or past the server's per-job `maxStoredBytes`, which adds a `storage.limit` warning — the run goes on without storing frames);
 - `generator`: `cfd-cli x.y.z` or `cfd-server x.y.z`.
 
@@ -182,14 +186,14 @@ Implemented by `cfd-server` (Phase 3). All JSON is camelCase like the scene form
 |--------|-------|--------------|----------|
 | `GET` | `/api/capabilities` | — | engines (kind, availability or `reason`, device, memory, `physicalDevice`), `auto`, limits, stream defaults |
 | `POST` | `/api/scenes/validate` | `Scene` | `{ ok, code?, message?, issues: [{ code, severity, message, params?, at? }], estimate }` — a scene that cannot run is `ok: false`, not an error status; the estimate is `null` only when the scene could not be prepared (format or consistency errors) |
-| `POST` | `/api/simulations` | `{ scene \| sceneId, options? }` | `201` + `Location` with the job (status, backend, device, estimate, warnings, notes); `422` with `issues`; `429` when the queue is full |
+| `POST` | `/api/simulations` | `{ scene \| sceneId, options? }`; `?reuse=completed` | `201` + `Location` with the job (status, backend, device, estimate, warnings, notes); with `?reuse=completed`, `200` + `Location` with the latest completed job of the same scene and options instead of starting one (the SHA-256 of the validated scene's canonical JSON plus the options that change the result, not the engine; jobs whose results were purged are skipped); `422` with `issues`; `429` when the queue is full |
 | `GET` | `/api/simulations` | `?status=&limit=` | jobs, newest first |
 | `GET` | `/api/simulations/{id}` | — | the job: status, reason, message, progress, frames, timings |
 | `POST` | `/api/simulations/{id}/pause` · `/resume` | — | `202` (applied between batches); `409` unless running/paused |
 | `DELETE` | `/api/simulations/{id}` | `?purge=true` | cancel: `202`; with `purge`, also delete results and record (`204`, or `202` while an active job stops) |
 | `WS` | `/api/simulations/{id}/stream` | `?fields=velocity,vorticity&maxSize=1024` | see below; `404` before the upgrade for an unknown job |
 | `GET` | `/api/simulations/{id}/frames/{n}` | `?dtype=f32\|f16&fields=…&maxSize=…` | one stored frame (LFFR); with `fields`/`maxSize`, in that stream format (the named fields in frame order, box-downsampled like the stream): byte-identical to the stream frame of the same index on the CPU engine, so the viewer mixes both |
-| `GET` | `/api/simulations/{id}/files/{name}` | `scene.json`, `meta.json`, `probes.csv`, `forces.csv`, `diagnostics.csv` | the file |
+| `GET` | `/api/simulations/{id}/files/{name}` | `scene.json`, `meta.json`, `probes.csv`, `forces.csv`, `diagnostics.csv`, `heat.csv` (thermal runs with stored frames; `404` otherwise) | the file |
 | `GET` · `POST` | `/api/scenes` | `Scene` | list (id, name, times) · save (`201 { id, name }`) |
 | `GET` · `PUT` · `DELETE` | `/api/scenes/{id}` | — · `Scene` · — | the scene JSON · `{ id, name }` (replaced; `404` if unknown) · `204` |
 
@@ -205,6 +209,7 @@ Implemented by `cfd-server` (Phase 3). All JSON is camelCase like the scene form
 - **Options** (`options` of a submission; the same overrides as `cfd-cli run`): `backend` (`auto|cpu|wgpu|cuda`; default: the scene's `run.backend`), `latticeVelocity`, `endTime`, `outputInterval`, `sampleInterval` (s), `storeFrames` (default `true`; streaming works either way). Unknown options are a `400`.
 - **Job status:** `queued → running ⇄ paused → completed | failed | cancelled`; `failed` carries `reason`: `diverged` (the frames before stay valid), `error` (backend or I/O) or `interrupted` (the server stopped; jobs are not resumed).
 - **Errors:** `{ "error": { "code", "message", "issues"? } }` with stable codes: `request.json` (400, not JSON or not the expected shape), `scene.format` (400, not a scene), `scene.invalid` (422, with the validation `issues`), `limits.cells` / `limits.steps` (422), `engine.unavailable` / `engine.memory` (422), `request.tooLarge` (413: send layers as `zstd+base64`), `queue.full` (429), `notFound`, `conflict`, `internal`.
+- **Web app:** every path outside `/api` is a static file of the web app (`--web-dir` or the embedded build; 02 §2.2).
 - **Limits** (`/api/capabilities`): 4096² cells, 10⁸ steps, 10 GiB of stored frames per job, 16 queued jobs, 64 MB request bodies.
 
 ### WebSocket messages
@@ -213,9 +218,9 @@ Server → client; text messages are JSON with a `type`, binary messages are str
 
 | `type` | When | Content |
 |--------|------|---------|
-| `hello` | first | `job` (as `GET /api/simulations/{id}`), `grid` (`width`, `height`, `dx`, `dt`, `thermal`; `null` until the job starts), `format` (`fields`, `maxSize`, `factor`, `width`, `height`, `dtype`), `ranges` (min/max of each field so far; velocity: of its magnitude), `series` (`forces`, `probes`, `diagnostics`: the column names, i.e. the CSV headers; `null` until the job starts) |
+| `hello` | first | `job` (as `GET /api/simulations/{id}`), `grid` (`width`, `height`, `dx`, `dt`, `thermal`; `null` until the job starts), `format` (`fields`, `maxSize`, `factor`, `width`, `height`, `dtype`), `ranges` (min/max of each field so far; velocity: of its magnitude), `series` (`forces`, `probes`, `diagnostics` and, for thermal runs with stored frames, `heat`: the column names, i.e. the CSV headers; `null` until the job starts) |
 | `status` | on a change | `status`, `reason?`, `message?` |
-| `series` | before each `progress` and before `done` | `rows`: `{ forces?, probes?, diagnostics? }`, each a list of rows `[step, time, …]` in the columns of `hello.series` (the values of the CSV lines; `NaN` is `null`), sampled since the last `series` message and already on disk; `resync: true` (with no rows) after the viewer fell behind: read the files again |
+| `series` | before each `progress` and before `done` | `rows`: `{ forces?, probes?, diagnostics?, heat? }`, each a list of rows `[step, time, …]` in the columns of `hello.series` (the values of the CSV lines; `NaN` is `null`), sampled since the last `series` message and already on disk; `resync: true` (with no rows) after the viewer fell behind: read the files again |
 | `progress` | at most 10 Hz | `step`, `total`, `simTime`, `percent`, `mlups`, `massDrift`, `maxMach` |
 | `log` | occasionally | `message` (e.g. the stored-frame limit was reached) |
 | `done` | last | `status`, `reason?`, `message?`, `stepsDone`, `frames`; the server then closes the socket |

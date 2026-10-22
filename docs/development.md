@@ -63,6 +63,8 @@ cargo test --workspace
 # Scene format: after changing crates/cfd-core/src/scene.rs or examples.rs
 cargo run -p cfd-cli -- schema schema/scene.schema.json
 cargo run -p cfd-cli -- example --all scenes
+# Just one scene, or an example's quick variant (half the cells, shorter run; --all writes both)
+cargo run -p cfd-cli -- example cylinder-re100 --quick --out out/cylinder-quick.json
 cd apps/web && npm run gen:types
 
 # Preset fluids and solids (cfd-core/src/library.rs) for the web editor; a test checks it is up to date
@@ -73,7 +75,7 @@ cargo run -p cfd-cli -- colormaps apps/web/src/generated/colormaps.json
 UPDATE_FIXTURES=1 cargo test -p cfd-io --test browser_fixtures
 # Benchmark references and the suite's tolerances (cfd-verify) for the viewer's statistics; a test checks it
 cargo run -p cfd-cli -- references apps/web/src/generated/references.json
-# The St the viewer must reproduce on apps/web/tests/fixtures/series/cylinder-forces.csv
+# The St and the Nusselt numbers the viewer must reproduce on apps/web/tests/fixtures/series/{cylinder-forces,cavity-heat}.csv
 UPDATE_FIXTURES=1 cargo test -p cfd-verify --test web_contract
 
 # Check scene files
