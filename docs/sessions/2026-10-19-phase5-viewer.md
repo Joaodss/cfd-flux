@@ -107,3 +107,32 @@ there if long; step 6 only with room left).
   **216 tests pass** (was 212): series rows and flushed files, `series` messages, references up to date, the St
   fixture.
 - Not done: steps 6–11 of the proposal (§15: vectors and streamlines next); ADR-031 comes with the acceptance step.
+
+## Session of 2026-10-22: steps 6–7 (vectors, streamlines, particles, dye)
+
+- PR #16's CI was green (the Ubuntu fixture fix of 2026-10-21). The branch was already checked out in another
+  worktree, so this session worked in a second one on the same commits and pushes to `feat/phase5-viewer`.
+- **Vectors (step 6):** instanced `GL_LINES` — six vertices per arrow, the instance id is the position on a 24 px
+  screen-space grid anchored to the domain, the vertex shader reads `RG16F` velocity and the fluid fraction with
+  `textureLod`; arrows on non-fluid cells collapse outside the clip volume. The fastest speed seen so far maps to
+  90 % of the spacing; the legend shows a reference arrow (1, 2 or 5 × 10ⁿ m/s). The arrows need the velocity
+  even when another field is shown, so the renderer keeps a texture of its own for it.
+- **Streamlines (step 6):** `viewer/streamlines.ts` (pure, runs in the decode worker): RK4 on the unit direction
+  field (arc-length steps, so slow and fast flow use the same step), bilinear between block centres, seeds on a
+  jittered grid in a seeded random order, a bucket grid of drawn points for the minimum separation, and stops at
+  solids, edges, stagnation (1 % of the largest speed), the maximum length, other lines and loops that meet
+  themselves. Tests: uniform flow (straight, collinear to 1e-4, spaced), solid-body rotation (radius error < 1e-4
+  cells with 0.5-cell steps, both ends back at the seed after one turn), solid blocks, a saddle, determinism. The
+  worker keeps the run's cells; requests carry a copy of the velocity. Playing: a new set every 4 frames; paused:
+  at once; one request at a time.
+- **Particles and dye (step 7):** `viewer/render/simulation.ts` (`SimLayer`): `EXT_color_buffer_float` is requested
+  once; without it the checkboxes are disabled. Particles: 256 × 128 `RG32F` states (x < 0 = not released),
+  midpoint rule, killed at non-fluid cells; released with probability 0.03 per pass at the fluid cells beside
+  inlets (a texture of spawn points, subsampled to 16,384), along a drawn line, or anywhere (the default without
+  inlets). Dye: `RGBA16F` at the frames\u2019 block resolution, three dyes; inlet stripes of each dye in turn,
+  a brush, decay 0.4 /s. Time: simulated seconds per animation frame = playback frames per second × the frames\u2019
+  interval, so a paused frame keeps carrying particles at that rate; passes are split to keep a step under 0.75
+  cell. The Playwright test reads the released particle count and the dye total back from the float textures in
+  SwiftShader.
+- Not done: step 8 (export: PNG, CSV, video) and steps 9–11. `npm test`: **176 pass** (was 160); `npm run test:e2e`
+  viewer test passes with the new overlays.
