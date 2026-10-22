@@ -2,7 +2,8 @@
 // colour map, and the timeline over stored frames (scrub, step, play). Against a real cfd-server.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test } from '@playwright/test'
+import { pixel, saved as savedFile, SOLID } from './helpers.ts'
 
 const scene = JSON.parse(
   readFileSync(
@@ -11,8 +12,6 @@ const scene = JSON.parse(
   ),
 )
 
-type Pixel = [number, number, number, number]
-
 /** The parts of the development-only viewer hook the test uses. */
 interface ViewerHook {
   snapshot(): string
@@ -20,18 +19,6 @@ interface ViewerHook {
   measureSim(): { particles: number; dye: number }
 }
 
-/** The canvas pixel at the centre of a cell (through the development-only test hook). */
-function pixel(page: Page, x: number, y: number): Promise<Pixel> {
-  return page.evaluate(
-    ([x, y]) =>
-      (
-        globalThis as unknown as { __viewer: { pixelAtCell(x: number, y: number): Pixel } }
-      ).__viewer.pixelAtCell(x, y),
-    [x, y],
-  )
-}
-
-const SOLID: Pixel = [71, 85, 105, 255] // the editor's solid colour
 const CYLINDER: [number, number] = [41, 41] // centre of the cylinder's disk
 const WAKE: [number, number] = [70, 45] // just behind it
 
@@ -124,13 +111,7 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   // Export: a PNG of the whole domain at 2 px per cell with its footer, the CSVs, and a video of
   // five frames (H.264/VP9 in MP4 with WebCodecs, else a WebM recording).
   await page.getByTestId('job-tab-export').click()
-  const saved = async (button: string) => {
-    const [download] = await Promise.all([
-      page.waitForEvent('download'),
-      page.getByTestId(button).click(),
-    ])
-    return { name: download.suggestedFilename(), bytes: readFileSync((await download.path())!) }
-  }
+  const saved = (button: string) => savedFile(page, button)
   await page.getByTestId('export-size').selectOption('2')
   const png = await saved('export-png')
   expect(png.name).toMatch(/-vorticity-frame\d{4}\.png$/)

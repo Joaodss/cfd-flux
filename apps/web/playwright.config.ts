@@ -1,5 +1,7 @@
 // End-to-end tests (`npm run test:e2e`): a real cfd-server (release build, CPU or GPU, an empty
 // data directory) and the Vite dev server, on ports of their own, driven by Chromium.
+// Tests tagged `@full` (the Phase 5 acceptance run: minutes of GPU time) are left out here; they
+// run locally with `npm run test:e2e:full` (playwright.full.config.ts).
 import { defineConfig, devices } from '@playwright/test'
 
 const API_PORT = 7879
@@ -9,6 +11,7 @@ export default defineConfig({
   testDir: 'e2e',
   testMatch: '**/*.e2e.ts',
   timeout: 120_000,
+  grepInvert: /@full/,
   fullyParallel: false,
   workers: 1,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
