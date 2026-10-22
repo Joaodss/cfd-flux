@@ -36,6 +36,14 @@ export interface Estimate {
     dx: number
     dt: number
     latticeVelocity: number
+    /** Scales of reported numbers: the scene's `reference`, defaults filled in. */
+    reference: {
+      length: number
+      velocity: number
+      temperatureDifference: number
+      reynolds: number
+      rayleigh?: number
+    }
   }
 }
 
@@ -100,6 +108,19 @@ async function request<T>(
   return json as T
 }
 
+/** A text resource (e.g. a CSV file of a run); errors as `request`'s. */
+async function text(path: string, signal?: AbortSignal): Promise<string> {
+  let r: Response
+  try {
+    r = await fetch(path, { method: 'GET', signal })
+  } catch (e) {
+    if ((e as Error).name === 'AbortError') throw e
+    throw new ApiError('offline', 'the cfd-server cannot be reached (is it running?)', 0)
+  }
+  if (!r.ok) throw new ApiError('http', `GET ${path}: HTTP ${r.status}`, r.status)
+  return r.text()
+}
+
 /** A saved scene in the server's list. */
 export interface SceneSummary {
   id: string
@@ -113,7 +134,16 @@ export interface SavedScene {
   name: string
 }
 
+/** The engines of `GET /api/capabilities` the web app looks at. */
+export interface Capabilities {
+  version: string
+  engines: { kind: 'cpu' | 'wgpu' | 'cuda'; available: boolean; device?: string }[]
+  /** The engine `auto` takes. */
+  auto: 'cpu' | 'wgpu' | 'cuda' | null
+}
+
 export const api = {
+  capabilities: () => request<Capabilities>('GET', '/api/capabilities'),
   listScenes: () => request<SceneSummary[]>('GET', '/api/scenes'),
   getScene: (id: string) => request<Scene>('GET', `/api/scenes/${encodeURIComponent(id)}`),
   saveScene: (scene: Scene) => request<SavedScene>('POST', '/api/scenes', scene),
@@ -123,4 +153,5 @@ export const api = {
     request<Validation>('POST', '/api/scenes/validate', scene, signal),
   deleteScene: (id: string) => request<void>('DELETE', `/api/scenes/${encodeURIComponent(id)}`),
   request,
+  text,
 }

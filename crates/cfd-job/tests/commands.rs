@@ -12,7 +12,7 @@ use cfd_core::Scene;
 use cfd_engines::{Engine, EngineOptions, SolverChoice};
 use cfd_job::{
     Command, FrameEvent, JobContext, JobObserver, NoObserver, Outcome, Progress, ResultDir,
-    RunOptions, Status,
+    RunOptions, SeriesColumns, SeriesRow, Started, Status,
 };
 
 /// A 64 × 18 channel (walls, uniform inlet, pressure outlet) in the units of the `channel`
@@ -291,6 +291,96 @@ fn observers_get_every_frame_stored_or_not() {
     assert!(!dir2.join("frames").exists());
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&dir2);
+}
+
+/// Records the series given to an observer and, at every progress, how many rows `forces.csv`
+/// holds (complete lines).
+struct SeriesRecorder {
+    dir: PathBuf,
+    columns: Mutex<Option<SeriesColumns>>,
+    rows: Mutex<Vec<SeriesRow>>,
+    /// (rows given so far, complete lines in the file) at each progress.
+    at_progress: Mutex<Vec<(usize, usize)>>,
+}
+
+impl JobObserver for SeriesRecorder {
+    fn started(&self, s: &Started) {
+        *self.columns.lock().unwrap() = Some(s.series.clone());
+    }
+    fn sample(&self, row: &SeriesRow) {
+        self.rows.lock().unwrap().push(row.clone());
+    }
+    fn progress(&self, _: &Progress) {
+        let text = std::fs::read_to_string(self.dir.join("forces.csv")).unwrap();
+        let complete = text.matches('\n').count() - 1; // minus the header
+        let given = self.rows.lock().unwrap().len();
+        self.at_progress.lock().unwrap().push((given, complete));
+    }
+}
+
+/// The CSV text of rows, as the job writes it.
+fn csv(columns: &[String], rows: impl Iterator<Item = Vec<f64>>) -> String {
+    let mut out = columns.join(",") + "\n";
+    for r in rows {
+        let cells: Vec<String> = r.iter().map(|v| v.to_string()).collect();
+        out += &(cells.join(",") + "\n");
+    }
+    out
+}
+
+/// Every sample reaches the observer as the numbers of its CSV line, and every row given before
+/// a progress is on disk by then (a viewer that joins late reads the files, then the stream).
+#[test]
+fn observers_get_the_series_rows_and_the_files_are_flushed_at_each_progress() {
+    let dir = temp_dir("series");
+    let opts = RunOptions {
+        end_time: Some(0.3),
+        output_interval: Some(0.05),
+        ..Default::default()
+    };
+    let rec = Arc::new(SeriesRecorder {
+        dir: dir.clone(),
+        columns: Mutex::default(),
+        rows: Mutex::default(),
+        at_progress: Mutex::default(),
+    });
+    let (_tx, handle) = spawn(small_channel(), opts, &dir, rec.clone());
+    assert_eq!(handle.join().unwrap().unwrap().status, Status::Completed);
+
+    let columns = rec.columns.lock().unwrap().clone().expect("started");
+    assert_eq!(columns.forces[..2], ["step", "time_s"]);
+    assert!(columns.probes.iter().any(|c| c.ends_with(".ux_m_s")));
+    assert_eq!(columns.diagnostics[5], "max_mach");
+    let rows = rec.rows.lock().unwrap().clone();
+    // A sample every 5 steps (output / 10) from step 0 to 300.
+    assert_eq!(rows.len(), 61);
+    assert_eq!(rows[1].forces[0], 5.0);
+    for (file, cols, values) in [
+        (
+            "forces.csv",
+            &columns.forces,
+            rows.iter().map(|r| r.forces.clone()).collect::<Vec<_>>(),
+        ),
+        (
+            "probes.csv",
+            &columns.probes,
+            rows.iter().map(|r| r.probes.clone()).collect(),
+        ),
+        (
+            "diagnostics.csv",
+            &columns.diagnostics,
+            rows.iter().map(|r| r.diagnostics.clone()).collect(),
+        ),
+    ] {
+        let text = std::fs::read_to_string(dir.join(file)).unwrap();
+        assert_eq!(text, csv(cols, values.into_iter()), "{file}");
+    }
+    let at = rec.at_progress.lock().unwrap().clone();
+    assert!(!at.is_empty());
+    for (given, complete) in at {
+        assert_eq!(complete, given, "rows on disk at a progress");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Batches end at every sample/output event whatever their size, so one-step batches and

@@ -44,7 +44,7 @@ export function StatusBar() {
           className="ml-auto"
           title="Reynolds and lattice Mach numbers (from the last validation)"
         >
-          Re {formatValue(numbers.reynolds)} · Ma {formatValue(numbers.mach)}
+          Re {formatValue(numbers.reference.reynolds)} · Ma {formatValue(numbers.mach)}
         </span>
       )}
       <span className={numbers ? undefined : 'ml-auto'}>{formatZoom(zoom)}</span>

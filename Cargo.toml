@@ -47,6 +47,8 @@ naga = { version = "30", features = ["wgsl-in"] }
 png = "0.18"
 pollster = "1"
 rayon = "1.10"
+# Serving the web app from the server binary (cfd-server, feature `web`) and opening the browser.
+rust-embed = { version = "8", features = ["debug-embed", "mime-guess"] }
 ruzstd = "0.8"
 # Layers from the web editor (deflate+base64): pure Rust, already a dependency of png.
 miniz_oxide = "0.8"
@@ -57,10 +59,11 @@ sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "net", "time"] }
-tower-http = { version = "0.6", features = ["trace", "cors", "compression-gzip"] }
+tower-http = { version = "0.6", features = ["trace", "cors", "compression-gzip", "fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v7"] }
+webbrowser = "1"
 wgpu = "30"
 
 [workspace.lints.rust]

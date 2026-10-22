@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use cfd_core::examples;
 use cfd_core::layers::{LayerData, LayerEncoding};
-use cfd_core::scene::{CellType, Scene};
+use cfd_core::scene::{CellType, ReferenceScales, Scene};
 use cfd_core::validate::validate;
 
 fn repo_file(rel: &str) -> PathBuf {
@@ -22,10 +22,20 @@ fn error_codes(scene: &Scene) -> Vec<&'static str> {
     validate(scene).errors().map(|i| i.code).collect()
 }
 
+/// Every example file: `(file stem, scene)`, the quick variants included.
+fn all_examples() -> Vec<(String, Scene)> {
+    let full = examples::NAMES
+        .iter()
+        .map(|n| (n.to_string(), examples::by_name(n).unwrap()));
+    let quick = examples::QUICK_NAMES
+        .iter()
+        .map(|n| (examples::quick_file_stem(n), examples::quick(n).unwrap()));
+    full.chain(quick).collect()
+}
+
 #[test]
 fn examples_are_valid() {
-    for name in examples::NAMES {
-        let scene = examples::by_name(name).unwrap();
+    for (name, scene) in all_examples() {
         let report = validate(&scene);
         assert!(report.is_ok(), "{name}: {:#?}", report.issues);
     }
@@ -33,8 +43,7 @@ fn examples_are_valid() {
 
 #[test]
 fn examples_round_trip_through_json() {
-    for name in examples::NAMES {
-        let scene = examples::by_name(name).unwrap();
+    for (name, scene) in all_examples() {
         let parsed = Scene::from_json(&scene.to_json_pretty()).unwrap();
         assert_eq!(parsed, scene, "{name}");
     }
@@ -42,14 +51,35 @@ fn examples_round_trip_through_json() {
 
 #[test]
 fn committed_examples_are_up_to_date() {
-    for name in examples::NAMES {
-        let generated = examples::by_name(name).unwrap().to_json_pretty() + "\n";
+    for (name, scene) in all_examples() {
+        let generated = scene.to_json_pretty() + "\n";
         let committed = read_normalized(&format!("scenes/{name}.json"));
         assert!(
             generated == committed,
             "scenes/{name}.json is outdated; run `cargo run -p cfd-cli -- example --all scenes`"
         );
     }
+}
+
+/// a quick variant has fewer cells than its example, on the same physical domain.
+#[test]
+fn quick_variants_have_fewer_cells_on_the_same_domain() {
+    for name in examples::QUICK_NAMES {
+        let (full, quick) = (
+            examples::by_name(name).unwrap(),
+            examples::quick(name).unwrap(),
+        );
+        let (f, q) = (&full.grid, &quick.grid);
+        // Same physical extent (to a cell), fewer cells. The cylinder and the cavity add a wall layer
+        // on each side, which is not part of the extent.
+        let wall = u32::from(name != "channel") * 2;
+        let extent = |g: &cfd_core::scene::Grid| f64::from(g.width - wall) * g.cell_size;
+        assert!((extent(f) - extent(q)).abs() <= q.cell_size, "{name}");
+        assert!(q.width < f.width && q.height < f.height, "{name}");
+        assert!(quick.run.end_time <= full.run.end_time, "{name}");
+        assert!(quick.name.ends_with("(quick)"), "{name}");
+    }
+    assert!(examples::quick("dam-break").is_none());
 }
 
 #[test]
@@ -191,4 +221,19 @@ fn detects_bad_references_and_sizes() {
     let mut s = examples::channel();
     s.probes[0].position = [10_000, 0];
     assert!(error_codes(&s).contains(&"probe.position"));
+
+    let mut s = examples::channel();
+    s.reference = Some(ReferenceScales {
+        length: Some(0.0),
+        velocity: Some(f64::NAN),
+        temperature_difference: Some(5.0),
+    });
+    let r = validate(&s);
+    let bad: Vec<_> = r
+        .issues
+        .iter()
+        .filter(|i| i.code == "reference.scale")
+        .map(|i| i.params["scale"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(bad, ["length", "velocity"]);
 }

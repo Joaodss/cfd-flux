@@ -105,12 +105,16 @@
     "buoyancy": "none",
     "freeSurface": false
   },
+  "reference": {
+    "length": 0.1,
+    "velocity": 1.0
+  },
   "run": {
     "method": "lbm",
     "backend": "auto",
     "precision": "f32",
-    "endTime": 8.0,
-    "outputInterval": 0.01,
+    "endTime": 20.0,
+    "outputInterval": 0.02,
     "outputFields": [
       "velocity",
       "pressure",

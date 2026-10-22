@@ -93,6 +93,7 @@ fn scene(
             buoyancy: Buoyancy::None,
             free_surface: false,
         },
+        reference: None,
         run: RunConfig {
             method: Method::Lbm,
             backend: BackendPreference::Auto,

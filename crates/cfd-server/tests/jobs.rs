@@ -558,3 +558,112 @@ async fn server_results_match_a_direct_run() {
     }
     s.stop().await;
 }
+
+/// `POST /api/simulations?reuse=completed`: the gallery's "Open with results".
+#[tokio::test]
+async fn a_completed_job_of_the_same_scene_and_options_is_reused_on_request() {
+    let s = TestServer::start("reuse").await;
+    let scene = small_channel();
+    let options = json!({ "endTime": 0.1, "outputInterval": 0.05 });
+    let post = |scene: Value, options: Value, query: &'static str| {
+        let url = s.url(&format!("/api/simulations{query}"));
+        async move {
+            client()
+                .post(url)
+                .json(&json!({ "scene": scene, "options": options }))
+                .send()
+                .await
+                .unwrap()
+        }
+    };
+    let scene_json = serde_json::to_value(&scene).unwrap();
+
+    // Nothing has run yet: a new job (201), also with `reuse`.
+    let r = post(scene_json.clone(), options.clone(), "?reuse=completed").await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let first: Value = r.json().await.unwrap();
+    let id = first["id"].as_str().unwrap().to_string();
+
+    // Not completed yet (it is queued or running): still a new job, never a half-done one. The
+    // short run may already be over, so only check when the first job was seen active.
+    let active = get(&s, &id).await["status"] != "completed";
+    if active {
+        let r = post(scene_json.clone(), options.clone(), "?reuse=completed").await;
+        assert_eq!(r.status(), StatusCode::CREATED);
+        let other: Value = r.json().await.unwrap();
+        assert_ne!(other["id"], first["id"]);
+        wait_until(&s, other["id"].as_str().unwrap(), status_is("completed")).await;
+    }
+    wait_until(&s, &id, status_is("completed")).await;
+
+    // Completed: the same scene and options answer with the latest completed job (200).
+    let r = post(scene_json.clone(), options.clone(), "?reuse=completed").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    assert!(r.headers()["location"]
+        .to_str()
+        .unwrap()
+        .starts_with("/api/simulations/"));
+    let again: Value = r.json().await.unwrap();
+    assert_eq!(again["status"], "completed");
+    let listed = client()
+        .get(s.url("/api/simulations"))
+        .send()
+        .await
+        .unwrap()
+        .json::<Vec<Value>>()
+        .await
+        .unwrap();
+    assert!(listed.iter().any(|j| j["id"] == again["id"]));
+
+    // The engine request does not matter, nor how the scene was formatted (the hash is of the
+    // parsed scene)...
+    let pretty = serde_json::from_str::<Value>(&scene.to_json_pretty()).unwrap();
+    let mut opts = options.clone();
+    opts["backend"] = json!("cpu");
+    let r = post(pretty, opts, "?reuse=completed").await;
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(r.json::<Value>().await.unwrap()["id"], again["id"]);
+
+    // ...but a different run option, a different scene, or no `reuse` gives a new job.
+    let r = post(
+        scene_json.clone(),
+        json!({ "endTime": 0.15, "outputInterval": 0.05 }),
+        "?reuse=completed",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let longer: Value = r.json().await.unwrap();
+    assert_ne!(longer["id"], again["id"]);
+    let mut other_scene = scene_json.clone();
+    other_scene["name"] = json!("Another channel");
+    let r = post(other_scene, options.clone(), "?reuse=completed").await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let r = post(scene_json.clone(), options.clone(), "").await;
+    assert_eq!(r.status(), StatusCode::CREATED);
+    assert_ne!(r.json::<Value>().await.unwrap()["id"], again["id"]);
+
+    // A purged job is not reused (its results are gone).
+    let r = client()
+        .delete(s.url(&format!(
+            "/api/simulations/{}?purge=true",
+            again["id"].as_str().unwrap()
+        )))
+        .send()
+        .await
+        .unwrap();
+    assert!(r.status().is_success());
+    let r = post(scene_json.clone(), options.clone(), "?reuse=completed").await;
+    // The newer run without `reuse` is the latest completed one or still running; either way it
+    // is a job of this scene, not the purged one.
+    assert!(matches!(r.status(), StatusCode::OK | StatusCode::CREATED));
+    assert_ne!(r.json::<Value>().await.unwrap()["id"], again["id"]);
+
+    // An unknown value is refused.
+    let r = post(scene_json, options, "?reuse=always").await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        r.json::<Value>().await.unwrap()["error"]["code"],
+        "request.reuse"
+    );
+    s.stop().await;
+}

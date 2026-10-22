@@ -30,7 +30,7 @@ use cfd_io::frame::Dtype;
 
 use crate::meta::*;
 use crate::output::{OutputConfig, OutputJob, OutputThread, TrySend};
-use crate::series::Series;
+use crate::series::{Series, SeriesColumns, SeriesRow};
 use crate::store::ResultDir;
 use crate::{output_field_name, Prepared, RunOptions};
 
@@ -97,6 +97,8 @@ pub struct Started<'a> {
     pub scene: &'a str,
     pub domain: &'a Domain,
     pub choice: &'a SolverChoice,
+    /// The columns of `forces.csv`, `probes.csv` and `diagnostics.csv`.
+    pub series: &'a SeriesColumns,
 }
 
 /// Where the run is, after a batch of steps.
@@ -124,6 +126,8 @@ pub struct FrameEvent<'a> {
     /// One per spec requested: when frames are stored, first the stored frame's (full resolution,
     /// the frame dtype), then those of [`JobObserver::stream_specs`] that differ from it.
     pub samples: &'a [Sample],
+    /// The row of `heat.csv` of this frame, `[step, time, q₁, length₁, …]`, already on disk.
+    pub heat: Option<&'a [f64]>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,10 +170,17 @@ pub struct Outcome {
 /// `Send + Sync` because one observer is shared (`Arc`) by the job's threads: [`frame`] is called
 /// from the output thread, everything else from the thread running the loop.
 ///
+/// Order on the loop's thread: the [`sample`]s taken before a batch, then (the series files
+/// flushed) its [`progress`] — so every row an observer was given before a `progress` is on disk.
+///
 /// [`frame`]: JobObserver::frame
+/// [`sample`]: JobObserver::sample
+/// [`progress`]: JobObserver::progress
 pub trait JobObserver: Send + Sync {
     fn started(&self, _info: &Started) {}
     fn progress(&self, _progress: &Progress) {}
+    /// One row of every series, as written to the CSV files (every sample interval).
+    fn sample(&self, _row: &SeriesRow) {}
     fn paused(&self, _paused: bool) {}
     /// Whether frames should be sampled even when they are not stored (`--no-frames`).
     fn wants_frames(&self) -> bool {
@@ -458,6 +469,19 @@ fn initial_meta(
             mach: n.mach,
             prandtl: n.prandtl,
             rayleigh: n.rayleigh,
+            reference: ReferenceMeta {
+                length: n.reference.length,
+                velocity: n.reference.velocity,
+                temperature_difference: n.reference.temperature_difference,
+                reynolds: n.reference.reynolds,
+                rayleigh: n.reference.rayleigh,
+                conductivity: scene
+                    .fluids
+                    .iter()
+                    .find(|f| f.id == scene.initial.fluid)
+                    .and_then(|f| f.thermal_conductivity)
+                    .filter(|_| domain.physics.thermal()),
+            },
         },
         warnings: domain
             .issues
@@ -483,6 +507,7 @@ fn initial_meta(
                 Dtype::F16 => "f16",
             },
             frame_fields: frame_fields.iter().map(|f| output_field_name(*f)).collect(),
+            heat: false,
         },
         timings: TimingsMeta::default(),
         diagnostics: DiagnosticsMeta {
@@ -524,7 +549,9 @@ pub fn run(
     if options.write_frames {
         std::fs::create_dir_all(dir.frames_dir())?;
     }
-    let series = Series::create(dir, &scene, &domain)?;
+    // `heat.csv` (heat through the thermal walls, per stored frame) needs the stored temperature.
+    let heat = options.write_frames && frame_fields.contains(&OutputField::Temperature);
+    let mut series = Series::create(dir, &scene, &domain, heat)?;
     // From here on the solver owns the domain (`make` takes it by value: a move, not a copy);
     // `solver.domain()` lends it back read-only.
     let mut solver = choice.make(domain)?;
@@ -539,6 +566,7 @@ pub fn run(
         &frame_fields,
         &initial,
     );
+    meta.run.heat = !series.columns().heat.is_empty();
     let write_meta = |meta: &Meta| -> Result<()> {
         dir.write("meta.json", serde_json::to_string_pretty(meta)? + "\n")
     };
@@ -551,11 +579,13 @@ pub fn run(
             max_stored_bytes: options.max_stored_bytes,
         },
         observer.clone(),
+        series.take_heat(),
     )?;
     observer.started(&Started {
         scene: &scene.name,
         domain: solver.domain(),
         choice,
+        series: series.columns(),
     });
 
     let mut r = Runner {
@@ -601,7 +631,8 @@ pub fn run(
             }
         }
         if step >= next_sample {
-            r.series.sample(r.solver.as_mut(), &last)?;
+            let row = r.series.sample(r.solver.as_mut(), &last)?;
+            r.observer.sample(&row);
             next_sample += sample_every;
         }
         let mut request = None;
@@ -656,6 +687,9 @@ pub fn run(
             }
             Err(e) => return Err(e.into()),
         }
+        // Complete lines on disk before the progress that announces them (three small writes
+        // per batch of at most ≈ 50 ms).
+        r.series.flush()?;
         let done = r.solver.steps_done();
         r.observer.progress(&Progress {
             step: done,

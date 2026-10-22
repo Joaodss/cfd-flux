@@ -35,6 +35,18 @@ enum Command {
         /// Output file; prints to stdout when omitted.
         out: Option<PathBuf>,
     },
+    /// Print (or write) the colour maps as JSON (the web viewer's
+    /// `apps/web/src/generated/colormaps.json`).
+    Colormaps {
+        /// Output file; prints to stdout when omitted.
+        out: Option<PathBuf>,
+    },
+    /// Print (or write) the benchmarks' reference values and the validation suite's tolerances
+    /// as JSON (the web viewer's `apps/web/src/generated/references.json`).
+    References {
+        /// Output file; prints to stdout when omitted.
+        out: Option<PathBuf>,
+    },
     /// Write built-in example scenes as JSON.
     Example {
         /// Example name (see `--list`).
@@ -45,6 +57,10 @@ enum Command {
         /// List the available examples.
         #[arg(long)]
         list: bool,
+        /// The quick variant of the named example (half resolution, shorter run; the dam break has
+        /// none). `--all` writes both, the quick ones as `<name>-quick.json`.
+        #[arg(long, requires = "name")]
+        quick: bool,
         /// Output file for a single example; prints to stdout when omitted.
         #[arg(long, short)]
         out: Option<PathBuf>,
@@ -92,10 +108,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
             emit(out.as_deref(), &json)?;
         }
         Command::Library { out } => emit(out.as_deref(), &cfd_core::library::to_json_pretty())?,
+        Command::Colormaps { out } => emit(out.as_deref(), &cfd_io::image::colormaps_json())?,
+        Command::References { out } => emit(out.as_deref(), &cfd_verify::web::references_json())?,
         Command::Example {
             name,
             all,
             list,
+            quick,
             out,
         } => {
             if list {
@@ -111,12 +130,21 @@ fn run(cli: Cli) -> Result<ExitCode> {
                         &(examples::by_name(n).unwrap().to_json_pretty() + "\n"),
                     )?;
                 }
+                for n in examples::QUICK_NAMES {
+                    let path = dir.join(format!("{}.json", examples::quick_file_stem(n)));
+                    emit(
+                        Some(&path),
+                        &(examples::quick(n).unwrap().to_json_pretty() + "\n"),
+                    )?;
+                }
             } else if let Some(n) = name {
-                let Some(scene) = examples::by_name(&n) else {
-                    bail!(
-                        "unknown example '{n}'; available: {}",
-                        examples::NAMES.join(", ")
-                    );
+                let (found, names) = if quick {
+                    (examples::quick(&n), &examples::QUICK_NAMES[..])
+                } else {
+                    (examples::by_name(&n), &examples::NAMES[..])
+                };
+                let Some(scene) = found else {
+                    bail!("unknown example '{n}'; available: {}", names.join(", "));
                 };
                 emit(out.as_deref(), &(scene.to_json_pretty() + "\n"))?;
             } else {

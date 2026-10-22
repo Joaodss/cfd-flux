@@ -27,6 +27,8 @@ pub struct JobRow {
     pub scene_id: Option<String>,
     pub scene_name: String,
     pub scene_sha256: String,
+    /// Scene and result-changing run options (see `api::run_hash`); `None` before migration 0002.
+    pub scene_hash: Option<String>,
     pub status: String,
     pub reason: Option<String>,
     pub message: Option<String>,
@@ -106,15 +108,16 @@ impl Db {
 
     pub async fn insert_job(&self, j: &JobRow) -> Result<()> {
         sqlx::query(
-            "INSERT INTO jobs (id, scene_id, scene_name, scene_sha256, status, reason, message,
+            "INSERT INTO jobs (id, scene_id, scene_name, scene_sha256, scene_hash, status, reason, message,
                  backend, device, options_json, steps_done, steps_total, frames, mlups,
                  created_at, started_at, finished_at, result_dir)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&j.id)
         .bind(&j.scene_id)
         .bind(&j.scene_name)
         .bind(&j.scene_sha256)
+        .bind(&j.scene_hash)
         .bind(&j.status)
         .bind(&j.reason)
         .bind(&j.message)
@@ -189,6 +192,17 @@ impl Db {
         .bind(status)
         .bind(limit)
         .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// The newest completed job with this scene hash.
+    pub async fn latest_completed(&self, scene_hash: &str) -> Result<Option<JobRow>> {
+        Ok(sqlx::query_as::<_, JobRow>(
+            "SELECT * FROM jobs WHERE scene_hash = ? AND status = 'completed'
+             ORDER BY created_at DESC, id DESC LIMIT 1",
+        )
+        .bind(scene_hash)
+        .fetch_optional(&self.pool)
         .await?)
     }
 

@@ -1,10 +1,9 @@
 // The editor's layout: header, notices, tool options, tool strip, canvas, side panel, status bar.
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { discardDraft, pendingDraft, startAutosave } from './app/autosave.ts'
 import { openDroppedFile, openFile, save, saveAsFile } from './app/documents.ts'
 import { Header } from './app/Header.tsx'
 import { JobsList } from './app/JobsList.tsx'
-import { JobView } from './app/JobView.tsx'
 import { parseRoute, useRoute } from './app/route.ts'
 import { ToolOptions } from './app/ToolOptions.tsx'
 import { Toolbar } from './app/Toolbar.tsx'
@@ -16,6 +15,9 @@ import { ScenePanel } from './panels/ScenePanel.tsx'
 import { StatusBar } from './panels/StatusBar.tsx'
 import type { Draft } from './scene/drafts.ts'
 import { fromScene } from './scene/io.ts'
+
+// The job view and its viewer (WebGL, the decode worker) load on first use: a separate chunk.
+const JobView = lazy(() => import('./app/JobView.tsx').then((m) => ({ default: m.JobView })))
 
 /** The editor's keyboard shortcuts (ignored while typing in a field). */
 function useShortcuts() {
@@ -155,7 +157,13 @@ export default function App() {
   useDocumentGuards()
   const route = useRoute()
   // The editor's document stays in the store while a run is shown: "Editor" returns to it as it was.
-  if (route.name === 'job') return <JobView id={route.id} />
+  if (route.name === 'job') {
+    return (
+      <Suspense fallback={null}>
+        <JobView id={route.id} />
+      </Suspense>
+    )
+  }
   if (route.name === 'jobs') return <JobsList />
   return (
     <div className="flex h-full flex-col">

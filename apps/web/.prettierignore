@@ -1,3 +1,5 @@
 dist
 node_modules
 src/generated
+tests/fixtures/frames/
+tests/fixtures/series/

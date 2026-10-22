@@ -13,7 +13,7 @@ import {
   inflateRaw,
 } from '../src/scene/codec.ts'
 import { fileNameFor } from '../src/scene/files.ts'
-import { fromScene, parseScene, toScene } from '../src/scene/io.ts'
+import { fromScene, parseScene, referenceOrNull, toScene } from '../src/scene/io.ts'
 import { imageMask } from '../src/scene/mask.ts'
 
 const repo = (rel: string) => fileURLToPath(new URL(`../../../${rel}`, import.meta.url))
@@ -89,6 +89,21 @@ describe('scene files', () => {
     expect(fileNameFor('Cylinder Re=100')).toBe('Cylinder Re=100.cfdscene')
     expect(fileNameFor('a/b: c?')).toBe('a_b_ c_.cfdscene')
     expect(fileNameFor('  ')).toBe('scene.cfdscene')
+  })
+
+  it('writes only the reference scales that are set', async () => {
+    expect(referenceOrNull({ length: null, velocity: null })).toBeNull()
+    expect(referenceOrNull({ velocity: 1, length: 0.1 })).toEqual({ length: 0.1, velocity: 1 })
+    const doc = await fromScene(example('channel'))
+    doc.table.reference = { length: null }
+    expect('reference' in (await toScene(doc))).toBe(false)
+    doc.table.reference = { velocity: 2 }
+    const keys = Object.keys(await toScene(doc))
+    expect(keys.slice(keys.indexOf('physics'), keys.indexOf('physics') + 3)).toEqual([
+      'physics',
+      'reference',
+      'run',
+    ])
   })
 
   // Contract with Rust (design proposal §10): this file is written by the editor's code and read

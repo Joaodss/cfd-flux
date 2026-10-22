@@ -33,6 +33,7 @@ pub use runner::{
     run, CellPatch, Command, FrameEvent, JobContext, JobObserver, NoObserver, Outcome, ParamChange,
     Progress, Started, Status, DEFAULT_BATCH_TIME,
 };
+pub use series::{SeriesColumns, SeriesRow};
 pub use store::{LocalStore, ResultDir};
 
 /// The name of an output field in frames and `meta.json`.

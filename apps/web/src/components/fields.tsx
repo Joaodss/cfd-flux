@@ -25,20 +25,40 @@ export function Row(props: {
   )
 }
 
+/**
+ * The value and its callback: a required number, or (`optional`) a number that may be left empty,
+ * which commits `null` and shows `placeholder` (e.g. the default the server will use).
+ */
+type NumberValue =
+  | { optional?: false; value: number; onCommit: (v: number) => void }
+  | {
+      optional: true
+      value: number | null
+      onCommit: (v: number | null) => void
+      placeholder?: string
+    }
+
 /** A number input with its unit; commits a valid value on Enter or blur, Escape reverts. */
-export function NumberInput(props: {
-  value: number
-  onCommit: (v: number) => void
-  unit?: string
-  rules?: NumberRules
-  id?: string
-  label?: string
-  testId?: string
-}) {
+export function NumberInput(
+  props: NumberValue & {
+    unit?: string
+    rules?: NumberRules
+    id?: string
+    label?: string
+    testId?: string
+  },
+) {
   const [draft, setDraft] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const shown = props.value === null ? '' : formatNumber(props.value)
   const commit = () => {
     if (draft === null) return
+    if (props.optional && draft.trim() === '') {
+      setDraft(null)
+      setError(null)
+      if (props.value !== null) props.onCommit(null)
+      return
+    }
     const v = parseNumber(draft, props.rules)
     if (typeof v === 'string') {
       setError(v)
@@ -56,10 +76,11 @@ export function NumberInput(props: {
         data-testid={props.testId}
         inputMode="decimal"
         className={cn(INPUT, error && 'border-red-500')}
-        value={draft ?? formatNumber(props.value)}
+        value={draft ?? shown}
+        placeholder={props.optional ? props.placeholder : undefined}
         title={error ?? undefined}
         aria-invalid={error !== null}
-        onFocus={() => setDraft(formatNumber(props.value))}
+        onFocus={() => setDraft(shown)}
         onChange={(e) => {
           setDraft(e.target.value)
           setError(null)
@@ -83,15 +104,15 @@ export function NumberInput(props: {
   )
 }
 
-export function NumberField(props: {
-  label: string
-  value: number
-  onCommit: (v: number) => void
-  unit?: string
-  rules?: NumberRules
-  title?: string
-  testId?: string
-}) {
+export function NumberField(
+  props: NumberValue & {
+    label: string
+    unit?: string
+    rules?: NumberRules
+    title?: string
+    testId?: string
+  },
+) {
   const id = useId()
   return (
     <Row label={props.label} htmlFor={id} title={props.title}>

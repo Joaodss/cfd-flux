@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use cfd_engines::EngineOptions;
 use serde::Serialize;
 
+use crate::web::Web;
+
 /// Hard limits on what a request may ask for (the browser sends whatever the user draws).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,6 +69,8 @@ pub struct Config {
     pub stream: StreamDefaults,
     /// Origins allowed by CORS (the Vite development server by default).
     pub cors_origins: Vec<String>,
+    /// The web app served at `/` (none: API only).
+    pub web: Web,
 }
 
 impl Default for Config {
@@ -83,6 +87,7 @@ impl Default for Config {
                 "http://localhost:5173".into(),
                 "http://127.0.0.1:5173".into(),
             ],
+            web: Web::None,
         }
     }
 }

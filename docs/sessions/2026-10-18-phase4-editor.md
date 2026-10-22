@@ -103,6 +103,11 @@ Stop after the first two implementation steps if the session gets long, with eve
   run (cli, cuda, engines, job, server): clean. `CFD_REQUIRE_GPU=1 CFD_REQUIRE_CUDA=1 cargo test --workspace`:
   **207 tests pass** (was 199): the library, `deflate+base64`, the editor-written fixture, issue params and cells,
   `PUT /api/scenes/{id}`, the extended estimate.
-- Not done / follow-ups: the author's hand-timed acceptance run (< 2 min); the wgpu readback fix
+- **Hand-timed acceptance run (recorded 2026-10-21): 9 min 30 s, missing the < 2 min target.** The author drew the
+  walls, inlet and outlet by hand (pencil, then rectangles) before discovering that the domain edges are walls
+  already and that an edge can be painted as an inlet or outlet in one action. The scripted run shows the tools can
+  draw the scene; the miss is discoverability. Proposed fix (not implemented): open question Q14 in
+  [07](../07-decisions-and-questions.md#open-questions).
+- Not done / follow-ups: the wgpu readback fix
   (`fix/wgpu-readback-wait`, its own session) is not on this branch; `cfd-server` does not serve the built app yet
   (Phase 5, Q10); the Reynolds number shown uses the solver's characteristic scales (see above).

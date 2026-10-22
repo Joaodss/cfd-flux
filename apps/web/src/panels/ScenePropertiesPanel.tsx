@@ -1,5 +1,6 @@
 // The Scene tab: name, grid (size, cell size, edges; resize and scale), fluids and solid
-// materials (from the preset library or custom), initial conditions and physics. Every edit is
+// materials (from the preset library or custom), initial conditions, physics and the reference
+// scales of reported numbers. Every edit is
 // one history entry; values stay in SI units (the solver converts to lattice units).
 import { Plus, Trash2 } from 'lucide-react'
 import {
@@ -14,9 +15,11 @@ import {
 import { Button } from '../components/ui/button.tsx'
 import { MAX_GRID_SIDE } from '../editor/resize.ts'
 import { useEditor } from '../editor/store.ts'
-import type { EdgeKind, Fluid, SolidMaterial } from '../generated/scene.ts'
+import type { EdgeKind, Fluid, ReferenceScales, SolidMaterial } from '../generated/scene.ts'
+import { referenceOrNull } from '../scene/io.ts'
 import { FLUID_PRESETS, nextId, presetFluid, presetSolid, SOLID_PRESETS } from '../scene/library.ts'
-import { formatLength } from './format.ts'
+import { currentValidation } from '../app/issues.ts'
+import { formatLength, formatValue } from './format.ts'
 
 const update = (
   label: string,
@@ -286,6 +289,52 @@ function AddFrom(props: {
   )
 }
 
+const REFERENCE_FIELDS = [
+  ['length', 'Length L', 'm'],
+  ['velocity', 'Velocity U', 'm/s'],
+  ['temperatureDifference', 'ΔT', 'K'],
+] as const
+
+/**
+ * The scales of Re, Ra and (in the viewer) C_D, C_L, St and Nu, e.g. a cylinder's diameter and
+ * the mean inlet velocity. Empty fields use the solver's characteristic scales, shown greyed.
+ */
+function ReferenceGroup() {
+  const reference = useEditor((s) => s.table.reference)
+  const thermal = useEditor((s) => s.table.physics.thermal)
+  const defaults = useEditor((s) => currentValidation(s.validation)?.estimate?.numbers.reference)
+  return (
+    <Group title="Reference scales">
+      <p className="text-[11px] text-muted-foreground">
+        For the reported numbers only (Re, Ra, force coefficients, St, Nu); the time step does not
+        change. Empty: the solver's characteristic scale.
+      </p>
+      {REFERENCE_FIELDS.filter(([key]) => thermal || key !== 'temperatureDifference').map(
+        ([key, label, unit]) => (
+          <NumberField
+            key={key}
+            label={label}
+            unit={unit}
+            optional
+            value={reference?.[key] ?? null}
+            placeholder={
+              reference?.[key] == null && defaults ? formatValue(defaults[key]) : undefined
+            }
+            rules={{ positive: true }}
+            testId={`reference-${key}`}
+            onCommit={(v) =>
+              update(`Reference ${label}`, (t) => {
+                const next: ReferenceScales = { ...t.reference, [key]: v }
+                t.reference = referenceOrNull(next)
+              })
+            }
+          />
+        ),
+      )}
+    </Group>
+  )
+}
+
 export function ScenePropertiesPanel() {
   const table = useEditor((s) => s.table)
   const { fluids, initial, physics } = table
@@ -436,6 +485,7 @@ export function ScenePropertiesPanel() {
           }
         />
       </Group>
+      <ReferenceGroup />
     </div>
   )
 }

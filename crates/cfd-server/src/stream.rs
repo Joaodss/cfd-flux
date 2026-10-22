@@ -19,12 +19,12 @@ use axum::extract::{Path, Query, State};
 use axum::response::Response;
 use cfd_core::sample::{Precision, Sample, SampleData, SampleSpec};
 use cfd_core::scene::OutputField;
-use cfd_job::{Command, FrameEvent};
+use cfd_job::{Command, FrameEvent, SeriesColumns};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, watch};
 
 use crate::error::ApiError;
-use crate::jobs::{Event, GridInfo, Job, JobStatus, JobView};
+use crate::jobs::{Event, GridInfo, Job, JobStatus, JobView, SeriesRows};
 use crate::AppState;
 
 /// An encoded stream frame (LFFR, f16), shared by every viewer of its format (`Bytes` is
@@ -244,6 +244,14 @@ pub struct StreamQuery {
     max_size: Option<u32>,
 }
 
+/// `velocity, vorticity` → the names (blanks dropped).
+pub fn field_list(list: &str) -> Vec<String> {
+    list.split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
 /// The first message of every stream.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -255,6 +263,8 @@ struct Hello<'a> {
     format: Option<FormatInfo>,
     /// Min/max of each field over the frames so far (velocity: of its magnitude).
     ranges: Ranges,
+    /// The columns of the series (the CSV headers); `null` until the job has started.
+    series: Option<&'a SeriesColumns>,
 }
 
 /// `GET /api/simulations/{id}/stream` (WebSocket): `hello`, then JSON events (`status`,
@@ -269,12 +279,7 @@ pub async fn stream(
     let view = state.inner.jobs.view(&id).await?;
     let job = state.inner.jobs.get(&id);
     let format = StreamFormat {
-        fields: q.fields.map(|f| {
-            f.split(',')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        }),
+        fields: q.fields.as_deref().map(field_list),
         max_size: q
             .max_size
             .unwrap_or(state.inner.config.stream.stream_max_size)
@@ -326,6 +331,7 @@ async fn viewer(
             grid: None,
             format: None,
             ranges: Ranges::new(),
+            series: None,
         };
         socket.send(text(&hello)).await?;
         socket.send(text(&view.done_event())).await?;
@@ -342,6 +348,7 @@ async fn viewer(
         grid,
         format: grid.map(|g| FormatInfo::new(&format, g.width, g.height)),
         ranges: job.hub.ranges(),
+        series: job.series.get(),
     };
     socket.send(text(&hello)).await?;
     let Some(rx) = frames.as_mut().filter(|_| view.status.is_active()) else {
@@ -365,9 +372,16 @@ async fn viewer(
                     break;
                 }
                 Ok(e) => socket.send(text(&e)).await?,
-                // Fell more than the channel's capacity behind: resynchronise from the view.
+                // Fell more than the channel's capacity behind: resynchronise from the view (and
+                // the series from the files).
                 Err(broadcast::error::RecvError::Lagged(_)) => {
                     let v = job.view();
+                    socket
+                        .send(text(&Event::Series {
+                            rows: Arc::new(SeriesRows::default()),
+                            resync: true,
+                        }))
+                        .await?;
                     socket
                         .send(text(&Event::Status {
                             status: v.status,
@@ -509,6 +523,7 @@ mod tests {
                 index: Some(0),
                 stored: true,
                 samples: &[sample],
+                heat: None,
             },
         );
         assert!(a.has_changed().unwrap());
@@ -532,6 +547,7 @@ mod tests {
                 index: Some(1),
                 stored: true,
                 samples: &[],
+                heat: None,
             },
         );
         assert!(!b.has_changed().unwrap());

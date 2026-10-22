@@ -6,10 +6,12 @@
 //! - [`validate`]: semantic validation of a scene beyond what the JSON Schema can express.
 //! - [`units`]: physical ↔ lattice unit conversion and stability checks.
 //! - [`domain`]: the scene converted for the solvers (`Scene → Domain`).
+//! - [`heat`]: wall heat flux on a temperature field, and the Nusselt number.
 //! - [`solver`]: the `Solver` trait implemented by every backend.
 
 pub mod domain;
 pub mod examples;
+pub mod heat;
 pub mod layers;
 pub mod library;
 pub mod sample;

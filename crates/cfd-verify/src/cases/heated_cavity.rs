@@ -2,6 +2,7 @@
 //! (type B/C).
 
 use anyhow::{anyhow, Result};
+use cfd_core::heat;
 use cfd_core::solver::LatticeFields;
 use cfd_core::DomainOptions;
 use cfd_io::image::Colormap;
@@ -17,6 +18,26 @@ const PRANDTL: f64 = 0.71;
 const U_B_LB: f64 = 0.08;
 /// Steady when both Nusselt numbers change by less than this (relative) over 5 L/u_b.
 const STEADY_TOL: f64 = 1e-5;
+/// Relative tolerance on both Nusselt numbers at the finest resolution of a level.
+const NUSSELT_TOLERANCE: f64 = 0.02;
+
+/// Cells per side the cavity runs at for a level.
+fn sizes(level: Level, ra: f64) -> &'static [u32] {
+    match (level, ra >= 1e6) {
+        (Level::Quick, _) => &[64],
+        (Level::Full, false) => &[64, 128],
+        (Level::Full, true) => &[128, 256],
+    }
+}
+
+/// The relative tolerance each level checks at Rayleigh number `ra`, with the resolution (cells per
+/// side, the reference length) it is checked at: the finest size of the level.
+pub fn tolerances(ra: f64) -> Vec<(u32, f64)> {
+    [Level::Quick, Level::Full]
+        .into_iter()
+        .map(|level| (*sizes(level, ra).last().expect("sizes"), NUSSELT_TOLERANCE))
+        .collect()
+}
 
 pub fn cases() -> Vec<Case> {
     [(1e3, "1e3"), (1e4, "1e4"), (1e5, "1e5"), (1e6, "1e6")]
@@ -46,11 +67,7 @@ struct Measured {
 
 fn run(ctx: &Ctx, ra: f64) -> Result<Outcome> {
     let r = references::de_vahl_davis(ra).ok_or_else(|| anyhow!("no reference for Ra {ra}"))?;
-    let sizes: &[u32] = match (ctx.level, ra >= 1e6) {
-        (Level::Quick, _) => &[64],
-        (Level::Full, false) => &[64, 128],
-        (Level::Full, true) => &[128, 256],
-    };
+    let sizes = sizes(ctx.level, ra);
     let mut out = Outcome {
         description: format!(
             "Square cavity of side L = 1 m, N² fluid cells; hot left wall, cold right wall (ΔT = 1 K), \
@@ -142,13 +159,13 @@ fn run(ctx: &Ctx, ra: f64) -> Result<Outcome> {
         format!("Nu on the hot wall at N = {finest}"),
         m.nu_hot,
         r.nu_hot,
-        0.02,
+        NUSSELT_TOLERANCE,
     ));
     out.metrics.push(Metric::relative(
         format!("Nū (cavity average) at N = {finest}"),
         m.nu_mean,
         r.nu_mean,
-        0.02,
+        NUSSELT_TOLERANCE,
     ));
     out.metrics.push(Metric::info(
         "u_max on x = 0.5 (α/L)",
@@ -204,7 +221,8 @@ impl Geometry {
         let nu_hot = (0..n)
             .map(|y| {
                 let (t1, t2) = (theta[y * w + 1] as f64, theta[y * w + 2] as f64);
-                let grad = (-8.0 * self.theta_hot + 9.0 * t1 - t2) / 3.0;
+                // The same wall gradient the viewer's Nusselt number uses (`cfd_core::heat`).
+                let grad = heat::wall_gradient(self.theta_hot, t1, Some(t2));
                 -grad * l / self.theta_span
             })
             .sum::<f64>()

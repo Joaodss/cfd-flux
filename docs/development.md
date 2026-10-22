@@ -10,7 +10,10 @@
 
 **Author's machine (verified 2026-10-09; driver updated 2026-10-12):** RTX 4060 8 GB (`sm_89`), driver 617.42 (CUDA 13.4; was 610.62 = CUDA 13.3),
 CUDA Toolkit 13.4, VS Build Tools 2022 (MSVC 14.4x), Rust 1.90 `stable-x86_64-pc-windows-msvc`, Node 24.
-Native `cargo build/test` and a CUDA test kernel (`nvcc -arch=sm_89`) both work.
+Native `cargo build/test` and a CUDA test kernel (`nvcc -arch=sm_89`) both work. The checkout lives in
+`D:\GithubProjects\live-fluids` (moved from `C:\Users\…\Desktop\GithubProjects` on 2026-10-21; nothing in the
+repository names an absolute path). **Use `CARGO_BUILD_JOBS=4`** for the full test build: with the default 16 parallel
+jobs rustc runs out of paging file ("the paging file is too small").
 
 ### CUDA on Windows — notes
 
@@ -44,7 +47,7 @@ rustup default stable-x86_64-pc-windows-msvc
 ### Alternative: WSL (Ubuntu)
 
 ```bash
-cd /mnt/c/Users/<user>/Desktop/GithubProjects/cfd-flux
+cd /mnt/d/GithubProjects/live-fluids   # the checkout, as seen from WSL
 CARGO_TARGET_DIR=$HOME/.cache/cfd-flux-target cargo test --workspace
 ```
 (A `CARGO_TARGET_DIR` outside `/mnt/c` avoids mixing Windows/Linux artefacts and is much faster.)
@@ -60,10 +63,20 @@ cargo test --workspace
 # Scene format: after changing crates/cfd-core/src/scene.rs or examples.rs
 cargo run -p cfd-cli -- schema schema/scene.schema.json
 cargo run -p cfd-cli -- example --all scenes
+# Just one scene, or an example's quick variant (half the cells, shorter run; --all writes both)
+cargo run -p cfd-cli -- example cylinder-re100 --quick --out out/cylinder-quick.json
 cd apps/web && npm run gen:types
 
 # Preset fluids and solids (cfd-core/src/library.rs) for the web editor; a test checks it is up to date
 cargo run -p cfd-cli -- library apps/web/src/generated/library.json
+# Colour maps (cfd-io/src/image.rs) for the web viewer; a test checks it is up to date
+cargo run -p cfd-cli -- colormaps apps/web/src/generated/colormaps.json
+# Frames for the viewer's decoder contract test (apps/web/tests/fixtures/frames/), after changing the frame format
+UPDATE_FIXTURES=1 cargo test -p cfd-io --test browser_fixtures
+# Benchmark references and the suite's tolerances (cfd-verify) for the viewer's statistics; a test checks it
+cargo run -p cfd-cli -- references apps/web/src/generated/references.json
+# The St and the Nusselt numbers the viewer must reproduce on apps/web/tests/fixtures/series/{cylinder-forces,cavity-heat}.csv
+UPDATE_FIXTURES=1 cargo test -p cfd-verify --test web_contract
 
 # Check scene files
 cargo run -p cfd-cli -- validate scenes/*.json
@@ -90,12 +103,17 @@ cargo run --release -p cfd-cli -- verify --cases cavity --no-report
 # (CFD_REQUIRE_GPU / CFD_REQUIRE_CUDA make them fail instead).
 cargo run --release -p cfd-cli -- compare scenes/channel.json --out out/cmp --steps 2000
 cargo run --release -p cfd-cli -- compare scenes/channel.json --out out/cmp --force --backends cpu,cuda --tolerance 0  # must be bit-identical
-cargo run --release -p cfd-cli -- compare scenes/cylinder-re100.json --out out/cmp-cyl --end-time 12 --statistics --stats-from 6 --ref-length 0.1 --ref-velocity 1
+cargo run --release -p cfd-cli -- compare scenes/cylinder-re100.json --out out/cmp-cyl --end-time 12 --statistics --stats-from 6   # St, C_D with the scene's reference scales (D, Ū)
 cargo run --release -p cfd-cli -- compare --validation   # writes validation/compare/ (commit it), ~1 min
 
 # Server (Phase 3): API on http://127.0.0.1:7878, data (SQLite + results/) in ./data
 cargo run --release -p cfd-server
 cargo run --release -p cfd-server -- --listen 127.0.0.1:8080 --data /tmp/lf --cpu-jobs 2
+# The web app from the server itself (same origin, no Vite): a directory...
+cargo run --release -p cfd-server -- --web-dir apps/web/dist --open
+# ...or embedded in the binary (the release build: Node first, then Cargo; `dist` must exist at compile time)
+(cd apps/web && npm ci && npm run build)
+cargo build --release -p cfd-server --features web   # then: target/release/cfd-server --open
 # Its test client: submit a scene, follow the stream, optionally cancel (prints the latency)
 cargo run --release -p cfd-cli -- submit scenes/cylinder-re100.json --backend cuda --cancel-after 3
 cargo run --release -p cfd-cli -- submit scenes/channel.json --end-time 2 --fields velocity --max-size 256
@@ -108,7 +126,11 @@ npm test             # Vitest: logic, components (happy-dom), scenes/ against th
 UPDATE_FIXTURES=1 npm test   # rewrite tests/fixtures/ (editor-written scenes cfd-core reads back)
 npx playwright install chromium   # once: the browser for the end-to-end tests
 npm run test:e2e     # Playwright: starts a release cfd-server (port 7879, fresh target/e2e-data) and Vite
-                     # (port 5174), then draws, validates and runs the cylinder (Phase 4 acceptance)
+                     # (port 5174), then draws, validates and runs the cylinder (Phase 4 acceptance) and
+                     # follows a short run in the viewer (live frames, scrub, play); tests tagged @full are left out
+npm run test:e2e:full  # Phase 5 acceptance (@full, needs a GPU server, ≈ 1 min): opens Cylinder Re=100 from the
+                     # gallery, runs it for 20 s on the GPU (≈ 430 MB under target/e2e-data: delete it afterwards),
+                     # checks the live street, the replay, St and C_D,max within 5 %, and the PNG, CSV and video exports
 npm run typecheck && npm run lint && npm run format:check && npm run build
 ```
 
@@ -122,6 +144,17 @@ npm run typecheck && npm run lint && npm run format:check && npm run build
   server stops become `failed/interrupted`.
 - The API and the WebSocket messages are in [03 §7](03-data-model.md#7-api). Quick checks with `curl`:
   `POST /api/scenes/validate` with a scene file as the body; `POST /api/simulations` with `{"scene": …}`.
+- **The web app** is served from the same origin as the API (design §10, ADR-010): `/api/*` is the API (an unknown
+  `/api/…` path is the JSON 404), every other path a static file, `/` is `index.html` (hash routes need no fallback).
+  Files under `assets/` (Vite's hashed names, the decode worker too) get `Cache-Control: immutable`, everything else
+  `no-cache`. Source: `--web-dir DIR` (`tower-http`'s `ServeDir`) or, if `--web-dir` is absent and the binary was built
+  with the Cargo feature `web` (default off, so `cargo build` and the Rust CI need no Node), the `apps/web/dist` folder
+  embedded by `rust-embed`. `--open` opens the browser once the socket is bound (`0.0.0.0` / `[::]` open `127.0.0.1`;
+  no browser — headless, CI — is a warning). Release build: `npm run build` in `apps/web`, then
+  `cargo build --release -p cfd-server --features web`. The web job of the CI does it and runs
+  `cargo test --release -p cfd-server --features web --test web` (`tests/web.rs`: a temporary `--web-dir` with `/`,
+  an asset and its headers, unknown `/api/…` paths, `..` traversal; the embedded build's `/`, ETag and first asset).
+  `cargo clippy -p cfd-server --features web` needs `apps/web/dist` to exist.
 - Tests: `crates/cfd-server/tests/` start the server in-process on an ephemeral port with an in-memory database
   (`api.rs`: capabilities, validation, limits, CORS; `jobs.rs`: lifecycle, cancel, pause, queueing, purge,
   restart; `stream.rs`: WebSocket, backpressure, and the acceptance scenario on every available engine, skipped

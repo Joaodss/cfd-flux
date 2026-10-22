@@ -32,6 +32,8 @@ export function reduce(s: State, a: Action): State {
     }
     case 'log':
       return { ...s, log: [...s.log, m.message] }
+    case 'series':
+      return s // the series feed's (src/viewer/seriesFeed.ts)
     case 'done':
       return {
         ...s,

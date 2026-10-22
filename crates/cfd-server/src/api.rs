@@ -14,10 +14,12 @@ use cfd_io::frame::{Dtype, Frame};
 use cfd_job::{PrepareError, Prepared, RunOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
+use sha2::{Digest, Sha256};
 
 use crate::config::{Limits, StreamDefaults};
 use crate::error::{ApiError, ApiJson, IssueDto};
 use crate::jobs::{JobStatus, JobView};
+use crate::stream::StreamFormat;
 use crate::AppState;
 
 #[derive(Serialize)]
@@ -120,6 +122,20 @@ pub struct Numbers {
     pub dt: f64,
     /// Lattice velocity U·dt/dx.
     pub lattice_velocity: f64,
+    /// The scales of reported numbers (the scene's `reference`, defaults filled in) and the
+    /// Reynolds and Rayleigh numbers they give.
+    pub reference: ReferenceNumbers,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReferenceNumbers {
+    pub length: f64,
+    pub velocity: f64,
+    pub temperature_difference: f64,
+    pub reynolds: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rayleigh: Option<f64>,
 }
 
 impl Numbers {
@@ -137,6 +153,13 @@ impl Numbers {
             dx: d.units.dx,
             dt: d.units.dt,
             lattice_velocity: n.velocity * d.units.velocity_factor(),
+            reference: ReferenceNumbers {
+                length: n.reference.length,
+                velocity: n.reference.velocity,
+                temperature_difference: n.reference.temperature_difference,
+                reynolds: n.reference.reynolds,
+                rayleigh: n.reference.rayleigh,
+            },
         }
     }
 }
@@ -343,12 +366,49 @@ pub struct SubmitRequest {
     options: JobOptions,
 }
 
+/// `POST /api/simulations` query.
+#[derive(Deserialize)]
+pub struct SubmitQuery {
+    /// `completed`: if a job of the same scene and options has completed, answer with it (`200`)
+    /// instead of running again ("Open with results" in the gallery).
+    reuse: Option<String>,
+}
+
+/// SHA-256 (hex) of what decides a run's results: the validated scene's canonical JSON (the
+/// serialisation of the parsed `Scene`, so formatting and key order of the request do not matter)
+/// and the run options that change the output. The engine is left out: the backends agree to
+/// within their parity tolerances, and "which engine ran it" stays visible on the job.
+pub fn run_hash(prepared: &Prepared, options: &JobOptions) -> Result<String, ApiError> {
+    let scene = serde_json::to_string(&prepared.scene).map_err(anyhow::Error::from)?;
+    let options = serde_json::to_string(&JobOptions {
+        backend: None,
+        ..options.clone()
+    })
+    .map_err(anyhow::Error::from)?;
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(format!("{scene}\n{options}"))
+    ))
+}
+
 /// `POST /api/simulations`: validates and queues a job; `201` with the job, or `422` with the
-/// issues that prevent running it.
+/// issues that prevent running it. With `?reuse=completed`, `200` with the latest completed job
+/// of the same scene and options if there is one.
 pub async fn submit(
     State(state): State<AppState>,
+    Query(q): Query<SubmitQuery>,
     ApiJson(req): ApiJson<SubmitRequest>,
 ) -> Result<(StatusCode, [(HeaderName, String); 1], Json<JobView>), ApiError> {
+    let reuse = match q.reuse.as_deref() {
+        None => false,
+        Some("completed") => true,
+        Some(other) => {
+            return Err(ApiError::BadRequest {
+                code: "request.reuse",
+                message: format!("unknown reuse {other:?}: use `completed`"),
+            })
+        }
+    };
     let db = &state.inner.jobs.db;
     let scene = match (req.scene, &req.scene_id) {
         (Some(scene), _) => scene,
@@ -377,10 +437,17 @@ pub async fn submit(
     let checked = tokio::task::spawn_blocking(move || check(&st, &scene, &options))
         .await
         .map_err(anyhow::Error::from)??;
+    let hash = run_hash(&checked.prepared, &req.options)?;
+    if reuse {
+        if let Some(view) = state.inner.jobs.find_reusable(&hash).await? {
+            let location = format!("/api/simulations/{}", view.id);
+            return Ok((StatusCode::OK, [(LOCATION, location)], Json(view)));
+        }
+    }
     let view = state
         .inner
         .jobs
-        .submit(&state, checked, &req.options, req.scene_id)
+        .submit(&state, checked, &req.options, req.scene_id, hash)
         .await?;
     let location = format!("/api/simulations/{}", view.id);
     Ok((StatusCode::CREATED, [(LOCATION, location)], Json(view)))
@@ -481,11 +548,19 @@ pub async fn resume(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FrameQuery {
     dtype: Option<String>,
+    /// Field names, comma-separated (default: every field of the frame).
+    fields: Option<String>,
+    /// Longest side in cells: box-downsampled like the stream (default: full resolution).
+    max_size: Option<u32>,
 }
 
-/// `GET /api/simulations/{id}/frames/{n}?dtype=f32|f16`: one stored frame (LFFR).
+/// `GET /api/simulations/{id}/frames/{n}?dtype=f32|f16&fields=…&maxSize=…`: one stored frame
+/// (LFFR). With `fields` and `maxSize` it is in a stream format: the named fields,
+/// box-downsampled by the stream's integer factor with the CPU filter the GPU samples are tested
+/// against, so it equals the stream frame of the same index (the viewer mixes both).
 pub async fn frame(
     State(state): State<AppState>,
     Path((id, n)): Path<(String, u32)>,
@@ -500,17 +575,9 @@ pub async fn frame(
     let bytes = tokio::fs::read(dir.frame_path(n))
         .await
         .map_err(|_| ApiError::NotFound(format!("job {id} has no stored frame {n}")))?;
-    let bytes = match q.dtype.as_deref() {
-        None | Some("f32") => bytes,
-        Some("f16") => tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
-            let mut frame = Frame::decode(&bytes)?;
-            for f in &mut frame.fields {
-                f.desc.dtype = Dtype::F16;
-            }
-            Ok(frame.encode()?)
-        })
-        .await
-        .map_err(anyhow::Error::from)??,
+    let dtype = match q.dtype.as_deref() {
+        None | Some("f32") => Dtype::F32,
+        Some("f16") => Dtype::F16,
         Some(other) => {
             return Err(ApiError::BadRequest {
                 code: "request.dtype",
@@ -518,17 +585,50 @@ pub async fn frame(
             })
         }
     };
+    if dtype == Dtype::F32 && q.fields.is_none() && q.max_size.is_none() {
+        return Ok(([(CONTENT_TYPE, "application/octet-stream")], bytes));
+    }
+    let format = StreamFormat {
+        fields: q.fields.as_deref().map(crate::stream::field_list),
+        max_size: q.max_size.unwrap_or(u32::MAX).clamp(16, u32::MAX),
+    };
+    let bytes = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
+        let frame = Frame::decode(&bytes)?;
+        Ok(convert_frame(frame, &format, dtype).encode()?)
+    })
+    .await
+    .map_err(anyhow::Error::from)??;
     Ok(([(CONTENT_TYPE, "application/octet-stream")], bytes))
 }
 
-/// `GET /api/simulations/{id}/files/{name}`: `scene.json`, `meta.json` or a CSV series.
+/// A stored frame in a stream format: its fields in frame order, downsampled, in `dtype`.
+fn convert_frame(mut frame: Frame, format: &StreamFormat, dtype: Dtype) -> Frame {
+    let (w, h) = (frame.width as usize, frame.height as usize);
+    let k = format.factor(frame.width, frame.height) as usize;
+    frame.fields.retain(|f| {
+        format
+            .fields
+            .as_ref()
+            .is_none_or(|list| list.contains(&f.desc.name))
+    });
+    for f in &mut frame.fields {
+        f.values = cfd_core::sample::downsample(&f.values, f.desc.components as usize, w, h, k);
+        f.desc.dtype = dtype;
+    }
+    frame.width = w.div_ceil(k) as u32;
+    frame.height = h.div_ceil(k) as u32;
+    frame
+}
+
+/// `GET /api/simulations/{id}/files/{name}`: `scene.json`, `meta.json` or a CSV series (`heat.csv`
+/// only for thermal runs with stored frames).
 pub async fn file(
     State(state): State<AppState>,
     Path((id, name)): Path<(String, String)>,
 ) -> Result<([(HeaderName, &'static str); 1], Vec<u8>), ApiError> {
     let content_type = match name.as_str() {
         "scene.json" | "meta.json" => "application/json",
-        "probes.csv" | "forces.csv" | "diagnostics.csv" => "text/csv; charset=utf-8",
+        "probes.csv" | "forces.csv" | "diagnostics.csv" | "heat.csv" => "text/csv; charset=utf-8",
         _ => return Err(ApiError::NotFound(format!("no file {name:?}"))),
     };
     let dir = state

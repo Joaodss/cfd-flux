@@ -4,6 +4,7 @@ import { jobs } from '../api/jobs.ts'
 import { useEditor } from '../editor/store.ts'
 import { selectTool } from '../editor/tools/controller.ts'
 import { issueText } from '../messages.ts'
+import type { Example } from '../scene/examples.ts'
 import { toScene } from '../scene/io.ts'
 import { currentValidation, messageContext } from './issues.ts'
 import { navigate } from './route.ts'
@@ -39,6 +40,23 @@ export async function runScene(
     const err = e as ApiError
     const detail = err.issues?.length ? `: ${issueText(err.issues[0], messageContext(s))}` : ''
     s.notify('error', `The server did not accept the run (${err.message}${detail})`)
+    return false
+  }
+}
+
+/**
+ * The gallery's "Open with results" (ADR-009): runs the example on the server, or reuses its
+ * latest completed run (same scene and options), and opens the job view. The editor's own
+ * document is left alone.
+ */
+export async function openExampleWithResults(ex: Example): Promise<boolean> {
+  try {
+    const job = await jobs.submit(ex.scene, { reuse: true })
+    navigate({ name: 'job', id: job.id })
+    return true
+  } catch (e) {
+    const err = e as ApiError
+    useEditor.getState().notify('error', `${ex.scene.name}: ${err.message}`)
     return false
   }
 }

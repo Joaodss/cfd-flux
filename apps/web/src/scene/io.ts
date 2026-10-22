@@ -2,7 +2,7 @@
 // layers, kept in the store) and the pixel layers (kept outside React).
 import type { ErrorObject, ValidateFunction } from 'ajv'
 import { Layers } from '../editor/layers.ts'
-import type { LayerData2, Scene } from '../generated/scene.ts'
+import type { LayerData2, ReferenceScales, Scene } from '../generated/scene.ts'
 import { decodeU16, decodeU8, encodeU16, encodeU8 } from './codec.ts'
 
 /** Everything in a scene except its pixel layers. */
@@ -45,6 +45,7 @@ export async function toScene(doc: Document): Promise<Scene> {
   // Same key order as the Rust serializer, so saved files read like the CLI's.
   const { schemaVersion, name, description, grid, fluids, solidMaterials, elements, probes } =
     doc.table
+  const reference = referenceOrNull(doc.table.reference)
   return {
     schemaVersion,
     name,
@@ -56,9 +57,20 @@ export async function toScene(doc: Document): Promise<Scene> {
     probes: probes ?? [],
     initial: doc.table.initial,
     physics: doc.table.physics,
+    ...(reference ? { reference } : {}),
     run: doc.table.run,
     layers,
   }
+}
+
+/** The reference scales that are set (keys in the Rust order), or `null` when none is. */
+export function referenceOrNull(r: ReferenceScales | null | undefined): ReferenceScales | null {
+  if (!r) return null
+  const out: ReferenceScales = {}
+  if (r.length != null) out.length = r.length
+  if (r.velocity != null) out.velocity = r.velocity
+  if (r.temperatureDifference != null) out.temperatureDifference = r.temperatureDifference
+  return Object.keys(out).length > 0 ? out : null
 }
 
 /**

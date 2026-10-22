@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use cfd_engines::{EngineOptions, Inventory};
+use cfd_server::web::{self, Web};
 use cfd_server::{AppState, Config};
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -31,6 +32,13 @@ struct Args {
     /// Let jobs that ask for wgpu use a software adapter when there is no GPU.
     #[arg(long)]
     allow_software: bool,
+    /// Serve the web app from this directory (the output of `npm run build`) instead of the one
+    /// compiled into the binary.
+    #[arg(long, value_name = "DIR")]
+    web_dir: Option<PathBuf>,
+    /// Open the web app in the default browser once the server is listening.
+    #[arg(long)]
+    open: bool,
 }
 
 #[tokio::main]
@@ -58,11 +66,28 @@ async fn main() -> Result<()> {
             (None, None) => tracing::info!("engine {}", e.kind),
         }
     }
+    let web = match (args.web_dir, Web::EMBEDDED_AVAILABLE) {
+        (Some(dir), _) => Web::Dir(dir),
+        (None, true) => Web::Embedded,
+        (None, false) => Web::None,
+    };
+    match &web {
+        Web::None => tracing::info!(
+            "no web app: the API only (build with --features web, or give --web-dir)"
+        ),
+        Web::Dir(d) => tracing::info!("web app from {}", d.display()),
+        Web::Embedded => tracing::info!("web app embedded in the binary"),
+    }
+    let open = args.open && !matches!(web, Web::None);
+    if args.open && !open {
+        tracing::warn!("--open: there is no web app to open");
+    }
     let config = Config {
         listen: args.listen,
         data_dir: args.data,
         database_url: args.database,
         cpu_jobs: args.cpu_jobs.max(1),
+        web,
         engine,
         ..Default::default()
     };
@@ -70,7 +95,13 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("cannot listen on {}", config.listen))?;
     tracing::info!("listening on http://{}", listener.local_addr()?);
+    let url = web::browser_url(listener.local_addr()?);
     let state = AppState::new(config, inventory).await?;
+    if open {
+        // The socket is bound, so the browser can connect at once (it waits in the accept queue
+        // for the few milliseconds until `serve` runs).
+        web::open_browser(url);
+    }
     cfd_server::serve(listener, state, async {
         let _ = tokio::signal::ctrl_c().await;
         tracing::info!("shutting down");

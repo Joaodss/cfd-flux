@@ -170,6 +170,24 @@ pub struct Dimensionless {
     pub prandtl: Option<f64>,
     /// `g·β·ΔT·L³/(ν·α)`, with ΔT the temperature scale.
     pub rayleigh: Option<f64>,
+    /// The scales of reported numbers: the scene's `reference`, else the ones above.
+    pub reference: Reference,
+}
+
+/// Reference scales of reported numbers (the scene's `reference`, each value defaulting to the
+/// characteristic scale) and the Reynolds and Rayleigh numbers they give.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Reference {
+    /// m
+    pub length: f64,
+    /// m/s
+    pub velocity: f64,
+    /// K
+    pub temperature_difference: f64,
+    /// `U·L/ν` with the reference scales.
+    pub reynolds: f64,
+    /// `g·β·ΔT·L³/(ν·α)` with the reference scales (Boussinesq runs).
+    pub rayleigh: Option<f64>,
 }
 
 /// Hydrostatic pressure added to the output pressure field: the solver only resolves the
@@ -497,15 +515,31 @@ impl Domain {
             .or_else(|| centroid(&|i| cell_type[i] == CellType::Fluid))
             .unwrap_or([0.0; 2]);
 
+        let rayleigh = |dt: f64, l: f64| {
+            alpha
+                .filter(|_| boussinesq)
+                .map(|a| g_mag * beta * dt * l.powi(3) / (fluid.kinematic_viscosity * a))
+        };
+        let rs = scene.reference.unwrap_or_default();
+        let (ref_l, ref_u, ref_dt) = (
+            rs.length.unwrap_or(length),
+            rs.velocity.unwrap_or(u_char),
+            rs.temperature_difference.unwrap_or(delta_t),
+        );
         let numbers = Dimensionless {
             velocity: u_char,
             length,
             reynolds: u_char * length / fluid.kinematic_viscosity,
             mach: units.velocity_to_lattice(u_char) / CS2.sqrt(),
             prandtl: alpha.map(|a| fluid.kinematic_viscosity / a),
-            rayleigh: alpha
-                .filter(|_| boussinesq)
-                .map(|a| g_mag * beta * delta_t * length.powi(3) / (fluid.kinematic_viscosity * a)),
+            rayleigh: rayleigh(delta_t, length),
+            reference: Reference {
+                length: ref_l,
+                velocity: ref_u,
+                temperature_difference: ref_dt,
+                reynolds: ref_u * ref_l / fluid.kinematic_viscosity,
+                rayleigh: rayleigh(ref_dt, ref_l),
+            },
         };
 
         let initial = InitialState {
@@ -785,7 +819,7 @@ fn check_support(scene: &Scene, cell_type: &[CellType], r: &mut Report) {
 mod tests {
     use super::*;
     use crate::examples::{self, Canvas};
-    use crate::scene::{DomainEdges, Element};
+    use crate::scene::{DomainEdges, Element, ReferenceScales};
 
     fn domain(scene: &Scene) -> Domain {
         Domain::from_scene(scene, &DomainOptions::default())
@@ -905,8 +939,42 @@ mod tests {
         // Mean over the inlet = 2/3 of the peak (the benchmark's U_mean = 1 m/s).
         let mean: f64 = (1..83).map(inlet_u).sum::<f64>() / 82.0;
         assert!((d.units.velocity_to_physical(mean) - 1.0).abs() < 1e-3);
-        // 8 s of physical time.
-        assert_eq!(d.run.total, d.units.time_to_steps(8.0));
+        // 20 s of physical time, a frame every 0.02 s.
+        assert_eq!(d.run.total, d.units.time_to_steps(20.0));
+        assert_eq!(d.run.output_every, d.units.time_to_steps(0.02));
+    }
+
+    #[test]
+    fn reference_scales_change_reported_numbers_only() {
+        // The cylinder's reference: D = 0.1 m and Ū = 1 m/s, so Re = 100; the solver's own scales
+        // (1.5 m/s peak × 0.41 m) give 615 and still set the time step.
+        let mut scene = examples::cylinder_re100();
+        let d = domain(&scene);
+        let r = d.numbers.reference;
+        assert_eq!((r.length, r.velocity), (0.1, 1.0));
+        assert!((r.reynolds - 100.0).abs() < 1e-9, "{}", r.reynolds);
+        assert!((d.numbers.reynolds - 615.0).abs() < 1e-9);
+        scene.reference = None;
+        let plain = domain(&scene);
+        assert_eq!(plain.units, d.units);
+        let r = plain.numbers.reference;
+        assert_eq!(
+            (r.length, r.velocity),
+            (plain.numbers.length, plain.numbers.velocity)
+        );
+        assert_eq!(r.reynolds, plain.numbers.reynolds);
+        // A reference ΔT and L give the matching Rayleigh number.
+        let mut cavity = examples::heated_cavity_ra1e5();
+        let n = domain(&cavity).numbers;
+        cavity.reference = Some(ReferenceScales {
+            length: Some(2.0 * n.length),
+            temperature_difference: Some(0.5 * n.reference.temperature_difference),
+            velocity: None,
+        });
+        let m = domain(&cavity).numbers;
+        let ratio = m.reference.rayleigh.unwrap() / n.rayleigh.unwrap();
+        assert!((ratio - 4.0).abs() < 1e-9, "{ratio}");
+        assert_eq!(m.rayleigh, n.rayleigh);
     }
 
     #[test]

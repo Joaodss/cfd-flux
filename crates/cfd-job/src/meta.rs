@@ -84,6 +84,22 @@ pub(crate) struct DimensionlessMeta {
     pub prandtl: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rayleigh: Option<f64>,
+    /// Scales of reported numbers (the scene's `reference`, defaults filled in).
+    pub reference: ReferenceMeta,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReferenceMeta {
+    pub length: f64,
+    pub velocity: f64,
+    pub temperature_difference: f64,
+    pub reynolds: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rayleigh: Option<f64>,
+    /// W/(m·K): the initial fluid's thermal conductivity (thermal scenes), for the Nusselt number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conductivity: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -111,6 +127,9 @@ pub(crate) struct RunMeta {
     pub frames_stored: u32,
     pub frame_dtype: &'static str,
     pub frame_fields: Vec<&'static str>,
+    /// The run has a `heat.csv` (thermal walls, stored frames).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub heat: bool,
 }
 
 #[derive(Serialize, Default, Clone, Copy, Debug)]
