@@ -147,7 +147,7 @@ payload     shuffle+lz4: per field, in header order: u32 length L | L bytes of l
   header or checksum; its decompressed size is known from the header), compressed in parallel on the server.
 - **Decoding in the browser** (`apps/web/src/frames/`, in a Web Worker; contract fixtures written by `cfd-io`'s
   test `browser_fixtures`): read the prefix and the JSON header, then per field an LZ4 block
-  decoder into a buffer of the known size (a ≈ 100-line TypeScript function, or `lz4js`'s block decoder), the
+  decoder into a buffer of the known size (our own ≈ 60-line TypeScript function, not `lz4js`; ADR-031), the
   unshuffle loop, and a `Float32Array`/`Uint16Array` view of the result (f16 is uploaded as-is to a `R16F`/
   `RG16F` texture). No WASM is needed; v1 (zstd) frames only exist in result directories written before v2 and
   are not streamed.
@@ -227,5 +227,5 @@ Server → client; text messages are JSON with a `type`, binary messages are str
 
 - A viewer gets the latest frame of its format; one that reads slowly skips frames (never the last one, sent before `done`), and the job never waits for viewers. Events are buffered per viewer (64); one that falls further behind gets the current `status`/`progress` again.
 - A viewer of a finished job gets `hello` and `done` at once (the series are in the files then).
-- A viewer that joins a running job reads `files/{forces,probes,diagnostics}.csv` (complete lines up to some step) and appends the `series` rows whose step is past the files' last one: every row sent before it joined is in the files, every later one comes in a message.
+- A viewer that joins a running job reads `files/{forces,probes,diagnostics}.csv` (and `heat.csv` when `meta.json` says `run.heat`; complete lines up to some step) and appends the `series` rows whose step is past the files' last one: every row sent before it joined is in the files, every later one comes in a message.
 - Client → server messages are reserved for interactive mode (Phase 5b): `{ "type": "patch", "rect": [...], "layer": "cellType", "data": ... }`, `{ "type": "setParam", ... }`; until then they are ignored. Pause, resume and cancel go through REST.

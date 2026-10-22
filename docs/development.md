@@ -127,7 +127,10 @@ UPDATE_FIXTURES=1 npm test   # rewrite tests/fixtures/ (editor-written scenes cf
 npx playwright install chromium   # once: the browser for the end-to-end tests
 npm run test:e2e     # Playwright: starts a release cfd-server (port 7879, fresh target/e2e-data) and Vite
                      # (port 5174), then draws, validates and runs the cylinder (Phase 4 acceptance) and
-                     # follows a short run in the viewer (live frames, scrub, play)
+                     # follows a short run in the viewer (live frames, scrub, play); tests tagged @full are left out
+npm run test:e2e:full  # Phase 5 acceptance (@full, needs a GPU server, ≈ 1 min): opens Cylinder Re=100 from the
+                     # gallery, runs it for 20 s on the GPU (≈ 430 MB under target/e2e-data: delete it afterwards),
+                     # checks the live street, the replay, St and C_D,max within 5 %, and the PNG, CSV and video exports
 npm run typecheck && npm run lint && npm run format:check && npm run build
 ```
 
