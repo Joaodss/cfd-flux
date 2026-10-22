@@ -16,6 +16,9 @@ pub const NAMES: [&str; 4] = [
     "dam-break",
 ];
 
+/// The examples that have a [`quick`] variant (the dam break stays out: free surface, Phase 6a).
+pub const QUICK_NAMES: [&str; 3] = ["channel", "cylinder-re100", "heated-cavity-ra1e5"];
+
 pub fn by_name(name: &str) -> Option<Scene> {
     Some(match name {
         "channel" => channel(),
@@ -24,6 +27,60 @@ pub fn by_name(name: &str) -> Option<Scene> {
         "dam-break" => dam_break(),
         _ => return None,
     })
+}
+
+/// The `quick` variant of an example: a coarser grid (half the cells per side, 0.7 for the cylinder) and a shorter run, so it finishes in
+/// seconds on the CPU engine (the gallery offers it when the server has no GPU; ADR-009). The
+/// scene file is `scenes/<name>-quick.json`. Quick runs are compared with a benchmark at their
+/// own resolution (the validation suite's `toleranceAt`), not at the full example's.
+pub fn quick(name: &str) -> Option<Scene> {
+    Some(match name {
+        "channel" => channel_at(Resolution::Quick),
+        "cylinder-re100" => cylinder_re100_at(Resolution::Quick),
+        "heated-cavity-ra1e5" => heated_cavity_ra1e5_at(Resolution::Quick),
+        _ => return None,
+    })
+}
+
+/// The file stem of an example's quick variant.
+pub fn quick_file_stem(name: &str) -> String {
+    format!("{name}-quick")
+}
+
+/// Full-size example or its quick variant.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Resolution {
+    Full,
+    /// Half the cells per side.
+    Quick,
+}
+
+impl Resolution {
+    /// Cells of the full example per cell of this one, along each side.
+    fn divisor(self) -> u32 {
+        match self {
+            Resolution::Full => 1,
+            Resolution::Quick => 2,
+        }
+    }
+
+    fn pick<T>(self, full: T, quick: T) -> T {
+        match self {
+            Resolution::Full => full,
+            Resolution::Quick => quick,
+        }
+    }
+
+    fn name(self, name: &str) -> String {
+        self.pick(name.to_string(), format!("{name} (quick)"))
+    }
+
+    fn describe(self, text: &str) -> String {
+        self.pick(
+            text.to_string(),
+            format!("{text} Quick variant: a coarser grid and a shorter run, for the CPU."),
+        )
+    }
 }
 
 /// Pixel canvas used to draw scene geometry in code, mirroring what the web editor does.
@@ -129,7 +186,12 @@ fn run(end_time: f64, output_interval: f64, output_fields: Vec<OutputField>) -> 
 
 /// Straight channel with a uniform inlet: the simplest possible scene.
 pub fn channel() -> Scene {
-    let (w, h) = (400, 100);
+    channel_at(Resolution::Full)
+}
+
+fn channel_at(res: Resolution) -> Scene {
+    let k = res.divisor();
+    let (w, h) = (400 / k, 100 / k);
     let mut c = Canvas::new(w, h, CellType::Fluid);
     c.rect(0, 0, w, 1, CellType::Solid, 1);
     c.rect(0, h - 1, w, h, CellType::Solid, 1);
@@ -137,12 +199,14 @@ pub fn channel() -> Scene {
     c.rect(w - 1, 1, w, h - 1, CellType::Outlet, 3);
     Scene {
         schema_version: SCHEMA_VERSION,
-        name: "Channel".into(),
-        description: Some("Air entering a 0.4 m × 0.1 m channel at 0.05 m/s (Re ≈ 330).".into()),
+        name: res.name("Channel"),
+        description: Some(
+            res.describe("Air entering a 0.4 m × 0.1 m channel at 0.05 m/s (Re ≈ 330)."),
+        ),
         grid: Grid {
             width: w,
             height: h,
-            cell_size: 0.001,
+            cell_size: 0.001 * k as f64,
             edges: DomainEdges::default(),
         },
         fluids: vec![air(1)],
@@ -162,7 +226,7 @@ pub fn channel() -> Scene {
         ],
         probes: vec![Probe {
             name: "Centre".into(),
-            position: [200, 50],
+            position: [200 / k, 50 / k],
         }],
         initial: InitialConditions {
             fluid: 1,
@@ -173,7 +237,7 @@ pub fn channel() -> Scene {
         physics: isothermal(),
         reference: None,
         run: run(
-            20.0,
+            res.pick(20.0, 10.0),
             0.1,
             vec![
                 OutputField::Velocity,
@@ -188,8 +252,14 @@ pub fn channel() -> Scene {
 /// Schäfer & Turek (1996) benchmark 2D-2: cylinder in a channel at Re = 100.
 /// D = 0.1 m resolved with 20 cells; reference St ≈ 0.30, max C_D ≈ 3.23.
 pub fn cylinder_re100() -> Scene {
-    let dx = 0.005;
-    let (fluid_w, fluid_h) = (440, 82); // 2.2 m × 0.41 m
+    cylinder_re100_at(Resolution::Full)
+}
+
+fn cylinder_re100_at(res: Resolution) -> Scene {
+    // 2.2 m × 0.41 m. The quick variant has 58 cells across (D ≈ 14): half of that (D = 10) is not
+    // stable here (τ = 0.51 diverges at step 1,290 of 30,000), so it only coarsens by 0.7.
+    let (fluid_w, fluid_h) = res.pick((440, 82), (311, 58));
+    let dx = res.pick(0.005, 0.41 / 58.0);
     let (w, h) = (fluid_w + 2, fluid_h + 2);
     let mut c = Canvas::new(w, h, CellType::Fluid);
     c.rect(0, 0, w, 1, CellType::Solid, 1);
@@ -206,11 +276,10 @@ pub fn cylinder_re100() -> Scene {
     );
     Scene {
         schema_version: SCHEMA_VERSION,
-        name: "Cylinder Re=100".into(),
-        description: Some(
-            "Schäfer & Turek (1996) benchmark 2D-2: von Kármán vortex street behind a cylinder."
-                .into(),
-        ),
+        name: res.name("Cylinder Re=100"),
+        description: Some(res.describe(
+            "Schäfer & Turek (1996) benchmark 2D-2: von Kármán vortex street behind a cylinder.",
+        )),
         grid: Grid {
             width: w,
             height: h,
@@ -245,11 +314,11 @@ pub fn cylinder_re100() -> Scene {
         probes: vec![
             Probe {
                 name: "Front".into(),
-                position: [30, 41],
+                position: res.pick([30, 41], [21, 29]),
             },
             Probe {
                 name: "Wake".into(),
-                position: [91, 41],
+                position: res.pick([91, 41], [64, 29]),
             },
         ],
         initial: InitialConditions {
@@ -269,8 +338,8 @@ pub fn cylinder_re100() -> Scene {
         // viewer's default statistics window (the second half, 10–20 s, ≈ 30 periods) is periodic
         // (as `cfd-cli compare`'s statistics). A frame every 0.02 s keeps the run at 1,000 frames.
         run: run(
-            20.0,
-            0.02,
+            res.pick(20.0, 10.0),
+            res.pick(0.02, 0.05),
             vec![
                 OutputField::Velocity,
                 OutputField::Pressure,
@@ -284,7 +353,11 @@ pub fn cylinder_re100() -> Scene {
 /// de Vahl Davis (1983) differentially heated square cavity at Ra = 1e5 (air, Pr ≈ 0.71).
 /// Reference mean Nusselt number ≈ 4.519.
 pub fn heated_cavity_ra1e5() -> Scene {
-    let n = 128;
+    heated_cavity_ra1e5_at(Resolution::Full)
+}
+
+fn heated_cavity_ra1e5_at(res: Resolution) -> Scene {
+    let n = 128 / res.divisor();
     let side = 0.1;
     let dx = side / n as f64;
     let fluid = air(1);
@@ -303,11 +376,10 @@ pub fn heated_cavity_ra1e5() -> Scene {
     c.rect(w - 1, 1, w, h - 1, CellType::Solid, 3);
     Scene {
         schema_version: SCHEMA_VERSION,
-        name: "Heated cavity Ra=1e5".into(),
-        description: Some(
-            "de Vahl Davis (1983): natural convection in a square cavity, hot left wall, cold right wall."
-                .into(),
-        ),
+        name: res.name("Heated cavity Ra=1e5"),
+        description: Some(res.describe(
+            "de Vahl Davis (1983): natural convection in a square cavity, hot left wall, cold right wall.",
+        )),
         grid: Grid { width: w, height: h, cell_size: dx, edges: DomainEdges::default() },
         fluids: vec![fluid],
         solid_materials: vec![],
@@ -316,7 +388,7 @@ pub fn heated_cavity_ra1e5() -> Scene {
             no_slip_wall(2, "Hot wall", ThermalBc::Fixed { value: round(t_ref + delta_t / 2.0) }),
             no_slip_wall(3, "Cold wall", ThermalBc::Fixed { value: round(t_ref - delta_t / 2.0) }),
         ],
-        probes: vec![Probe { name: "Centre".into(), position: [65, 65] }],
+        probes: vec![Probe { name: "Centre".into(), position: [n / 2 + 1, n / 2 + 1] }],
         initial: InitialConditions { fluid: 1, velocity: [0.0, 0.0], temperature: t_ref, pressure: 0.0 },
         physics: Physics {
             gravity: [0.0, -STANDARD_GRAVITY],
@@ -325,7 +397,12 @@ pub fn heated_cavity_ra1e5() -> Scene {
             free_surface: false,
         },
         reference: None,
-        run: run(200.0, 1.0, vec![OutputField::Velocity, OutputField::Temperature]),
+        run: run(
+            // Steady (kinetic energy within 0.1 %) after ≈ 60 s at this size on the CPU.
+            res.pick(200.0, 80.0),
+            1.0,
+            vec![OutputField::Velocity, OutputField::Temperature],
+        ),
         layers: c.layers(),
     }
 }

@@ -1,0 +1,116 @@
+{
+  "schemaVersion": 1,
+  "name": "Heated cavity Ra=1e5 (quick)",
+  "description": "de Vahl Davis (1983): natural convection in a square cavity, hot left wall, cold right wall. Quick variant: a coarser grid and a shorter run, for the CPU.",
+  "grid": {
+    "width": 66,
+    "height": 66,
+    "cellSize": 0.0015625,
+    "edges": {
+      "left": "wall",
+      "right": "wall",
+      "bottom": "wall",
+      "top": "wall"
+    }
+  },
+  "fluids": [
+    {
+      "id": 1,
+      "name": "Air",
+      "preset": "air",
+      "density": 1.204,
+      "kinematicViscosity": 0.00001516,
+      "thermalConductivity": 0.0257,
+      "specificHeat": 1005.0,
+      "thermalExpansion": 0.00343
+    }
+  ],
+  "solidMaterials": [],
+  "elements": [
+    {
+      "id": 1,
+      "name": "Adiabatic walls",
+      "kind": "wall",
+      "velocity": {
+        "type": "noSlip"
+      },
+      "thermal": {
+        "type": "adiabatic"
+      }
+    },
+    {
+      "id": 2,
+      "name": "Hot wall",
+      "kind": "wall",
+      "velocity": {
+        "type": "noSlip"
+      },
+      "thermal": {
+        "type": "fixed",
+        "value": 293.6286
+      }
+    },
+    {
+      "id": 3,
+      "name": "Cold wall",
+      "kind": "wall",
+      "velocity": {
+        "type": "noSlip"
+      },
+      "thermal": {
+        "type": "fixed",
+        "value": 292.6714
+      }
+    }
+  ],
+  "probes": [
+    {
+      "name": "Centre",
+      "position": [
+        33,
+        33
+      ]
+    }
+  ],
+  "initial": {
+    "fluid": 1,
+    "velocity": [
+      0.0,
+      0.0
+    ],
+    "temperature": 293.15,
+    "pressure": 0.0
+  },
+  "physics": {
+    "gravity": [
+      0.0,
+      -9.80665
+    ],
+    "thermal": true,
+    "buoyancy": "boussinesq",
+    "freeSurface": false
+  },
+  "run": {
+    "method": "lbm",
+    "backend": "auto",
+    "precision": "f32",
+    "endTime": 80.0,
+    "outputInterval": 1.0,
+    "outputFields": [
+      "velocity",
+      "temperature"
+    ]
+  },
+  "layers": {
+    "cellType": {
+      "encoding": "zstd+base64",
+      "dtype": "u8",
+      "data": "KLUv/QQ4ZQIAzAAAAQEBAQEAAAAAAAEBD6gQA18DEIw4SdIBEDIxI94JJZL4T0dJBzaGJPRgCDLpYIQtNZhAtoKFRgQOthcPrd6JLQAEV+bElgDAKT93ZH4="
+    },
+    "elementId": {
+      "encoding": "zstd+base64",
+      "dtype": "u16",
+      "data": "KLUv/QQ41QIA7AAAAQABAAEAAgAAAAAAAwARqBADnwMQjDaTJB0QEiIoAiIeEUr8SCARxWlJB4HDkIQ+GASZ9GAIW+pgBLI1mNCIggVb4PDAKYxL4eHaATh4RGmO7+lKyKUpWgncvw=="
+    }
+  }
+}
