@@ -14,6 +14,7 @@ use cfd_io::frame::{Dtype, Frame};
 use cfd_job::{PrepareError, Prepared, RunOptions};
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
+use sha2::{Digest, Sha256};
 
 use crate::config::{Limits, StreamDefaults};
 use crate::error::{ApiError, ApiJson, IssueDto};
@@ -365,12 +366,49 @@ pub struct SubmitRequest {
     options: JobOptions,
 }
 
+/// `POST /api/simulations` query.
+#[derive(Deserialize)]
+pub struct SubmitQuery {
+    /// `completed`: if a job of the same scene and options has completed, answer with it (`200`)
+    /// instead of running again ("Open with results" in the gallery).
+    reuse: Option<String>,
+}
+
+/// SHA-256 (hex) of what decides a run's results: the validated scene's canonical JSON (the
+/// serialisation of the parsed `Scene`, so formatting and key order of the request do not matter)
+/// and the run options that change the output. The engine is left out: the backends agree to
+/// within their parity tolerances, and "which engine ran it" stays visible on the job.
+pub fn run_hash(prepared: &Prepared, options: &JobOptions) -> Result<String, ApiError> {
+    let scene = serde_json::to_string(&prepared.scene).map_err(anyhow::Error::from)?;
+    let options = serde_json::to_string(&JobOptions {
+        backend: None,
+        ..options.clone()
+    })
+    .map_err(anyhow::Error::from)?;
+    Ok(format!(
+        "{:x}",
+        Sha256::digest(format!("{scene}\n{options}"))
+    ))
+}
+
 /// `POST /api/simulations`: validates and queues a job; `201` with the job, or `422` with the
-/// issues that prevent running it.
+/// issues that prevent running it. With `?reuse=completed`, `200` with the latest completed job
+/// of the same scene and options if there is one.
 pub async fn submit(
     State(state): State<AppState>,
+    Query(q): Query<SubmitQuery>,
     ApiJson(req): ApiJson<SubmitRequest>,
 ) -> Result<(StatusCode, [(HeaderName, String); 1], Json<JobView>), ApiError> {
+    let reuse = match q.reuse.as_deref() {
+        None => false,
+        Some("completed") => true,
+        Some(other) => {
+            return Err(ApiError::BadRequest {
+                code: "request.reuse",
+                message: format!("unknown reuse {other:?}: use `completed`"),
+            })
+        }
+    };
     let db = &state.inner.jobs.db;
     let scene = match (req.scene, &req.scene_id) {
         (Some(scene), _) => scene,
@@ -399,10 +437,17 @@ pub async fn submit(
     let checked = tokio::task::spawn_blocking(move || check(&st, &scene, &options))
         .await
         .map_err(anyhow::Error::from)??;
+    let hash = run_hash(&checked.prepared, &req.options)?;
+    if reuse {
+        if let Some(view) = state.inner.jobs.find_reusable(&hash).await? {
+            let location = format!("/api/simulations/{}", view.id);
+            return Ok((StatusCode::OK, [(LOCATION, location)], Json(view)));
+        }
+    }
     let view = state
         .inner
         .jobs
-        .submit(&state, checked, &req.options, req.scene_id)
+        .submit(&state, checked, &req.options, req.scene_id, hash)
         .await?;
     let location = format!("/api/simulations/{}", view.id);
     Ok((StatusCode::CREATED, [(LOCATION, location)], Json(view)))

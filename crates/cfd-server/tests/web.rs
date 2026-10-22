@@ -8,7 +8,8 @@ use cfd_server::Web;
 use common::{client, TestServer};
 use reqwest::StatusCode;
 
-const INDEX: &str = "<!doctype html><title>app</title><script src=\"/assets/app-abc123.js\"></script>";
+const INDEX: &str =
+    "<!doctype html><title>app</title><script src=\"/assets/app-abc123.js\"></script>";
 
 async fn text(res: reqwest::Response) -> (StatusCode, reqwest::header::HeaderMap, String) {
     let (status, headers) = (res.status(), res.headers().clone());
@@ -16,7 +17,10 @@ async fn text(res: reqwest::Response) -> (StatusCode, reqwest::header::HeaderMap
 }
 
 fn header<'a>(headers: &'a reqwest::header::HeaderMap, name: &str) -> &'a str {
-    headers.get(name).and_then(|v| v.to_str().ok()).unwrap_or("")
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
 }
 
 #[tokio::test]
@@ -25,7 +29,11 @@ async fn serves_a_directory() {
     let _ = std::fs::remove_dir_all(&web);
     std::fs::create_dir_all(web.join("assets")).unwrap();
     std::fs::write(web.join("index.html"), INDEX).unwrap();
-    std::fs::write(web.join("assets/app-abc123.js"), "console.log('hi');".repeat(100)).unwrap();
+    std::fs::write(
+        web.join("assets/app-abc123.js"),
+        "console.log('hi');".repeat(100),
+    )
+    .unwrap();
     std::fs::write(web.join("secret.txt"), "not served").unwrap();
     // A file next to the web directory, which `..` must not reach.
     let outside = web.with_extension("outside");
@@ -78,7 +86,11 @@ async fn serves_a_directory() {
     }
 
     // The API is untouched, and carries no cache header of its own.
-    let res = http.get(server.url("/api/capabilities")).send().await.unwrap();
+    let res = http
+        .get(server.url("/api/capabilities"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     assert!(res.headers().get("cache-control").is_none());
 
@@ -111,7 +123,11 @@ async fn without_a_web_app_everything_but_the_api_is_404() {
         let res = http.get(server.url(path)).send().await.unwrap();
         assert_eq!(res.status(), StatusCode::NOT_FOUND, "{path}");
     }
-    let res = http.get(server.url("/api/capabilities")).send().await.unwrap();
+    let res = http
+        .get(server.url("/api/capabilities"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), StatusCode::OK);
     server.stop().await;
 }

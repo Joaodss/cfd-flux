@@ -525,6 +525,21 @@ impl JobManager {
             .count()
     }
 
+    /// The latest completed job of the same scene and options whose results are still on disk.
+    pub async fn find_reusable(&self, scene_hash: &str) -> Result<Option<JobView>, ApiError> {
+        let Some(row) = self.db.latest_completed(scene_hash).await? else {
+            return Ok(None);
+        };
+        if !std::path::Path::new(&row.result_dir).is_dir() {
+            return Ok(None);
+        }
+        // A job of this run is still in memory, with its live view; otherwise the row is enough.
+        Ok(Some(match self.get(&row.id) {
+            Some(live) => live.view(),
+            None => JobView::from_row(row),
+        }))
+    }
+
     /// Registers a checked scene as a job and queues it on its engine's device.
     pub async fn submit(
         &self,
@@ -532,6 +547,7 @@ impl JobManager {
         checked: Checked,
         options: &JobOptions,
         scene_id: Option<String>,
+        scene_hash: String,
     ) -> Result<JobView, ApiError> {
         let config = &state.inner.config;
         if self.shutting_down.load(Ordering::SeqCst) {
@@ -565,6 +581,7 @@ impl JobManager {
             scene_id: scene_id.clone(),
             scene_name: checked.prepared.scene.name.clone(),
             scene_sha256: format!("{:x}", Sha256::digest(scene_json.as_bytes())),
+            scene_hash: Some(scene_hash),
             status: JobStatus::Queued.as_str().into(),
             reason: None,
             message: None,
