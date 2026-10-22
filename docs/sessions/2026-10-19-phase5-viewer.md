@@ -129,8 +129,8 @@ there if long; step 6 only with room left).
   once; without it the checkboxes are disabled. Particles: 256 × 128 `RG32F` states (x < 0 = not released),
   midpoint rule, killed at non-fluid cells; released with probability 0.03 per pass at the fluid cells beside
   inlets (a texture of spawn points, subsampled to 16,384), along a drawn line, or anywhere (the default without
-  inlets). Dye: `RGBA16F` at the frames\u2019 block resolution, three dyes; inlet stripes of each dye in turn,
-  a brush, decay 0.4 /s. Time: simulated seconds per animation frame = playback frames per second × the frames\u2019
+  inlets). Dye: `RGBA16F` at the frames\’ block resolution, three dyes; inlet stripes of each dye in turn,
+  a brush, decay 0.4 /s. Time: simulated seconds per animation frame = playback frames per second × the frames\’
   interval, so a paused frame keeps carrying particles at that rate; passes are split to keep a step under 0.75
   cell. The Playwright test reads the released particle count and the dye total back from the float textures in
   SwiftShader.
