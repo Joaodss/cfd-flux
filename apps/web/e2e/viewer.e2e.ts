@@ -128,8 +128,16 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   const coefficients = await saved('export-cd')
   expect(coefficients.bytes.toString().split('\n')[0]).toBe('step,time_s,cd,cl')
   expect(coefficients.bytes.toString().split('\n').length).toBeGreaterThan(50)
+  // The video's clock is the flow's: frames every 0.02 s play at 50 frames/s in real time; at
+  // × 2 every 2nd frame is used.
+  const timing = page.getByTestId('video-timing')
+  await expect(timing).toHaveText(/^1 s of video = 1 s of flow · 50 frames\/s · \d+ frames/)
+  await page.getByTestId('video-speed').selectOption('2')
+  await expect(timing).toHaveText(/= 2 s of flow · 50 frames\/s · every 2nd frame/)
+  await page.getByTestId('video-speed').selectOption('1')
   await page.getByTestId('video-to').fill('4')
   await page.getByTestId('video-to').press('Enter')
+  await expect(timing).toHaveText(/· 5 frames, 0\.1 s$/)
   const video = await saved('video-record')
   expect(video.name).toMatch(/-frames0-4\.(mp4|webm)$/)
   expect(video.bytes.length).toBeGreaterThan(1000)

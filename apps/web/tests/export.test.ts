@@ -3,7 +3,7 @@ import type { RunMeta } from '../src/api/jobs.ts'
 import type { DecodedFrame } from '../src/frames/lffr.ts'
 import { annotatedSize, FOOTER_HEIGHT, footerText } from '../src/viewer/export/annotate.ts'
 import { coefficientsCsv, frameCsv, num, statisticsCsv } from '../src/viewer/export/csv.ts'
-import { bitrateFor, chooseCodec } from '../src/viewer/export/video.ts'
+import { bitrateFor, chooseCodec, defaultScale, videoTiming } from '../src/viewer/export/video.ts'
 import type { Table } from '../src/viewer/series.ts'
 import type { ForceStatistics } from '../src/viewer/statistics.ts'
 
@@ -135,9 +135,38 @@ describe('video codec', () => {
     expect((await chooseCodec(4000, 2000, 30, 1e6, only('avc')))?.string).toBe('avc1.640033')
   })
 
-  it('picks a bit rate of about 0.2 bits per pixel, between 1 and 40 Mbit/s', () => {
-    expect(bitrateFor(100, 100, 30)).toBe(1e6)
-    expect(bitrateFor(1920, 1080, 30)).toBe(12441600)
-    expect(bitrateFor(7680, 4320, 60)).toBe(40e6)
+  it('picks a bit rate per pixel by quality, between 2 and 50 Mbit/s', () => {
+    expect(bitrateFor(100, 100, 30, 'high')).toBe(2e6)
+    // The cylinder at 2 px per cell with its footer, 50 frames/s.
+    expect(bitrateFor(884, 216, 50, 'high')).toBe(19094400)
+    expect(bitrateFor(884, 216, 50, 'standard')).toBe(4773600)
+    expect(bitrateFor(7680, 4320, 60, 'standard')).toBe(50e6)
+  })
+
+  it('follows the flow’s clock: real time or × N, skipping frames past the cap', () => {
+    // Frames every 0.02 s: real time is 50 frames/s.
+    expect(videoTiming(0.02, 1, 60)).toEqual({ fps: 50, step: 1, flowPerSecond: 1 })
+    // × 2 would be 100 frames/s: every 2nd frame at 50.
+    expect(videoTiming(0.02, 2, 60)).toEqual({ fps: 50, step: 2, flowPerSecond: 2 })
+    // × 5 at most 30 frames/s: 250 → every 9th frame, 27.8 frames/s.
+    const fast = videoTiming(0.02, 5, 30)
+    expect(fast.step).toBe(9)
+    expect(fast.fps).toBeCloseTo(250 / 9)
+    // Slow motion of sparse frames: few frames per second, none skipped.
+    expect(videoTiming(0.5, 0.25, 60)).toEqual({ fps: 0.5, step: 1, flowPerSecond: 0.25 })
+    // Frame times rounded on the way (0.02 s as 0.01999…) still give 50.
+    expect(videoTiming(0.019990224828934505, 1, 60).fps).toBe(50)
+    expect(videoTiming(0.03, 1, 60).fps).toBeCloseTo(33.33, 2)
+    // An exact multiple is not rounded up to the next step.
+    expect(videoTiming(0.01, 1.2, 60).step).toBe(2)
+    // Interval unknown: one frame per output frame at the cap.
+    expect(videoTiming(null, 1, 30)).toEqual({ fps: 30, step: 1, flowPerSecond: null })
+  })
+
+  it('sizes the video to fit 1920 × 1080 by default', () => {
+    expect(defaultScale(442, 84)).toBe(4)
+    expect(defaultScale(512, 513)).toBe(2)
+    expect(defaultScale(1023, 1024)).toBe(1)
+    expect(defaultScale(4000, 4001)).toBe(1)
   })
 })
