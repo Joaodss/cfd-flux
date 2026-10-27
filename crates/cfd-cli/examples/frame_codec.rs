@@ -1,8 +1,10 @@
 //! Frame codec benchmark (open question Q13, `docs/benchmarks.md`, "Frame encoding").
 //!
 //! ```bash
-//! # A 1024² lid-driven cavity scene (Re = 100, one frame every 0.5 s):
+//! # A 1024² lid-driven cavity scene (Re = 100, one frame every 0.5 s for 2 s):
 //! cargo run --release -p cfd-cli --example frame_codec -- cavity-scene cavity-1024.json
+//! # Another size, end time and output interval (the viewer measurements: 512 20 0.1):
+//! cargo run --release -p cfd-cli --example frame_codec -- cavity-scene cavity-512.json 512 20 0.1
 //! # Encode and decode times and sizes of stored frames, for every codec, f32 and f16:
 //! cargo run --release -p cfd-cli --example frame_codec -- bench run-dir/frames/000004.bin …
 //! ```
@@ -132,14 +134,18 @@ fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("cavity-scene") => {
-            let out = args.get(1).context("cavity-scene <out.json>")?;
-            let mut scene = cfd_verify::scenes::lid_driven_cavity(1024, 100.0);
-            scene.run.end_time = 2.0;
-            scene.run.output_interval = 0.5;
+            let usage = "cavity-scene <out.json> [size end_time output_interval]";
+            let out = args.get(1).context(usage)?;
+            let number = |i: usize, default: f64| -> Result<f64> {
+                args.get(i).map_or(Ok(default), |a| a.parse().context(usage))
+            };
+            let mut scene = cfd_verify::scenes::lid_driven_cavity(number(2, 1024.0)? as usize, 100.0);
+            scene.run.end_time = number(3, 2.0)?;
+            scene.run.output_interval = number(4, 0.5)?;
             std::fs::write(out, serde_json::to_string_pretty(&scene)?)?;
             Ok(())
         }
         Some("bench") if args.len() > 1 => args[1..].iter().try_for_each(|p| bench(p)),
-        _ => bail!("usage: frame_codec cavity-scene <out.json> | bench <frame.bin>…"),
+        _ => bail!("usage: frame_codec cavity-scene <out.json> [size end_time output_interval] | bench <frame.bin>…"),
     }
 }

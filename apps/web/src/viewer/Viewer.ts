@@ -9,6 +9,7 @@ import { halfToFloat } from '../frames/half.ts'
 import type { DecodedFrame } from '../frames/lffr.ts'
 import type { Decoded } from '../frames/protocol.ts'
 import type { Scene } from '../generated/scene.ts'
+import { mark, measureSince } from '../perf.ts'
 import { fromScene } from '../scene/io.ts'
 import { annotate, type Annotation } from './export/annotate.ts'
 import { frameCsv } from './export/csv.ts'
@@ -192,6 +193,7 @@ export class Viewer {
       this.setBlocks(c.cellType, c.width, c.height, k)
     }
     this.current = d.frame
+    mark('viewer:frame', { index, mode: useViewer.getState().timeline.mode })
     const s = useViewer.getState()
     s.setFrame(header, d.stats)
     // Simulated seconds between frames, for the particles’ physical speed.
@@ -521,6 +523,7 @@ export class Viewer {
   }
 
   private draw(override?: { view: View; dpr: number }): void {
+    const start = performance.now()
     const s: ViewerState = useViewer.getState()
     const q = currentQuantity(s)
     const frame = this.current
@@ -555,6 +558,7 @@ export class Viewer {
       COLOURS,
       this.overlayStyle(s, override?.dpr),
     )
+    measureSince('viewer:draw', start)
   }
 
   /** The overlays to draw: arrows scaled to the fastest speed seen so far, translucent lines. */
