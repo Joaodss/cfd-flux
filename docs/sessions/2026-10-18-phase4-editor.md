@@ -117,7 +117,10 @@ Stop after the first two implementation steps if the session gets long, with eve
   Vitest test, and a second Playwright variant of the acceptance test, both equal to `cfd-core`'s example). Without
   walls drawn, an edge inlet also takes the two corner cells, which then show in the neighbouring edges' summaries.
   Checks: `npm run typecheck`, `lint`, `format:check`, `build`; `npm test` 215 tests; `npm run test:e2e` 5 tests
-  (both acceptance variants). **Re-timed hand run: pending (the author's).**
+  (both acceptance variants). **Re-timed hand run (2026-10-27): 2 min 03 s** against < 2 min (was 9 min 30 s), on
+  a second attempt: the first one went into finding which properties needed changing, in no
+  particular order. The author suggests an automatic side wall too (the two wall rectangles are what is left to
+  draw), unsure whether it helps beyond this scene.
 - Not done / follow-ups: the wgpu readback fix
   (`fix/wgpu-readback-wait`, its own session) is not on this branch; `cfd-server` does not serve the built app yet
   (Phase 5, Q10); the Reynolds number shown uses the solver's characteristic scales (see above).
