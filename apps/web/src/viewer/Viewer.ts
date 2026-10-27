@@ -160,6 +160,7 @@ export class Viewer {
   setBudget(bytes: number): void {
     const t = useViewer.getState().timeline
     this.cache.setBudget(bytes, t.index ?? t.last)
+    this.updateSharpen() // a full-resolution frame may fit now, or no longer
   }
 
   /** The cache's budget in bytes. */
@@ -207,7 +208,10 @@ export class Viewer {
         mode: s.timeline.mode,
         buffering: s.timeline.buffering,
       })
-    if (this.sharp && (!want || this.sharp.of !== frame)) {
+    // A full-resolution frame larger than the cache budget is not fetched (nor kept).
+    const bytes = c && frame ? fullFrameBytes(c.width, c.height, frame.header.fields) : 0
+    const fits = bytes <= this.cache.budget
+    if (this.sharp && (!want || !fits || this.sharp.of !== frame)) {
       this.sharp = null
       this.schedule()
     }
@@ -216,8 +220,7 @@ export class Viewer {
       return
     }
     if (this.sharp) return
-    const bytes = fullFrameBytes(c.width, c.height, frame.header.fields)
-    if (bytes > this.cache.budget) {
+    if (!fits) {
       const mb = (bytes / 2 ** 20).toFixed(0)
       this.setSharpenState({
         state: 'skipped',
