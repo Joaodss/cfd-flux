@@ -149,7 +149,8 @@ footer, 30 fps):
   this small picture, which a full-screen player then upscales ≈ 2×. Thin white lines and particles on a saturated
   colour map are what H.264's 4:2:0 chroma and a low rate lose first; MediaRecorder's real-time encoder at the same
   rate does worse.
-- Each miss (playback rate, video timing and quality) is written up as its own issue with these numbers.
+- Each miss is its own issue with these numbers: the playback rate is #24, the video timing and quality #25 (and a
+  job-view bug found on the way, #26).
 
 ## Run loop and server — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-13
 
