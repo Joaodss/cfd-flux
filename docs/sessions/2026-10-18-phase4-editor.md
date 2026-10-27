@@ -119,8 +119,14 @@ Stop after the first two implementation steps if the session gets long, with eve
   Checks: `npm run typecheck`, `lint`, `format:check`, `build`; `npm test` 215 tests; `npm run test:e2e` 5 tests
   (both acceptance variants). **Re-timed hand run (2026-10-27): 2 min 03 s** against < 2 min (was 9 min 30 s), on
   a second attempt: the first one went into finding which properties needed changing, in no
-  particular order. The author suggests an automatic side wall too (the two wall rectangles are what is left to
+  particular order. The author suggested an automatic side wall too (the two wall rectangles were what was left to
   draw), unsure whether it helps beyond this scene.
+- **Make wall (2026-10-27, same branch):** a third button per edge (the buttons now read Wall / Inlet / Outlet;
+  three "Make …" labels did not fit the panel) paints the edge, corners included, with the active wall element, so
+  bottom and top become one "Wall 1" and `N`/+ starts another — the same mechanism serves a cavity's moving lid or
+  heated side walls, not only this channel. It keeps inlets, outlets and heat sources; drawn walls on the canvas
+  are now labelled by element name. `npm test` 219 tests; `npm run test:e2e` 6 tests (the acceptance scenario in
+  three variants: all dragged, walls dragged with the inlet/outlet buttons, all buttons). Not re-timed by hand.
 - Not done / follow-ups: the wgpu readback fix
   (`fix/wgpu-readback-wait`, its own session) is not on this branch; `cfd-server` does not serve the built app yet
   (Phase 5, Q10); the Reynolds number shown uses the solver's characteristic scales (see above).
