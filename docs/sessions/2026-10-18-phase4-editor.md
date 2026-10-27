@@ -108,6 +108,16 @@ Stop after the first two implementation steps if the session gets long, with eve
   already and that an edge can be painted as an inlet or outlet in one action. The scripted run shows the tools can
   draw the scene; the miss is discoverability. Proposed fix (not implemented): open question Q14 in
   [07](../07-decisions-and-questions.md#open-questions).
+- **Edge presets (Q14 option B, 2026-10-27, branch `feat/editor-edge-presets`, issue #23):** the canvas overlay
+  draws a band outside each domain edge, coloured and named by stretch (wall, periodic dashed, or the inlet/outlet
+  element drawn on the edge cells), so a new scene shows walls all around; the Scene tab's "Domain edges" group
+  lists each edge's contents and has "Make inlet" / "Make outlet": a new element (an inlet points into the domain)
+  painted on the edge's cells except drawn walls and heat sources, one undo entry, the Scene tab staying open for
+  the next edge. With the channel walls drawn first, the buttons give the same cells as the scripted drags (a
+  Vitest test, and a second Playwright variant of the acceptance test, both equal to `cfd-core`'s example). Without
+  walls drawn, an edge inlet also takes the two corner cells, which then show in the neighbouring edges' summaries.
+  Checks: `npm run typecheck`, `lint`, `format:check`, `build`; `npm test` 215 tests; `npm run test:e2e` 5 tests
+  (both acceptance variants). **Re-timed hand run: pending (the author's).**
 - Not done / follow-ups: the wgpu readback fix
   (`fix/wgpu-readback-wait`, its own session) is not on this branch; `cfd-server` does not serve the built app yet
   (Phase 5, Q10); the Reynolds number shown uses the solver's characteristic scales (see above).
