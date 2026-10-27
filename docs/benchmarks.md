@@ -26,6 +26,131 @@ cargo run --release -p cfd-cli -- bench --backends cuda,wgpu     # interleaved, 
   (`skip_macro`, ADR-029); `--no-skip-macro` measures the previous behaviour.
 - Add a new section per machine/backend; keep old ones for comparison.
 
+## Viewer in the browser on the real GPU — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-27
+
+Issue #21: the Phase 5 viewer had only run on SwiftShader (software WebGL) in Playwright. Here it runs in
+**Chromium 152.0.7977.167** (the Claude desktop app's browser pane, Electron; WebGL2 through ANGLE on
+**Direct3D 11, NVIDIA GeForce RTX 4060**, `EXT_color_buffer_float` and `EXT_disjoint_timer_query_webgl2`
+available) against a release `cfd-server` on CUDA. Windows 11 (10.0.26200), driver 617.42 (CUDA 13.4), Rust 1.99,
+Node 24.21, commit `0ceefcf`. **Display at 50 Hz** (so the page's own frame loop tops out at 50 frames/s),
+device-pixel ratio 1, viewport 1065 × 846 CSS px. The server ran nothing else.
+
+### How it is measured
+
+- **Switches in the URL** (`apps/web/src/perf.ts`, before the hash: `http://127.0.0.1:7878/?perf#/`): `?perf` adds
+  [User Timing](https://developer.mozilla.org/docs/Web/API/Performance_API/User_timing) marks — `run:click` when
+  Run is pressed, `viewer:frame` (with the frame index and the timeline mode) each time the viewer shows a frame, and a
+  `viewer:draw` measure of each draw's CPU time — and sets `window.__viewer` as in development builds;
+  `?noWebCodecs` makes the video export take the `MediaRecorder` fallback. Without them nothing changes. (User
+  Timing is the browser's `Stopwatch` + ETW events: `performance.mark` puts a named timestamp in a buffer that a
+  script reads back with `performance.getEntriesByName`.)
+- **Scenes:** the cylinder example (442 × 84, 20 s, 1,001 frames) and lid-driven cavities at Re = 100 written by
+  `cargo run --release -p cfd-cli --example frame_codec -- cavity-scene <out.json> <N> <end time> <interval>`
+  (`N` × `N+1` cells; velocity, pressure, vorticity), saved on the server (`POST /api/scenes`) and opened in the
+  editor with *Open → From the server*:
+
+  | Scene | Cells | Viewer format (`maxSize` 1024) | Frames | Stored |
+  |---|---|---|---:|---:|
+  | Cylinder Re=100 | 442 × 84 | 442 × 84 | 1,001 | 434 MB |
+  | `cavity-scene … 512 20 0.1` | 512 × 513 | 512 × 513 | 201 | 0.84 GB |
+  | `cavity-scene … 1024 3 0.02` | 1024 × 1025 | **512 × 513** (box factor 2: 1025 > 1024) | 150 | 2.5 GB |
+  | `cavity-scene … 1023 3 0.02` | 1023 × 1024 | 1023 × 1024 (true 1024²) | 151 | 2.5 GB |
+  | `cavity-scene … 4000 0.2 0.01` | 4000 × 4001 | 1000 × 1001 (factor 4) | 21 | 5.4 GB |
+
+- **Run → first frame:** a script in the page (the browser pane's JavaScript tool) clicks Run, waits for the first
+  `viewer:frame` mark and then for two animation frames (the frame is on screen after the next one); *shown* is
+  `viewer:frame − run:click`, *painted* adds the wait. Warnings are confirmed automatically (the dialog is not
+  timed). Between runs the script waits for the job to complete (`GET /api/simulations/{id}`).
+- **Playback from the server:** the job view reloaded (empty frame cache), the timeline at frame 0, speed **60 fps**,
+  Play; frames shown per second = `viewer:frame` marks in mode `playing` over their time span. At the same time a
+  `requestAnimationFrame` loop records the page's frame intervals (does the page stay smooth?).
+- **Overlays:** the 1023 × 1024 run, vorticity off / all of *Vectors*, *Streamlines*, *Particles*, *Dye* on (dye
+  painted with the brush: the cavity has no inlet); page frame intervals over 5–10 s, the GPU time of one
+  `draw()` and one particle/dye step with `EXT_disjoint_timer_query_webgl2` (`TIME_ELAPSED` queries around the
+  call, 30 samples), the worker's time for one set of streamlines.
+- **Worker breakdown:** `__viewer.decoder.fetch(url)` (fetch + decode + statistics in the worker) against a plain
+  `fetch` in the page, `curl` for the server alone, and the decoder and `frameStats` run in Node 24 on the same
+  frame file (`decodeFrame`, `frameStats` imported straight from `src/`; Node runs the `.ts` files).
+
+### Results
+
+**Run → first frame shown** (ms after pressing Run; first run after the page load and the server start in brackets):
+
+| Scene | Shown | Painted | POST answered | Live frames shown |
+|---|---:|---:|---:|---:|
+| Cylinder 442 × 84 | 107, 111, 121 (cold: 1,509) | 132–157 (cold: 1,538) | 13 | — |
+| Cavity 512 × 513 | 155, 207, 214 | 189–247 | 22–24 | — |
+| Cavity 1024 × 1025 (viewer 512²) | 242, 257, 339 | 278–381 | 57–65 | 150 of 150 |
+| Cavity 1023 × 1024 (viewer 1024²) | 392, 417, 440 | 427–466 | 62–79 | 123–124 of 151 |
+| Cavity 4000 × 4001 (viewer 1000²) | 1,986 (one run) | 2,017 | — | 20 of 21 |
+
+- **NFR-03 (first frame < 2 s at 512²): met in the browser**, by a factor of ≈ 10 (0.16–0.21 s); a true 1024²
+  frame is on screen in < 0.5 s, and even the 4000² grid (16 M cells, 1.5 GB of device memory) makes it in 2.0 s.
+  The cold cylinder run (1.5 s) is the first job of the server process and the first load of the job view's
+  JavaScript chunk.
+- Live, the viewer showed every frame up to 512² of viewer format (the 1024 × 1025 run: 150 frames in 29.7 s, the
+  rate the solver and output thread make them); at a true 1024² it showed 123 of 151: the worker needs ≈ 280 ms per
+  frame (below) and the solver makes one every ≈ 200 ms, so the stream's backpressure drops some.
+
+**Playback from stored frames** (empty cache, 60 fps asked, display 50 Hz):
+
+| Run | Viewer frame | Frames/s shown | Gap median / p95 | Page frame interval (median / max) |
+|---|---|---:|---:|---:|
+| Cavity 1024 × 1025 | 512 × 513 (1.3 MB compressed) | 12.4 | 63 / 180 ms | 20.0 / 20.3 ms |
+| Cavity 1023 × 1024 | 1023 × 1024 (4.3 MB) | **3.3** | 249 / 632 ms | 20.0 / 20.4 ms |
+| Cavity 4000 × 4001 | 1000 × 1001 (2.9–4.5 MB) | **3.0** | 244 / 988 ms | 20.0 / 20.3 ms |
+
+Where the time goes, per stored frame:
+
+| Viewer frame | Server (`curl`) | Page `fetch` | Worker: fetch + decode + statistics | Node: `decodeFrame` | Node: `frameStats` |
+|---|---:|---:|---:|---:|---:|
+| 512 × 513 | 31 ms | 36 ms | 104 ms (74 ms each, 10 in flight) | 11 ms | **60 ms** |
+| 1023 × 1024 | 36 ms | 49 ms | 278 ms | 42 ms | **235 ms** |
+| 1000 × 1001 from 4000² | 377–391 ms | — | — | — | — |
+
+- **The design's estimate (20–30 frames/s at 1024², proposal §3.2) is missed by 6–9×, and not where it expected.**
+  The server is fast (36 ms per 1024² frame from a 16.8 MB f32 file; 0.38 s for a 256 MB 4000² frame, which three
+  requests in flight hide). The decode worker is the limit, and inside it the **per-frame statistics**
+  (`viewer/stats.ts`: min, max and a 2,048-bin histogram of |value| for each of the five quantities, |u|, u_x, u_y,
+  p, ω, through a closure per value with `Math.hypot`) take 85 % of its time; the LZ4 decode itself is 42 ms.
+  One worker does every frame in turn, so 280 ms per frame is ≈ 3.5 frames/s. (In C# terms: a `Func<int, double>`
+  called per element in a hot loop, twice per quantity, where a typed loop over a `Span<Half>` would do.) The 4000²
+  run plays at the same rate because its viewer frame is the same size. A 4000² frame at full resolution (the
+  zoomed-in "sharpen" fetch) was not measured.
+- The page itself never stuttered: every animation frame came at 20.0 ms (p95 20.2 ms), so a slow worker shows up
+  as a lower frame rate, not as jank — the point of decoding off the page's thread.
+
+**Overlays at 1024²** (1023 × 1024 run, 681 × 641 px canvas, 32,768 particles, ≈ 36,000–41,000 streamline
+segments, dye painted):
+
+| State | Page frames/s | Interval median / p95 / max | Draw CPU | Draw GPU | Particle + dye step GPU |
+|---|---:|---:|---:|---:|---:|
+| No overlays, paused | 50 | 20.0 / 20.1 / 20.3 ms | — | 0.15 ms | — |
+| All four, paused (particles and dye animate) | 50 | 20.0 / 20.1 / 20.4 ms | 0.1 ms | 0.56 ms | 0.51 ms |
+| All four, playing at 60 fps | 50 | 20.0 / 20.2 / 20.3 ms | 0.1–0.2 ms | 0.57 ms | 0.50 ms |
+
+- **A frame with every overlay costs ≈ 1.1 ms of GPU and 0.2 ms of CPU** — ≈ 5 % of a 50 Hz frame; the renderer
+  would hold 144 Hz too. Frames still arrive at the worker's pace (3.0 frames/s with streamlines, 3.3 without):
+  a set of streamlines takes **≈ 120 ms** in the same worker (every 4th frame while playing).
+
+**Video export** (cylinder, frames 600–750 = 12–15 s, vorticity with all four overlays, ×2 = 884 × 216 px with the
+footer, 30 fps):
+
+| Path | Took | File | Length | Judged by eye (the author, desktop player, full screen) |
+|---|---:|---:|---:|---|
+| WebCodecs H.264 → MP4 (`mp4-muxer`) | 5.6 s | 838 kB (1.3 Mbit/s) | 5.03 s = 151 frames / 30 fps | plays; **soft/blurred**; 3 s of flow last 5 s |
+| `MediaRecorder` → WebM (`?noWebCodecs`) | 12.6 s | 693 kB | **12.58 s** | plays; **much blurrier**; 3 s of flow last 12.6 s |
+
+- **Timing:** both write one output frame per video frame at the chosen fps, so the video's clock is not the flow's
+  (3 s → 5 s at 30 fps; real time would need 50 fps for a frame every 0.02 s). The MP4 is at least exact; the WebM
+  records in real time while each frame takes ≈ 83 ms to load and draw (plus the 33 ms wait), so it runs 2.5× slower
+  than its own 30 fps and its length depends on the machine.
+- **Quality:** the bit rate is 0.2 bits per pixel per frame (`bitrateFor`, clamped to ≥ 1 Mbit/s): ≈ 1.3 Mbit/s for
+  this small picture, which a full-screen player then upscales ≈ 2×. Thin white lines and particles on a saturated
+  colour map are what H.264's 4:2:0 chroma and a low rate lose first; MediaRecorder's real-time encoder at the same
+  rate does worse.
+- Each miss (playback rate, video timing and quality) is written up as its own issue with these numbers.
+
 ## Run loop and server — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-13
 
 Phase 3 code (`cfd_job::run`: batches of at most ≈ 50 ms, each followed by `finish`, frames on an

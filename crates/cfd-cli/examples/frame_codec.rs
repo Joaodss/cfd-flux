@@ -139,7 +139,7 @@ fn main() -> Result<()> {
             let number = |i: usize, default: f64| -> Result<f64> {
                 args.get(i).map_or(Ok(default), |a| a.parse().context(usage))
             };
-            let mut scene = cfd_verify::scenes::lid_driven_cavity(number(2, 1024.0)? as usize, 100.0);
+            let mut scene = cfd_verify::scenes::lid_driven_cavity(number(2, 1024.0)? as u32, 100.0);
             scene.run.end_time = number(3, 2.0)?;
             scene.run.output_interval = number(4, 0.5)?;
             std::fs::write(out, serde_json::to_string_pretty(&scene)?)?;
