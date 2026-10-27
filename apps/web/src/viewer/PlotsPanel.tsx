@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 import { diagnosticPlots, forcePlots, frameAt, probePlots, type Plot } from './plots.ts'
-import { useElement, useSeries, useWindow } from './seriesFeed.ts'
+import { useElement, useMeta, useSeries, useWindow } from './seriesFeed.ts'
 import type { Window } from './statistics.ts'
 import { useViewer } from './store.ts'
 import type { Viewer } from './Viewer.ts'
@@ -22,16 +22,17 @@ const HEIGHT = 150
 function usePlots(element: string | null): Plot[] {
   const feed = useSeries((s) => s.feed)
   const version = useSeries((s) => s.version)
+  const meta = useMeta() // the reference scales in use (the session may override them)
   return useMemo(() => {
     void version // the buffer is mutable: `version` says when to look again
     if (!feed) return []
     const b = feed.buffer
     return [
-      ...forcePlots(b.table('forces'), feed.meta, element),
+      ...forcePlots(b.table('forces'), meta, element),
       ...probePlots(b.table('probes')),
       ...diagnosticPlots(b.table('diagnostics')),
     ]
-  }, [feed, version, element])
+  }, [feed, version, meta, element])
 }
 
 const SELECT = 'h-7 rounded-md border border-border bg-background px-1.5 text-xs'
@@ -62,7 +63,7 @@ export function ElementSelect() {
 export function PlotsPanel({ viewer }: { viewer: Viewer | null }) {
   const { element } = useElement()
   const plots = usePlots(element)
-  const meta = useSeries((s) => s.feed?.meta ?? null)
+  const meta = useMeta()
   const playhead = useViewer((s) => s.frame?.header.simTime ?? null)
   const last = useViewer((s) => s.timeline.last)
   const { window } = useWindow()

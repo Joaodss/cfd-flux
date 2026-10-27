@@ -440,6 +440,7 @@ dependencies = [
  "cfd-lbm",
  "clap",
  "futures-util",
+ "half",
  "reqwest",
  "rust-embed",
  "serde",

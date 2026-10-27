@@ -6,6 +6,7 @@ import { create } from 'zustand'
 import type { RunMeta, StreamMessage } from '../api/jobs.ts'
 import { shownElement } from './elements.ts'
 import { coefficients, forceElements } from './plots.ts'
+import { withScales, type ScaleOverride } from './scales.ts'
 import {
   defaultWindow,
   forceStatistics,
@@ -27,6 +28,7 @@ export class SeriesFeed {
   meta: RunMeta | null = null
   private loading = false
   private started = false
+  private greeted = false
   private disposed = false
   private readonly source: SeriesSource
   private readonly onChange: () => void
@@ -39,6 +41,10 @@ export class SeriesFeed {
   onMessage(m: StreamMessage): void {
     switch (m.type) {
       case 'hello':
+        // A new stream for the same job (another viewer format): rows sent while there was
+        // none are only in the files, so they are read again.
+        if (this.greeted) this.buffer.forgetFiles()
+        this.greeted = true
         if (m.series) this.buffer.setColumns(m.series)
         this.started = m.job.status !== 'queued'
         break
@@ -111,11 +117,14 @@ interface SeriesState {
   element: string | null
   /** The statistics window dragged on a plot (`null`: the second half of the run so far). */
   window: Window | null
+  /** Reference scales typed in the Statistics tab, for this session and this job only. */
+  scales: ScaleOverride
   setFeed(feed: SeriesFeed | null): void
   bump(): void
   setBodies(bodies: string[]): void
   setElement(element: string): void
   setWindow(window: Window | null): void
+  setScales(scales: ScaleOverride): void
 }
 
 export const useSeries = create<SeriesState>()((set) => ({
@@ -124,13 +133,37 @@ export const useSeries = create<SeriesState>()((set) => ({
   bodies: [],
   element: null,
   window: null,
+  scales: {},
+  // A new job (or none) starts with its own scales: the override is the session's, per job.
   setFeed: (feed) =>
-    set((s) => ({ feed, version: s.version + 1, bodies: [], element: null, window: null })),
+    set((s) => ({
+      feed,
+      version: s.version + 1,
+      bodies: [],
+      element: null,
+      window: null,
+      scales: {},
+    })),
   bump: () => set((s) => ({ version: s.version + 1 })),
   setBodies: (bodies) => set({ bodies }),
   setElement: (element) => set({ element }),
   setWindow: (window) => set({ window }),
+  setScales: (scales) => set({ scales }),
 }))
+
+/**
+ * The run's `meta.json` with the reference scales in use (the run's, or the session's override),
+ * or null until it has been read. Everything that reports a scaled number reads this one.
+ */
+export function useMeta(): RunMeta | null {
+  const feed = useSeries((s) => s.feed)
+  const version = useSeries((s) => s.version)
+  const scales = useSeries((s) => s.scales)
+  return useMemo(() => {
+    void version // `feed.meta` is set once read: `version` says when to look again
+    return feed?.meta ? withScales(feed.meta, scales) : null
+  }, [feed, version, scales])
+}
 
 /** The statistics window: the one dragged, else the second half of the forces' time so far. */
 export function useWindow(): { window: Window | null; chosen: boolean } {
@@ -163,27 +196,27 @@ export function useElement(): { element: string | null; available: string[] } {
 export function useStatistics(): ForceStatistics | null {
   const feed = useSeries((s) => s.feed)
   const version = useSeries((s) => s.version)
+  const meta = useMeta()
   const { element } = useElement()
   const { window } = useWindow()
   return useMemo(() => {
     void version
     const forces = feed?.buffer.table('forces')
-    const meta = feed?.meta
     if (!forces || !meta || !element || !window) return null
     const c = coefficients(forces, element, meta)
     return c && forceStatistics(forces.data[1], c.cd, c.cl, window, meta)
-  }, [feed, version, element, window])
+  }, [feed, version, meta, element, window])
 }
 
 /** The Nusselt number of every thermal wall element over the window (thermal runs with `heat.csv`). */
 export function useNusselt(): WallNusselt[] {
   const feed = useSeries((s) => s.feed)
   const version = useSeries((s) => s.version)
+  const meta = useMeta()
   const { window } = useWindow()
   return useMemo(() => {
     void version
     const heat = feed?.buffer.table('heat')
-    const meta = feed?.meta
     const reference = meta?.dimensionless.reference
     if (!heat || !reference?.conductivity || !window) return []
     return wallNusselt(heat.columns, heat.data, window, {
@@ -191,5 +224,5 @@ export function useNusselt(): WallNusselt[] {
       conductivity: reference.conductivity,
       deltaT: reference.temperatureDifference,
     })
-  }, [feed, version, window])
+  }, [feed, version, meta, window])
 }

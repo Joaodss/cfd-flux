@@ -192,7 +192,7 @@ Implemented by `cfd-server` (Phase 3). All JSON is camelCase like the scene form
 | `POST` | `/api/simulations/{id}/pause` · `/resume` | — | `202` (applied between batches); `409` unless running/paused |
 | `DELETE` | `/api/simulations/{id}` | `?purge=true` | cancel: `202`; with `purge`, also delete results and record (`204`, or `202` while an active job stops) |
 | `WS` | `/api/simulations/{id}/stream` | `?fields=velocity,vorticity&maxSize=1024` | see below; `404` before the upgrade for an unknown job |
-| `GET` | `/api/simulations/{id}/frames/{n}` | `?dtype=f32\|f16&fields=…&maxSize=…` | one stored frame (LFFR); with `fields`/`maxSize`, in that stream format (the named fields in frame order, box-downsampled like the stream): byte-identical to the stream frame of the same index on the CPU engine, so the viewer mixes both |
+| `GET` | `/api/simulations/{id}/frames/{n}` | `?dtype=f32\|f16&fields=…&maxSize=…` | one stored frame (LFFR); with `fields`/`maxSize`, in that stream format (the named fields in frame order, box-downsampled like the stream): byte-identical to the stream frame of the same index on the CPU engine, so the viewer mixes both; without `maxSize`, every cell (the viewer's full-resolution "sharpen" of a paused frame asks for `dtype=f16&fields=…`) |
 | `GET` | `/api/simulations/{id}/files/{name}` | `scene.json`, `meta.json`, `probes.csv`, `forces.csv`, `diagnostics.csv`, `heat.csv` (thermal runs with stored frames; `404` otherwise) | the file |
 | `GET` · `POST` | `/api/scenes` | `Scene` | list (id, name, times) · save (`201 { id, name }`) |
 | `GET` · `PUT` · `DELETE` | `/api/scenes/{id}` | — · `Scene` · — | the scene JSON · `{ id, name }` (replaced; `404` if unknown) · `204` |

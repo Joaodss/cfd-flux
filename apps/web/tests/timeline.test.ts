@@ -47,6 +47,20 @@ describe('FrameCache', () => {
     c.clear()
     expect([c.size, c.bytes]).toEqual([0, 0])
   })
+
+  it('evicts at once when the budget shrinks, farthest from the playhead first', () => {
+    const c = new FrameCache(1000)
+    for (const i of [0, 1, 2, 3, 4]) c.put(i, frame(i), 0)
+    expect(c.size).toBe(5)
+    c.setBudget(250, 3)
+    // 0 and 1 are the farthest; of 2 and 4 (as far), the older entry goes.
+    expect([0, 1, 2, 3, 4].filter((i) => c.has(i))).toEqual([3, 4])
+    expect([c.budget, c.bytes]).toEqual([250, 200])
+    c.setBudget(1000, 3) // a larger budget keeps what is there
+    expect(c.size).toBe(2)
+    c.setBudget(10, 3) // never the playhead's frame
+    expect([c.size, c.has(3)]).toEqual([1, true])
+  })
 })
 
 describe('timeline rules', () => {

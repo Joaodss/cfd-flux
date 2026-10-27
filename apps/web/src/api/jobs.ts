@@ -135,7 +135,10 @@ export type StreamMessage =
       frames: number
     }
 
-/** The viewer format's longest side (design proposal §3.1): every frame field, at most this. */
+/**
+ * The viewer format's default longest side (design proposal §3.1): every frame field, at most
+ * this (a viewer setting, `viewer/settings.ts`).
+ */
 export const VIEWER_MAX_SIZE = 1024
 
 /**
@@ -153,17 +156,19 @@ export function streamUrl(
 
 /**
  * Follows a job: calls `onMessage` for each text message and `onFrame` for each frame (an LFFR
- * frame of the viewer format) until `done` or `close()`. Returns the function that closes the
- * socket. *(Like subscribing to an event: the browser calls back on the page's thread whenever a
- * message arrives.)*
+ * frame of the viewer format, at most `maxSize` cells on a side) until `done` or `close()`.
+ * Returns the function that closes the socket; nothing is called back after it. *(Like
+ * subscribing to an event: the browser calls back on the page's thread whenever a message
+ * arrives.)*
  */
 export function followJob(
   id: string,
   onMessage: (m: StreamMessage) => void,
   onClose: (normal: boolean) => void,
   onFrame: (frame: ArrayBuffer) => void = () => {},
+  maxSize = VIEWER_MAX_SIZE,
 ): () => void {
-  const ws = new WebSocket(streamUrl(id, window.location))
+  const ws = new WebSocket(streamUrl(id, window.location, maxSize))
   ws.binaryType = 'arraybuffer'
   let done = false
   ws.onmessage = (e) => {
@@ -178,7 +183,10 @@ export function followJob(
   }
   ws.onclose = () => onClose(done)
   return () => {
-    done = true
+    // Detached first: a stream replaced by another (a new viewer format) must not report its
+    // close or a late frame over the new one's.
+    ws.onmessage = null
+    ws.onclose = null
     ws.close()
   }
 }
