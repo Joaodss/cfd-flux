@@ -48,11 +48,13 @@ describe('decodeLz4Block', () => {
 })
 
 describe('unshuffle', () => {
-  it('inverts the byte shuffle of cfd-io', () => {
-    const values = Uint8Array.from({ length: 4 * 5 }, (_, i) => (i * 37) % 256)
+  it.each([2, 3, 4])('inverts the byte shuffle of cfd-io (%i-byte values)', (size) => {
+    const values = Uint8Array.from({ length: size * 5 }, (_, i) => (i * 37 + 200) % 256)
     const shuffled = new Uint8Array(values.length)
-    for (let i = 0; i < 5; i++) for (let b = 0; b < 4; b++) shuffled[b * 5 + i] = values[i * 4 + b]
-    expect(unshuffle(shuffled, 4)).toEqual(values)
+    for (let i = 0; i < 5; i++) {
+      for (let b = 0; b < size; b++) shuffled[b * 5 + i] = values[i * size + b]
+    }
+    expect(unshuffle(shuffled, size)).toEqual(values)
   })
 })
 
@@ -204,6 +206,34 @@ describe('FrameDecoder (worker protocol)', () => {
     }
     // A block factor that does not match the cells is refused.
     await expect(d.streamlines({ ...uniform('f32'), k: 2 })).rejects.toThrow(/match/)
+    expect(d.busy).toBe(0)
+  })
+
+  it('spreads frames over its frame workers and traces streamlines in the last one', async () => {
+    const seen: string[][] = [[], [], []]
+    const workers = seen.map((kinds) => {
+      const w = fakeWorker(fetch)
+      const post = w.postMessage.bind(w)
+      w.postMessage = (req, options) => {
+        kinds.push(req.kind)
+        post(req, options)
+      }
+      return w
+    })
+    const d = new FrameDecoder(workers)
+    d.setMask(null)
+    d.setCells(new Uint8Array(4), 2, 2)
+    const frames = await Promise.all([d.decode(bytes()), d.decode(bytes()), d.decode(bytes())])
+    expect(frames.map((f) => f.frame.header.frameIndex)).toEqual([3, 3, 3])
+    const velocity = { data: new Float32Array(8), dtype: 'f32' as const, k: 1 }
+    await d.streamlines(velocity)
+    // The mask goes to every worker; frames alternate between the first two.
+    expect(seen).toEqual([
+      ['mask', 'decode', 'decode'],
+      ['mask', 'decode'],
+      ['mask', 'cells', 'streamlines'],
+    ])
+    expect(d.parallel).toBe(2)
     expect(d.busy).toBe(0)
   })
 
