@@ -164,9 +164,19 @@ its frames (frame 20, 4.27 MB as served: f16, `maxSize` 1024).
 | `decodeFrame` | 41.4 ms | 19.9 ms | LZ4 copies shorter than 32 bytes as byte loops (a `subarray` per sequence cost more than the copy: 241,000 sequences, nearly all short), unshuffle writing one `u16`/`u32` per value |
 | `frameStats` | 195.5 ms | 25.4 ms | each component read once into a reused `Float32Array` (× the cached inverse fluid fraction, min/max on the way), \|u\| from those, the p99 histogram over a strided subsample of ≤ 2¹⁸ values; same min/max/p99 on this frame |
 
-**In the browser.** The pane was hidden during this session, so `requestAnimationFrame` (which drives playback) did not
-run and the playback protocol above could not be repeated; what playback depends on was measured instead, from the
-page through the viewer's own `FrameDecoder`:
+**Playback from stored frames**, the protocol above (page reloaded for an empty cache, frame 0, 60 fps asked, display
+50 Hz; three runs; 4 frame workers on this 16-thread machine):
+
+| Run | Viewer frame | Frames/s shown | Frames shown | Gap median / p95 | Page frame interval (median / p95 / max) |
+|---|---|---:|---:|---:|---:|
+| Cavity 1023 × 1024 | 1023 × 1024 (4.3 MB) | **29.3, 28.5, 28.8** (before: 3.3) | 127 of 151 in 4.3–4.4 s | 21–25 / 83–101 ms | 20.0 / 20.1–20.2 / 20.2–20.4 ms |
+
+- **#24's target (≥ 20 frames/s at 1024²) is met**, 9× the rate before, and the page still never stutters. The playhead
+  advances at the asked 60 frames/s and waits only for the frame it needs, so 24 of the 151 frames are passed over
+  while their decodes are still in flight: the 150 frames of the run go by in 4.4 s (34 timeline frames/s).
+
+**Where the time goes now**, from the page through the viewer's own `FrameDecoder` (measured earlier the same day,
+while the pane was hidden: the renderer then runs at a lower priority, so these are on the low side):
 
 | Pipeline, 1024² frames | Frames/s |
 |---|---:|
@@ -176,9 +186,7 @@ page through the viewer's own `FrameDecoder`:
 
 - One frame costs ≈ 70 ms in a browser worker (45 ms in Node), so the fix is half faster code and half a **pool of
   decode workers** (`FrameDecoder`: about half the threads less one, 1–4; the next frame goes to the least busy) with
-  **streamlines in a worker of their own**, and playback prefetching one frame more than there are workers. The
-  pipeline then delivers ≈ 24 frames/s, above the ≥ 20 of #24; the frames/s shown while playing at 60 fps is still to be
-  taken with the pane visible.
+  **streamlines in a worker of their own**, and playback prefetching one frame more than there are workers.
 
 **Video export** (the 1023 × 1024 cavity at 1 px per cell, 1022 × 1072 with the footer, vorticity, frames every 0.02 s):
 
