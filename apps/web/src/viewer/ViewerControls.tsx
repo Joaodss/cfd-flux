@@ -289,9 +289,25 @@ export function Legend() {
         <span data-testid="viewer-frame">
           t = {formatValue(header.simTime)} s · frame {header.frameIndex} · step{' '}
           {header.step.toLocaleString('en')} ·{' '}
-          <span data-testid="viewer-size">
-            {header.width} × {header.height}
+          <span
+            data-testid="viewer-size"
+            title={
+              s.sharpen.state === 'on'
+                ? 'Paused and zoomed in: the frame at full resolution'
+                : 'The frame as streamed (the viewer settings choose its resolution)'
+            }
+          >
+            {s.sharpen.state === 'on'
+              ? `${s.sharpen.width} × ${s.sharpen.height} (full resolution)`
+              : `${header.width} × ${header.height}`}
           </span>
+          {s.sharpen.state === 'loading' && ' · sharpening…'}
+          {s.sharpen.state === 'skipped' && (
+            <span className="text-amber-500" data-testid="viewer-sharpen-note">
+              {' '}
+              · {s.sharpen.note}
+            </span>
+          )}
         </span>
       )}
       {stats && stats.nonFinite > 0 && (

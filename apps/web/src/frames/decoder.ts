@@ -112,9 +112,12 @@ export class FrameDecoder {
     return this.request<Decoded>(this.idle(), { id: 0, kind: 'decode', buffer }, [buffer])
   }
 
-  /** Fetches and decodes a stored frame in a worker (the bytes never reach this thread). */
-  fetch(url: string): Promise<Decoded> {
-    return this.request<Decoded>(this.idle(), { id: 0, kind: 'fetch', url }, [])
+  /**
+   * Fetches and decodes a stored frame in a worker (the bytes never reach this thread); without
+   * `stats`, its statistics are left out.
+   */
+  fetch(url: string, opts: { stats?: boolean } = {}): Promise<Decoded> {
+    return this.request<Decoded>(this.idle(), { id: 0, kind: 'fetch', url, ...opts }, [])
   }
 
   /** Frames decoded at the same time (the frame workers): how many to ask for ahead. */

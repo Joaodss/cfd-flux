@@ -12,8 +12,8 @@ precision highp int;
 precision highp usampler2D;
 
 uniform usampler2D u_cellType;  // full resolution, R8UI
-uniform sampler2D u_field;      // R16F or RG16F, ceil(W/k) × ceil(H/k)
-uniform sampler2D u_fraction;   // R8, same size: fluid fraction of each block
+uniform sampler2D u_field;      // R16F or RG16F, ceil(W/k) × ceil(H/k) (k = 1: sharpened)
+uniform sampler2D u_fraction;   // R8, same size: fluid fraction of each block (or cell)
 uniform sampler2D u_lut;        // 256 × 1 RGBA8 colour map
 uniform bool u_hasField;
 uniform ivec2 u_grid;
