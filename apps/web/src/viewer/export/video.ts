@@ -2,6 +2,7 @@
 // frame per output frame (frame-exact), or a `MediaRecorder` WebM when WebCodecs is missing
 // (real-time recording: the frame count is then approximate).
 import { ArrayBufferTarget, Muxer } from 'mp4-muxer'
+import { noWebCodecs } from '../../perf.ts'
 
 export type VideoCodec = 'avc' | 'vp9' | 'av1'
 
@@ -61,9 +62,9 @@ export interface VideoResult {
 
 const NAMES: Record<VideoCodec, string> = { avc: 'H.264', vp9: 'VP9', av1: 'AV1' }
 
-/** Whether the browser has WebCodecs video encoding. */
+/** Whether the browser has WebCodecs video encoding (`?noWebCodecs` says no, to try the fallback). */
 export function hasWebCodecs(): boolean {
-  return typeof VideoEncoder !== 'undefined' && typeof VideoFrame !== 'undefined'
+  return !noWebCodecs && typeof VideoEncoder !== 'undefined' && typeof VideoFrame !== 'undefined'
 }
 
 export async function encodeVideo(job: VideoJob): Promise<VideoResult> {

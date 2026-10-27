@@ -134,6 +134,14 @@ npm run test:e2e:full  # Phase 5 acceptance (@full, needs a GPU server, ≈ 1 mi
 npm run typecheck && npm run lint && npm run format:check && npm run build
 ```
 
+**Measuring the viewer in a real browser** (results and the protocol in [benchmarks.md](benchmarks.md), "Viewer in the
+browser on the real GPU"): open the app with switches before the hash, `http://127.0.0.1:7878/?perf#/`. `?perf`
+records User Timing marks (`run:click`, `viewer:frame` with the frame index, `viewer:draw` measures; read them with
+`performance.getEntriesByName(…)` in the devtools console) and sets `window.__viewer`; `?noWebCodecs` makes the video
+export use the `MediaRecorder` fallback. Large test grids: `cargo run --release -p cfd-cli --example frame_codec --
+cavity-scene out/cavity-1023.json 1023 3 0.02` (a 1023 × 1024 cavity: a true 1024² viewer format), then
+`POST /api/scenes` and *Open → From the server*. Delete the server's data folder afterwards (GBs of frames).
+
 ## Server
 
 - `cfd-server` opens every engine once at start-up (CUDA, a hardware wgpu adapter, the CPU) and logs what it
