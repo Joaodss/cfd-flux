@@ -152,6 +152,60 @@ footer, 30 fps):
 - Each miss is its own issue with these numbers: the playback rate is #24, the video timing and quality #25 (and a
   job-view bug found on the way, #26).
 
+### After the fixes for #24 and #25 (same day)
+
+Same machine, browser and server; a new 1023 × 1024 cavity run (`cavity-scene … 1023 3 0.02`, 151 frames) and one of
+its frames (frame 20, 4.27 MB as served: f16, `maxSize` 1024).
+
+**Decode worker, per 1024² frame, Node 24** (the same frame file, a fluid mask with the lid row solid; median of 8):
+
+| Step | Before | After | What changed |
+|---|---:|---:|---|
+| `decodeFrame` | 41.4 ms | 19.9 ms | LZ4 copies shorter than 32 bytes as byte loops (a `subarray` per sequence cost more than the copy: 241,000 sequences, nearly all short), unshuffle writing one `u16`/`u32` per value |
+| `frameStats` | 195.5 ms | 25.4 ms | each component read once into a reused `Float32Array` (× the cached inverse fluid fraction, min/max on the way), \|u\| from those, the p99 histogram over a strided subsample of ≤ 2¹⁸ values; same min/max/p99 on this frame |
+
+**Playback from stored frames**, the protocol above (page reloaded for an empty cache, frame 0, 60 fps asked, display
+50 Hz; three runs; 4 frame workers on this 16-thread machine):
+
+| Run | Viewer frame | Frames/s shown | Frames shown | Gap median / p95 | Page frame interval (median / p95 / max) |
+|---|---|---:|---:|---:|---:|
+| Cavity 1023 × 1024 | 1023 × 1024 (4.3 MB) | **29.3, 28.5, 28.8** (before: 3.3) | 127 of 151 in 4.3–4.4 s | 21–25 / 83–101 ms | 20.0 / 20.1–20.2 / 20.2–20.4 ms |
+
+- **#24's target (≥ 20 frames/s at 1024²) is met**, 9× the rate before, and the page still never stutters. The playhead
+  advances at the asked 60 frames/s and waits only for the frame it needs, so 24 of the 151 frames are passed over
+  while their decodes are still in flight: the 150 frames of the run go by in 4.4 s (34 timeline frames/s).
+
+**Where the time goes now**, from the page through the viewer's own `FrameDecoder` (measured earlier the same day,
+while the pane was hidden: the renderer then runs at a lower priority, so these are on the low side):
+
+| Pipeline, 1024² frames | Frames/s |
+|---|---:|
+| Worker decode + statistics only (bytes already in the page), 1 / 2 / 3 / 4 frame workers | 14.6 / 20.4 / 30.4 / 37.6 |
+| Server alone (page `fetch`), 1 / 3 / 4 requests in flight | 18.9 / 32.2 / 35.7 |
+| Fetch + decode + statistics in the workers, default pool (4 frame workers on 16 threads), 5 in flight (the prefetch) | **24.3, 24.7** (before: ≈ 3.5, 278 ms per frame one at a time) |
+
+- One frame costs ≈ 70 ms in a browser worker (45 ms in Node), so the fix is half faster code and half a **pool of
+  decode workers** (`FrameDecoder`: about half the threads less one, 1–4; the next frame goes to the least busy) with
+  **streamlines in a worker of their own**, and playback prefetching one frame more than there are workers.
+
+**Video export** (the 1023 × 1024 cavity at 1 px per cell, 1022 × 1072 with the footer, vorticity, frames every 0.02 s):
+
+| Path | Frames | Expected length | Length | Took | File |
+|---|---|---:|---:|---:|---:|
+| WebCodecs H.264 → MP4, real time (50 fps) | 0–50 | 1.020 s | 1.019 s | 5.0 s | 2.8 MB (22 Mbit/s) |
+| `MediaRecorder` → WebM, real time | 0–50 | 1.020 s | 1.005 s (before the self-correcting wait: 1.187 s) | 7.5 s | 0.57 MB |
+| `MediaRecorder` → WebM, × 2 (every 2nd frame at 50 fps) | 0–150 | 1.520 s | 1.515 s | 7.9 s | — |
+
+- **Clock:** the Export panel offers the speed (real time, × 0.25 … × 100) and a frame-rate cap (60 by default); the
+  rate is speed ÷ the frames' simulated interval, every *n*-th frame past the cap, and the panel says "1 s of video =
+  X s of flow · N frames/s · every n-th frame · count, length". Before, 3 s of flow lasted 5 s (MP4) or 12.6 s (WebM).
+- **WebM pacing:** the recorder is paused while a frame loads and draws, and each wait is measured, the next one
+  shortened by what the timer overslept: within 1.5 % instead of 2.5× too long.
+- **Quality:** *High quality* (the default) is 2 bits per pixel per frame and *Standard* 0.5 (was 0.2), between 2 and
+  50 Mbit/s; the default size is the largest of 4, 2, 1 px per cell that fits 1920 × 1080 (the cylinder: 4, so 1768 ×
+  384 with the footer instead of 884 × 216). Not yet re-judged by eye: the author's verdict on the same cylinder export
+  is pending.
+
 ## Run loop and server — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-13
 
 Phase 3 code (`cfd_job::run`: batches of at most ≈ 50 ms, each followed by `finish`, frames on an

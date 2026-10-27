@@ -13,7 +13,7 @@ import { mark, measureSince } from '../perf.ts'
 import { fromScene } from '../scene/io.ts'
 import { annotate, type Annotation } from './export/annotate.ts'
 import { frameCsv } from './export/csv.ts'
-import { encodeVideo, type VideoResult } from './export/video.ts'
+import { encodeVideo, type Quality, type VideoResult } from './export/video.ts'
 import { colormap, lut } from './colormaps.ts'
 import { boxFactor, fluidFraction } from './mask.ts'
 import { componentValue } from './quantities.ts'
@@ -454,7 +454,9 @@ export class Viewer {
         s.setTimeline({ mode: 'paused' })
         return
       }
-      for (const i of prefetch(index, t.last)) void this.load(i)
+      // Enough frames ahead to keep every frame worker busy.
+      const ahead = Math.max(3, this.decoder.parallel + 1)
+      for (const i of prefetch(index, t.last, ahead)) void this.load(i)
     }
     this.playback.request = requestAnimationFrame(this.tick)
   }
@@ -662,14 +664,19 @@ export class Viewer {
     return true
   }
 
+  /** Simulated seconds between output frames, once a frame after the first was shown (else null). */
+  get frameInterval(): number | null {
+    return this.sim.frameInterval > 0 ? this.sim.frameInterval : null
+  }
+
   /**
-   * Records frames `from`..`to` as a video, one video frame per output frame (frame-exact with
-   * WebCodecs), with the overlays and footer. Particles and dye advance by the simulated time
-   * between frames, after a short warm-up so the first frame is not empty. The timeline goes back
-   * to the frame it was on.
+   * Records every `step`-th frame of `from`..`to` as a video, one video frame per frame used
+   * (frame-exact with WebCodecs), with the overlays and footer. Particles and dye advance by the
+   * simulated time between the frames used, after a short warm-up so the first frame is not
+   * empty. The timeline goes back to the frame it was on.
    */
   async exportVideo(
-    range: { from: number; to: number; fps: number; scale: number },
+    range: { from: number; to: number; step: number; fps: number; scale: number; quality: Quality },
     onProgress: (done: number, total: number) => void,
     signal: AbortSignal,
   ): Promise<VideoResult> {
@@ -677,7 +684,7 @@ export class Viewer {
     this.pause()
     this.exporting = true
     try {
-      const { from, to, fps, scale } = range
+      const { from, to, step, fps, scale, quality } = range
       if (!(await this.showFrame(from))) throw new Error(`Frame ${from} is not available`)
       const size = this.renderImage(scale)
       const width = size.width - (size.width % 2)
@@ -690,18 +697,21 @@ export class Viewer {
       if (particles || dye) {
         for (let i = 0; i < 40; i++) this.stepSimBy(this.sim.frameInterval / 4)
       }
-      const total = to - from + 1
+      const total = Math.floor((to - from) / step) + 1
       return await encodeVideo({
         width,
         height,
         fps,
+        quality,
         count: total,
         signal,
         onProgress: (done) => onProgress(done, total),
         draw: async (i) => {
-          if (!(await this.showFrame(from + i)))
-            throw new Error(`Frame ${from + i} is not available`)
-          if (i > 0 && (particles || dye)) this.stepSimBy(this.sim.frameInterval)
+          const index = from + i * step
+          if (!(await this.showFrame(index))) throw new Error(`Frame ${index} is not available`)
+          if (i > 0 && (particles || dye)) {
+            for (let k = 0; k < step; k++) this.stepSimBy(this.sim.frameInterval)
+          }
           ctx.drawImage(this.renderImage(scale), 0, 0)
           return surface
         },

@@ -128,8 +128,16 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   const coefficients = await saved('export-cd')
   expect(coefficients.bytes.toString().split('\n')[0]).toBe('step,time_s,cd,cl')
   expect(coefficients.bytes.toString().split('\n').length).toBeGreaterThan(50)
+  // The video's clock is the flow's: frames every 0.02 s play at 50 frames/s in real time; at
+  // × 2 every 2nd frame is used.
+  const timing = page.getByTestId('video-timing')
+  await expect(timing).toHaveText(/^1 s of video = 1 s of flow · 50 frames\/s · \d+ frames/)
+  await page.getByTestId('video-speed').selectOption('2')
+  await expect(timing).toHaveText(/= 2 s of flow · 50 frames\/s · every 2nd frame/)
+  await page.getByTestId('video-speed').selectOption('1')
   await page.getByTestId('video-to').fill('4')
   await page.getByTestId('video-to').press('Enter')
+  await expect(timing).toHaveText(/· 5 frames, 0\.1 s$/)
   const video = await saved('video-record')
   expect(video.name).toMatch(/-frames0-4\.(mp4|webm)$/)
   expect(video.bytes.length).toBeGreaterThan(1000)
@@ -159,4 +167,39 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   await expect(page.getByTestId('stats-window')).toHaveText('Window 0.25–0.5 s (second half)')
   await expect(page.getByTestId('stats-benchmark')).toHaveValue('schaferTurek2D2')
   await expect(page.getByTestId('stat-cdMax')).toHaveText(/^C_D,max\d/)
+})
+
+test('going from one run straight to another shows the second run', async ({ page, request }) => {
+  // Two runs of different lengths, so their last frames differ.
+  const start = async (endTime: number) => {
+    const r = await request.post('/api/simulations', {
+      data: { scene, options: { endTime, outputInterval: 0.02 } },
+    })
+    expect(r.status()).toBe(201)
+    return ((await r.json()) as { id: string }).id
+  }
+  const a = await start(0.2)
+  const b = await start(0.4)
+
+  await page.goto(`/#/jobs/${a}`)
+  await expect(page.getByTestId('job-status')).toHaveText('completed', { timeout: 60_000 })
+  const position = page.getByTestId('timeline-position')
+  await expect(position).toHaveText(/^(\d+) \/ \1 /)
+
+  const done = async () => {
+    const job = (await (await request.get(`/api/simulations/${b}`)).json()) as {
+      status: string
+      frames: number
+    }
+    return job.status === 'completed' ? job.frames : 0
+  }
+  await expect.poll(done, { timeout: 60_000 }).toBeGreaterThan(0)
+  const last = (await done()) - 1
+
+  // Only the hash changes (as back/forward or a link would): the view must be B's, not A's.
+  await page.evaluate((id) => (window.location.hash = `#/jobs/${id}`), b)
+  await expect(page.getByTestId('job-status')).toHaveText('completed')
+  await expect(position).toHaveText(new RegExp(`^${last} / ${last} `))
+  await expect(page.getByTestId('viewer-frame')).toHaveText(new RegExp(`frame ${last} `))
+  await expect(page.getByText(/was not stored/)).toHaveCount(0)
 })

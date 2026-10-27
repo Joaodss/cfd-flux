@@ -75,6 +75,9 @@ export function parseHeader(bytes: Uint8Array): { header: FrameHeader; payload: 
  * the output and the match; the last sequence has literals only. Every read and write is checked,
  * so a corrupt block throws instead of producing garbage.
  */
+/** Copies shorter than this are byte loops (measured on 1024² f16 frames). */
+const SHORT = 32
+
 export function decodeLz4Block(src: Uint8Array, length: number): Uint8Array {
   const dst = new Uint8Array(length)
   let s = 0
@@ -94,9 +97,14 @@ export function decodeLz4Block(src: Uint8Array, length: number): Uint8Array {
     const token = src[s++]
     const literals = extend(token >> 4)
     if (s + literals > end || d + literals > length) throw new FrameError('corrupt LZ4 literals')
-    dst.set(src.subarray(s, s + literals), d)
-    s += literals
-    d += literals
+    // Short runs (most of them in shuffled fields) byte by byte: a `subarray` per sequence costs
+    // more than the copy.
+    if (literals < SHORT) for (let k = 0; k < literals; k++) dst[d++] = src[s++]
+    else {
+      dst.set(src.subarray(s, s + literals), d)
+      s += literals
+      d += literals
+    }
     if (s === end) break // the last sequence: literals only
     if (s + 2 > end) throw new FrameError('truncated LZ4 block')
     const offset = src[s] | (src[s + 1] << 8)
@@ -106,11 +114,12 @@ export function decodeLz4Block(src: Uint8Array, length: number): Uint8Array {
       throw new FrameError('corrupt LZ4 match')
     }
     let from = d - offset
-    if (offset >= match) {
+    if (offset >= match && match >= SHORT) {
       dst.copyWithin(d, from, from + match)
       d += match
     } else {
-      // Overlapping copy (e.g. offset 1 repeats a byte): byte by byte, reading what was just written.
+      // Short, or overlapping (e.g. offset 1 repeats a byte): byte by byte, reading what was just
+      // written.
       for (let k = 0; k < match; k++) dst[d++] = dst[from++]
     }
   }
@@ -124,6 +133,20 @@ export function decodeLz4Block(src: Uint8Array, length: number): Uint8Array {
  */
 export function unshuffle(src: Uint8Array, valueSize: number): Uint8Array {
   const m = src.length / valueSize
+  // f16 and f32: one write per value, the bytes put together in a register (typed arrays use
+  // the platform's byte order, little-endian everywhere the viewer runs, as the frames do).
+  if (valueSize === 2) {
+    const out = new Uint16Array(m)
+    for (let i = 0; i < m; i++) out[i] = src[i] | (src[m + i] << 8)
+    return new Uint8Array(out.buffer)
+  }
+  if (valueSize === 4) {
+    const out = new Uint32Array(m)
+    for (let i = 0; i < m; i++) {
+      out[i] = src[i] | (src[m + i] << 8) | (src[2 * m + i] << 16) | (src[3 * m + i] << 24)
+    }
+    return new Uint8Array(out.buffer)
+  }
   const out = new Uint8Array(src.length)
   for (let b = 0; b < valueSize; b++) {
     const plane = b * m

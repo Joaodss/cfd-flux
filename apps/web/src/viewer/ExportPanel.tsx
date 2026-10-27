@@ -6,7 +6,15 @@ import { NumberInput } from '../components/fields.tsx'
 import { Button } from '../components/ui/button.tsx'
 import { coefficientsCsv, RUN_FILES, statisticsCsv } from './export/csv.ts'
 import { canvasBlob, download, fileName, textBlob } from './export/download.ts'
-import { hasWebCodecs } from './export/video.ts'
+import {
+  defaultScale,
+  hasWebCodecs,
+  QUALITY,
+  SPEEDS,
+  videoTiming,
+  type Quality,
+} from './export/video.ts'
+import { formatValue } from '../panels/format.ts'
 import { currentQuantity, useViewer } from './store.ts'
 import { useElement, useSeries, useStatistics } from './seriesFeed.ts'
 import type { Viewer } from './Viewer.ts'
@@ -155,25 +163,36 @@ function VideoSection(props: {
   const { viewer, jobId, last, onMessage } = props
   const [from, setFrom] = useState(0)
   const [to, setTo] = useState<number | null>(null)
-  const [fps, setFps] = useState(30)
-  const [scale, setScale] = useState(2)
+  const [speed, setSpeed] = useState(1)
+  const [maxFps, setMaxFps] = useState(60)
+  const [quality, setQuality] = useState<Quality>('high')
+  const grid = useViewer((s) => s.grid)
+  const [chosenScale, setScale] = useState<number | null>(null)
+  const scale = chosenScale ?? (grid ? defaultScale(grid.width, grid.height) : 2)
+  // Simulated seconds between output frames, from the frame shown (its time over its index).
+  const interval = useViewer((s) => {
+    const h = s.frame?.header
+    return h && h.frameIndex > 0 && h.simTime > 0 ? h.simTime / h.frameIndex : null
+  })
+  const timing = videoTiming(interval ?? viewer?.frameInterval ?? null, speed, maxFps)
   const [progress, setProgress] = useState<[number, number] | null>(null)
   const abort = useRef<AbortController | null>(null)
   const end = Math.min(to ?? last, last)
+  const count = Math.floor((end - from) / timing.step) + 1
 
   const record = async () => {
     if (!viewer) return
     const controller = new AbortController()
     abort.current = controller
-    setProgress([0, end - from + 1])
+    setProgress([0, count])
     try {
       const result = await viewer.exportVideo(
-        { from, to: end, fps, scale },
+        { from, to: end, step: timing.step, fps: timing.fps, scale, quality },
         (done, total) => setProgress([done, total]),
         controller.signal,
       )
       download(result.blob, fileName(jobId, `frames${from}-${end}`, result.extension))
-      onMessage(`Saved ${end - from + 1} frames as ${result.description}`)
+      onMessage(`Saved ${count} frames as ${result.description}`)
     } catch (e) {
       onMessage(
         controller.signal.aborted ? 'Recording cancelled' : `Video failed: ${(e as Error).message}`,
@@ -208,15 +227,43 @@ function VideoSection(props: {
           />
         </label>
         <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          Frames/s
-          <NumberInput
-            label="Frame rate"
-            testId="video-fps"
-            value={fps}
-            rules={{ min: 1, max: 120, integer: true }}
-            onCommit={setFps}
-          />
+          Speed
+          <select
+            className={SELECT}
+            data-testid="video-speed"
+            value={speed}
+            onChange={(e) => setSpeed(Number(e.target.value))}
+          >
+            {SPEEDS.map((v) => (
+              <option key={v} value={v}>
+                {v === 1 ? 'Real time' : `× ${v}`}
+              </option>
+            ))}
+          </select>
         </label>
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          At most
+          <NumberInput
+            label="Highest frame rate"
+            testId="video-fps"
+            value={maxFps}
+            rules={{ min: 1, max: 120, integer: true }}
+            onCommit={setMaxFps}
+          />
+          fps
+        </label>
+        <select
+          className={SELECT}
+          data-testid="video-quality"
+          value={quality}
+          onChange={(e) => setQuality(e.target.value as Quality)}
+        >
+          {(Object.keys(QUALITY) as Quality[]).map((q) => (
+            <option key={q} value={q}>
+              {q === 'high' ? 'High quality' : 'Standard quality'}
+            </option>
+          ))}
+        </select>
         <select
           className={SELECT}
           data-testid="video-size"
@@ -230,10 +277,18 @@ function VideoSection(props: {
           ))}
         </select>
       </div>
+      <p className="text-xs text-muted-foreground" data-testid="video-timing">
+        {timing.flowPerSecond !== null
+          ? `1 s of video = ${formatValue(timing.flowPerSecond)} s of flow · `
+          : 'Frame interval not known yet (show a later frame): one frame per output frame · '}
+        {formatValue(timing.fps)} frames/s
+        {timing.step > 1 ? ` · every ${ordinal(timing.step)} frame` : ''} · {count} frames,{' '}
+        {formatValue(count / timing.fps)} s
+      </p>
       <p className="text-xs text-muted-foreground">
         {hasWebCodecs()
-          ? 'One video frame per output frame (WebCodecs), with the overlays and the legend.'
-          : 'No WebCodecs here: the canvas is recorded in real time as WebM.'}
+          ? 'Frame-exact (WebCodecs), with the overlays and the legend.'
+          : 'No WebCodecs here: the canvas is recorded in real time as WebM, so its length is approximate.'}
       </p>
       {progress ? (
         <div className="flex items-center gap-2">
@@ -263,4 +318,19 @@ function VideoSection(props: {
       )}
     </Section>
   )
+}
+
+function ordinal(n: number): string {
+  const tens = n % 100
+  const suffix =
+    tens >= 11 && tens <= 13
+      ? 'th'
+      : n % 10 === 1
+        ? 'st'
+        : n % 10 === 2
+          ? 'nd'
+          : n % 10 === 3
+            ? 'rd'
+            : 'th'
+  return `${n}${suffix}`
 }

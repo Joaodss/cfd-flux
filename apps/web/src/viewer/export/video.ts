@@ -1,6 +1,9 @@
 // Video export (design proposal §8): WebCodecs `VideoEncoder` feeding `mp4-muxer`, one encoded
-// frame per output frame (frame-exact), or a `MediaRecorder` WebM when WebCodecs is missing
-// (real-time recording: the frame count is then approximate).
+// frame per output frame used (frame-exact), or a `MediaRecorder` WebM when WebCodecs is missing
+// (a real-time recording, paused while each frame is drawn, so its length is close but not exact).
+//
+// The video's clock follows the flow's: a speed (real time, × N) and the simulated interval
+// between output frames give the frame rate, and frames are skipped when it would pass a cap.
 import { ArrayBufferTarget, Muxer } from 'mp4-muxer'
 import { noWebCodecs } from '../../perf.ts'
 
@@ -36,9 +39,50 @@ export async function chooseCodec(
   return null
 }
 
-/** Bits per second for a size and frame rate: about 0.2 bits per pixel, between 1 and 40 Mbit/s. */
-export function bitrateFor(width: number, height: number, fps: number): number {
-  return Math.round(Math.min(40e6, Math.max(1e6, width * height * fps * 0.2)))
+/** Bits per pixel and frame: thin lines and particles on a saturated map need a high rate. */
+export const QUALITY = { standard: 0.5, high: 2 } as const
+export type Quality = keyof typeof QUALITY
+
+/** Bits per second for a size, frame rate and quality, between 2 and 50 Mbit/s. */
+export function bitrateFor(width: number, height: number, fps: number, quality: Quality): number {
+  return Math.round(Math.min(50e6, Math.max(2e6, width * height * fps * QUALITY[quality])))
+}
+
+/** Speeds offered (simulated seconds per second of video; 1 is real time). */
+export const SPEEDS = [0.25, 0.5, 1, 2, 5, 10, 30, 100] as const
+
+/**
+ * The default pixels per cell of a video of a grid: the largest of 4, 2, 1 that fits a 1920 × 1080
+ * picture (a small default size is upscaled, and blurred, by a full-screen player).
+ */
+export function defaultScale(width: number, height: number): number {
+  return [4, 2].find((n) => width * n <= 1920 && height * n <= 1080) ?? 1
+}
+
+/** How the output frames become video frames. */
+export interface Timing {
+  /** Video frames per second (not always a whole number: 1 / 0.03 s is 33.3). */
+  fps: number
+  /** Every `step`-th output frame is used. */
+  step: number
+  /** Simulated seconds per second of video, or null when the frames' interval is not known. */
+  flowPerSecond: number | null
+}
+
+/**
+ * The video's frame rate for a speed (1: real time) over frames `interval` simulated seconds
+ * apart, at most `maxFps`: past it, frames are skipped (every 2nd, 3rd, …) instead. Without an
+ * interval (`null`: no frame after the first has been seen), one frame per output frame at `maxFps`.
+ */
+export function videoTiming(interval: number | null, speed: number, maxFps: number): Timing {
+  if (!(interval !== null && interval > 0)) return { fps: maxFps, step: 1, flowPerSecond: null }
+  const ideal = speed / interval
+  const step = Math.max(1, Math.ceil(ideal / maxFps - 1e-6))
+  // Frame times are rounded (0.02 s comes back as 0.01999…): a rate this close to a whole
+  // number is that number.
+  const fps = ideal / step
+  const whole = Math.round(fps)
+  return { fps: Math.abs(fps - whole) < 1e-3 * fps ? whole : fps, step, flowPerSecond: speed }
 }
 
 export interface VideoJob {
@@ -46,6 +90,7 @@ export interface VideoJob {
   width: number
   height: number
   fps: number
+  quality: Quality
   /** Number of frames; `draw(i)` shows frame `i` and returns the canvas holding the image. */
   count: number
   draw(i: number): Promise<HTMLCanvasElement>
@@ -68,7 +113,7 @@ export function hasWebCodecs(): boolean {
 }
 
 export async function encodeVideo(job: VideoJob): Promise<VideoResult> {
-  const bitrate = bitrateFor(job.width, job.height, job.fps)
+  const bitrate = bitrateFor(job.width, job.height, job.fps, job.quality)
   const codec = hasWebCodecs()
     ? await chooseCodec(job.width, job.height, job.fps, bitrate, async (c) => {
         try {
@@ -89,7 +134,13 @@ async function encodeWebCodecs(
   const target = new ArrayBufferTarget()
   const muxer = new Muxer({
     target,
-    video: { codec: chosen.codec, width: job.width, height: job.height, frameRate: job.fps },
+    video: {
+      codec: chosen.codec,
+      width: job.width,
+      height: job.height,
+      // The muxer's time scale: a whole frame rate keeps timestamps exact (else its default).
+      ...(Number.isInteger(job.fps) ? { frameRate: job.fps } : {}),
+    },
     fastStart: 'in-memory',
   })
   let failure: Error | null = null
@@ -104,6 +155,8 @@ async function encodeWebCodecs(
     bitrate,
     framerate: job.fps,
   })
+  // A key frame every 2 s of video (for seeking).
+  const keyEvery = Math.max(1, Math.round(2 * job.fps))
   try {
     for (let i = 0; i < job.count; i++) {
       job.signal.throwIfAborted()
@@ -113,7 +166,7 @@ async function encodeWebCodecs(
         timestamp: Math.round((i * 1e6) / job.fps),
         duration: Math.round(1e6 / job.fps),
       })
-      encoder.encode(frame, { keyFrame: i % 60 === 0 })
+      encoder.encode(frame, { keyFrame: i % keyEvery === 0 })
       frame.close()
       // Let the encoder catch up instead of queueing every frame in memory.
       while (encoder.encodeQueueSize > 6) await new Promise((r) => setTimeout(r, 2))
@@ -132,7 +185,12 @@ async function encodeWebCodecs(
   }
 }
 
-/** Fallback: record a canvas as it is redrawn, one frame per `1 / fps` s. */
+/**
+ * Fallback: record a canvas as it is redrawn, one frame per `1 / fps` s. The recorder is paused
+ * while a frame loads and draws (that time is not recorded), and each wait is measured, the next
+ * one shortened by what a timer overslept, so the length is right to within a few milliseconds
+ * whatever the machine.
+ */
 async function encodeRecorder(job: VideoJob): Promise<VideoResult> {
   if (typeof MediaRecorder === 'undefined') {
     throw new Error('This browser can neither encode video (WebCodecs) nor record a canvas')
@@ -144,19 +202,26 @@ async function encodeRecorder(job: VideoJob): Promise<VideoResult> {
   const stream = surface.captureStream(0)
   const track = stream.getVideoTracks()[0] as MediaStreamTrack & { requestFrame?: () => void }
   const recorder = new MediaRecorder(stream, {
-    videoBitsPerSecond: bitrateFor(job.width, job.height, job.fps),
+    videoBitsPerSecond: bitrateFor(job.width, job.height, job.fps, job.quality),
   })
   const parts: Blob[] = []
   recorder.ondataavailable = (e) => e.data.size > 0 && parts.push(e.data)
   const stopped = new Promise<void>((resolve) => (recorder.onstop = () => resolve()))
   recorder.start()
+  // Milliseconds recorded so far (the recorder running, not paused).
+  let recorded = 0
   try {
     for (let i = 0; i < job.count; i++) {
       job.signal.throwIfAborted()
+      if (i > 0) recorder.pause()
       const canvas = await job.draw(i)
       ctx.drawImage(canvas, 0, 0, job.width, job.height)
+      if (i > 0) recorder.resume()
+      const shown = performance.now()
       track.requestFrame?.()
-      await new Promise((r) => setTimeout(r, 1000 / job.fps))
+      const due = ((i + 1) * 1000) / job.fps - recorded
+      await new Promise((r) => setTimeout(r, Math.max(0, due)))
+      recorded += performance.now() - shown
       job.onProgress(i + 1)
     }
   } finally {
@@ -166,6 +231,6 @@ async function encodeRecorder(job: VideoJob): Promise<VideoResult> {
   return {
     blob: new Blob(parts, { type: 'video/webm' }),
     extension: 'webm',
-    description: 'MediaRecorder · WebM (real time, frame count approximate)',
+    description: 'MediaRecorder · WebM (recorded in real time: length approximate)',
   }
 }
