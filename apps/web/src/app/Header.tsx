@@ -23,6 +23,7 @@ import { ExampleGallery } from './ExampleGallery.tsx'
 import { ImportImageDialog } from './ImportImageDialog.tsx'
 import { IssuesButton } from './IssuesButton.tsx'
 import { navigate } from './route.ts'
+import { mark } from '../perf.ts'
 import { runScene } from './run.ts'
 import { ServerScenesDialog } from './ServerScenesDialog.tsx'
 
@@ -117,6 +118,7 @@ export function Header() {
             : 'Fix the issues first (or start the server)'
         }
         onClick={async () => {
+          mark('run:click')
           setRunning(true)
           await runScene()
           setRunning(false)

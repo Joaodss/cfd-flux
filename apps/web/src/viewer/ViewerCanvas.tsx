@@ -3,6 +3,7 @@
 // is imperative code in one effect; React renders this component once.
 import { useEffect, useRef, useState } from 'react'
 import { screenToCell } from '../editor/view.ts'
+import { perfEnabled } from '../perf.ts'
 import { useViewer } from './store.ts'
 import { Viewer } from './Viewer.ts'
 
@@ -11,7 +12,7 @@ const WHEEL_STEP = 100
 
 declare global {
   interface Window {
-    /** The live viewer, for end-to-end tests (development builds only). */
+    /** The live viewer, for end-to-end tests (development builds, or `?perf`). */
     __viewer?: Viewer
   }
 }
@@ -35,7 +36,7 @@ export function ViewerCanvas(props: { onReady: (viewer: Viewer | null) => void }
       onReady(null)
       return
     }
-    if (import.meta.env.DEV) window.__viewer = viewer
+    if (import.meta.env.DEV || perfEnabled) window.__viewer = viewer
     onReady(viewer)
 
     const resize = () => {
