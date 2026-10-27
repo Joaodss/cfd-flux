@@ -138,6 +138,49 @@ describe('Plots tab', () => {
     expect(screen.getByTestId('stats-tolerance').textContent).toMatch(/5 %.* 20 cells/)
   })
 
+  it('recomputes the statistics from reference scales overridden for the session', async () => {
+    FILES['forces.csv'] = readFileSync('tests/fixtures/series/cylinder-forces.csv', 'utf8')
+    FILES['meta.json'] = JSON.stringify({ ...META, units: { dx: 0.005, dt: 1e-4, rho0: 1 } })
+    render(<JobView id="job-1" />)
+    FakeSocket.last.send({ type: 'hello', job: { ...job, status: 'completed' } })
+    FakeSocket.last.send({ type: 'done', status: 'completed', stepsDone: 100, frames: 10 })
+    await act(async () => new Promise((r) => setTimeout(r, 10)))
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByTestId('job-tab-stats'))
+      fireEvent.click(screen.getByTestId('job-tab-stats'))
+    })
+    const value = (key: string) =>
+      Number(screen.getByTestId(`stat-${key}`).querySelectorAll('td')[1].textContent)
+    const [cd, st] = [value('cdMax'), value('strouhal')]
+    const u = screen.getByTestId('stats-scale-velocity') as HTMLInputElement
+    expect(u.value).toBe('1')
+    expect(screen.queryByTestId('stats-scales-overridden')).toBeNull()
+    // Twice the velocity: C_D / 4, St / 2; the tolerance now names the length in use.
+    act(() => {
+      fireEvent.focus(u)
+      fireEvent.change(u, { target: { value: '2' } })
+      fireEvent.keyDown(u, { key: 'Enter' })
+    })
+    expect(screen.getByTestId('stats-scales-overridden')).toBeTruthy()
+    expect(value('cdMax') / cd).toBeCloseTo(0.25, 3)
+    expect(value('strouhal') / st).toBeCloseTo(0.5, 3)
+    expect(screen.getByTestId('stat-cdMax-check').textContent).toMatch(/✗$/)
+    const l = screen.getByTestId('stats-scale-length') as HTMLInputElement
+    act(() => {
+      fireEvent.focus(l)
+      fireEvent.change(l, { target: { value: '0.05' } })
+      fireEvent.keyDown(l, { key: 'Enter' })
+    })
+    expect(screen.getByTestId('stats-tolerance').textContent).toMatch(/ 10 cells .*overridden/)
+    // Reset: the run's scales and numbers again.
+    act(() => fireEvent.click(screen.getByTestId('stats-scales-reset')))
+    expect(screen.queryByTestId('stats-scales-overridden')).toBeNull()
+    expect(value('cdMax')).toBe(cd)
+    expect(screen.getByTestId('stats-tolerance').textContent).toMatch(
+      / 20 cells per reference length\./,
+    )
+  })
+
   it('shows the Nusselt numbers of a thermal run against de Vahl Davis', async () => {
     // The quick heated cavity: 40–80 s of its real heat.csv, L = 0.1 m = 64 cells.
     FILES['heat.csv'] = readFileSync('tests/fixtures/series/cavity-heat.csv', 'utf8')
