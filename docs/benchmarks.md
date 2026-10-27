@@ -262,7 +262,11 @@ from a `<video>` element in the page.
   `webglcontextlost`, so the context is never restored. The canvas stays blank until a reload, and every export then
   fails with "Cannot read properties of null (reading '0')": `FieldRenderer.maxImage` reads `gl.getParameter` on the
   lost context. This was reproduced with `WEBGL_lose_context` (`loseContext()`, then `restoreContext()`).
-- The two cylinder videos are for the author to judge by eye, as in the morning.
+- **Judged by eye** (the author, the same desktop player, full screen): both cylinder videos look good, with much
+  better quality than in the morning and much more fluid motion; #25 is settled. One remark: the particles clutter
+  the picture, and where they are dense the flow is hard to read. Each particle is drawn `max(2, 2 × dpr)` pixels
+  wide (`Viewer.ts`), and a 4 px per cell export draws with dpr 4, so every particle is an 8 × 8 px square. There is
+  no control for how many particles there are or how large they are drawn. Smaller or fewer particles would help.
 
 ## Run loop and server — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-13
 
