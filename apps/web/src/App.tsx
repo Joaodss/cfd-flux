@@ -158,9 +158,11 @@ export default function App() {
   const route = useRoute()
   // The editor's document stays in the store while a run is shown: "Editor" returns to it as it was.
   if (route.name === 'job') {
+    // Keyed by the run: another run is a new view (its own `Viewer`, frame cache and timeline),
+    // never the previous one's state with a new id.
     return (
       <Suspense fallback={null}>
-        <JobView id={route.id} />
+        <JobView key={route.id} id={route.id} />
       </Suspense>
     )
   }

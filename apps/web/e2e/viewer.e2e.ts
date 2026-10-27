@@ -160,3 +160,38 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   await expect(page.getByTestId('stats-benchmark')).toHaveValue('schaferTurek2D2')
   await expect(page.getByTestId('stat-cdMax')).toHaveText(/^C_D,max\d/)
 })
+
+test('going from one run straight to another shows the second run', async ({ page, request }) => {
+  // Two runs of different lengths, so their last frames differ.
+  const start = async (endTime: number) => {
+    const r = await request.post('/api/simulations', {
+      data: { scene, options: { endTime, outputInterval: 0.02 } },
+    })
+    expect(r.status()).toBe(201)
+    return ((await r.json()) as { id: string }).id
+  }
+  const a = await start(0.2)
+  const b = await start(0.4)
+
+  await page.goto(`/#/jobs/${a}`)
+  await expect(page.getByTestId('job-status')).toHaveText('completed', { timeout: 60_000 })
+  const position = page.getByTestId('timeline-position')
+  await expect(position).toHaveText(/^(\d+) \/ \1 /)
+
+  const done = async () => {
+    const job = (await (await request.get(`/api/simulations/${b}`)).json()) as {
+      status: string
+      frames: number
+    }
+    return job.status === 'completed' ? job.frames : 0
+  }
+  await expect.poll(done, { timeout: 60_000 }).toBeGreaterThan(0)
+  const last = (await done()) - 1
+
+  // Only the hash changes (as back/forward or a link would): the view must be B's, not A's.
+  await page.evaluate((id) => (window.location.hash = `#/jobs/${id}`), b)
+  await expect(page.getByTestId('job-status')).toHaveText('completed')
+  await expect(position).toHaveText(new RegExp(`^${last} / ${last} `))
+  await expect(page.getByTestId('viewer-frame')).toHaveText(new RegExp(`frame ${last} `))
+  await expect(page.getByText(/was not stored/)).toHaveCount(0)
+})
