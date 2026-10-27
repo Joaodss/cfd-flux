@@ -38,7 +38,22 @@ async function setField(page: Page, testId: string, value: string) {
   await field.press('Enter')
 }
 
-test('draw the cylinder in a channel from scratch and run it', async ({ page }) => {
+/**
+ * How the inlet and outlet are made: dragging along the edge columns with the palette's kinds, or
+ * the Scene tab's "Make inlet" / "Make outlet" buttons (Q14) — the same cells either way.
+ */
+const VARIANTS = [
+  { name: 'edges dragged', buttons: false },
+  { name: 'edge buttons', buttons: true },
+] as const
+
+for (const { name, buttons } of VARIANTS) {
+  test(`draw the cylinder in a channel from scratch and run it (${name})`, async ({ page }) => {
+    await drawAndRun(page, buttons)
+  })
+}
+
+async function drawAndRun(page: Page, buttons: boolean) {
   const started = Date.now()
   page.on('dialog', (d) => d.accept()) // "run with these warnings?" if there are any
   await page.goto('/')
@@ -62,14 +77,24 @@ test('draw the cylinder in a channel from scratch and run it', async ({ page }) 
   await drag(page, [0, 83], [441, 83])
 
   // Inlet: the left column between the walls, a parabolic profile peaking at 1.5 m/s.
-  await page.getByTestId('palette-inlet').click()
-  await drag(page, [0, 1], [0, 82])
+  // Outlet: the right column (fixed pressure 0 Pa by default).
+  if (buttons) {
+    await page.getByTestId('tab-scene').click()
+    await expect(page.getByTestId('edge-left-summary')).toHaveText('wall')
+    await page.getByTestId('make-inlet-left').click()
+    await page.getByTestId('make-outlet-right').click()
+    await expect(page.getByTestId('edge-right-summary')).toHaveText('Outlet 1 + wall')
+    await page.getByTestId('edge-left-element-2').click() // opens the inlet in the Element tab
+  } else {
+    await page.getByTestId('palette-inlet').click()
+    await drag(page, [0, 1], [0, 82])
+  }
   await page.getByTestId('inlet-profile').selectOption('parabolic')
   await setField(page, 'inlet-velocity-x', '1.5')
-
-  // Outlet: the right column (fixed pressure 0 Pa by default).
-  await page.getByTestId('palette-outlet').click()
-  await drag(page, [441, 1], [441, 82])
+  if (!buttons) {
+    await page.getByTestId('palette-outlet').click()
+    await drag(page, [441, 1], [441, 82])
+  }
 
   // Cylinder: a new wall element, a 20 × 20 circle (Shift) centred 0.2 m from the inlet corner.
   await page.getByTestId('new-wall').click()
@@ -117,4 +142,4 @@ test('draw the cylinder in a channel from scratch and run it', async ({ page }) 
     type: 'duration',
     description: `drawn, validated and run in ${((Date.now() - started) / 1000).toFixed(1)} s`,
   })
-})
+}
