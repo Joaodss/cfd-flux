@@ -51,6 +51,11 @@ export class Viewer {
   private pending: ArrayBuffer[] = []
   /** Where stored frames come from: the job and the viewer format's longest side. */
   private source: { jobId: string; maxSize: number } | null = null
+  /**
+   * Bumped when the viewer format changes: frames asked for before (live ones still in a worker,
+   * stored ones still being fetched) are of the old format and are dropped.
+   */
+  private generation = 0
   /** Whether the run still produces frames. */
   private running = true
   private readonly inFlight = new Map<number, Promise<Decoded | null>>()
@@ -122,6 +127,37 @@ export class Viewer {
     if (t.index === null && t.last >= 0 && !this.running) this.seek(t.last)
   }
 
+  /**
+   * Another viewer format (a setting): the cache is emptied, the blocks and their fluid
+   * fraction rebuilt, and the playhead's frame loaded again in the new format. The caller
+   * reconnects the stream with the same `maxSize`.
+   */
+  setMaxSize(maxSize: number): void {
+    // Before the scene there is nothing to rebuild: `setScene` brings the format.
+    if (!this.source || this.source.maxSize === maxSize) return
+    this.source = { ...this.source, maxSize }
+    this.generation++
+    this.cache.clear()
+    this.inFlight.clear()
+    this.current = null
+    const c = this.cells
+    if (c) this.setBlocks(c.cellType, c.width, c.height, boxFactor(c.width, c.height, maxSize))
+    this.schedule()
+    const t = useViewer.getState().timeline
+    if (t.last >= 0 && this.cells) this.request(t.index ?? t.last)
+  }
+
+  /** A new cache budget (a setting): frames over it are evicted at once. */
+  setBudget(bytes: number): void {
+    const t = useViewer.getState().timeline
+    this.cache.setBudget(bytes, t.index ?? t.last)
+  }
+
+  /** The cache's budget in bytes. */
+  get budget(): number {
+    return this.cache.budget
+  }
+
   private setBlocks(cellType: Uint8Array, width: number, height: number, k: number): void {
     const blocks = { width: Math.ceil(width / k), height: Math.ceil(height / k), k }
     const fraction = fluidFraction(cellType, width, height, k)
@@ -145,15 +181,16 @@ export class Viewer {
       this.pending.push(buffer)
       return
     }
+    const generation = this.generation
     this.decoder.decode(buffer).then(
-      (d) => this.onLive(d),
+      (d) => this.onLive(d, generation),
       (e: Error) => console.warn(`frame skipped: ${e.message}`),
     )
   }
 
   /** A live frame: cached; shown when following the run. */
-  private onLive(d: Decoded): void {
-    if (this.disposed) return
+  private onLive(d: Decoded, generation: number): void {
+    if (this.disposed || generation !== this.generation) return
     const index = d.frame.header.frameIndex
     const s = useViewer.getState()
     const t = s.timeline
@@ -352,16 +389,19 @@ export class Viewer {
     if (!this.source) return Promise.resolve(null)
     const { jobId, maxSize } = this.source
     const url = `/api/simulations/${encodeURIComponent(jobId)}/frames/${index}?dtype=f16&maxSize=${maxSize}`
-    const p = this.decoder.fetch(url).then(
+    const generation = this.generation
+    const done = () => {
+      if (this.inFlight.get(index) === p) this.inFlight.delete(index)
+      return !this.disposed && generation === this.generation
+    }
+    const p: Promise<Decoded | null> = this.decoder.fetch(url).then(
       (d) => {
-        this.inFlight.delete(index)
-        if (this.disposed) return null
+        if (!done()) return null
         this.cache.put(index, d, useViewer.getState().timeline.index ?? index)
         return d
       },
       (e: DecodeError) => {
-        this.inFlight.delete(index)
-        if (!this.disposed) {
+        if (done()) {
           useViewer.getState().setTimeline({
             buffering: false,
             note:

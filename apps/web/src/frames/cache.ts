@@ -13,10 +13,21 @@ export function frameBytes(d: Decoded): number {
 export class FrameCache {
   private readonly frames = new Map<number, Decoded>()
   private total = 0
-  readonly budget: number
+  private limit: number
 
   constructor(budget = DEFAULT_BUDGET) {
-    this.budget = budget
+    this.limit = budget
+  }
+
+  /** Bytes of decoded frames held at most. */
+  get budget(): number {
+    return this.limit
+  }
+
+  /** A new budget (a setting): over it, the frames farthest from `playhead` go at once. */
+  setBudget(budget: number, playhead: number): void {
+    this.limit = budget
+    this.evict(playhead, playhead)
   }
 
   get(index: number): Decoded | undefined {
@@ -41,8 +52,13 @@ export class FrameCache {
     if (old) this.total -= frameBytes(old)
     this.frames.set(index, frame)
     this.total += frameBytes(frame)
-    while (this.total > this.budget && this.frames.size > 1) {
-      let far = index
+    this.evict(playhead, index)
+  }
+
+  /** Evicts the frames farthest from `playhead` (never the playhead's) until within budget. */
+  private evict(playhead: number, fallback: number): void {
+    while (this.total > this.limit && this.frames.size > 1) {
+      let far = fallback
       let distance = -1
       for (const i of this.frames.keys()) {
         const d = Math.abs(i - playhead)

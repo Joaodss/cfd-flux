@@ -3,9 +3,10 @@
 import { ArrowLeft, Pause, Play, Square } from 'lucide-react'
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react'
 import { ApiError } from '../api/client.ts'
-import { ACTIVE, followJob, jobs, VIEWER_MAX_SIZE } from '../api/jobs.ts'
+import { ACTIVE, followJob, jobs } from '../api/jobs.ts'
 import type { Scene } from '../generated/scene.ts'
 import { seedFromHello } from '../viewer/ranges.ts'
+import { maxSizeParam, useViewerSettings } from '../viewer/settings.ts'
 import { useViewer } from '../viewer/store.ts'
 import type { Viewer } from '../viewer/Viewer.ts'
 import { fromScene } from '../scene/io.ts'
@@ -69,9 +70,14 @@ export function JobView({ id }: { id: string }) {
     setViewer(v)
   }, [])
 
+  // The viewer format's longest side and the cache budget (settings, remembered per browser).
+  const maxSize = maxSizeParam(useViewerSettings((s) => s.maxSize))
+  const budget = useViewerSettings((s) => s.budget)
+
+  // The job's state and series live as long as the job (and a reconnect); another viewer format
+  // only replaces the stream below. The feed is in a ref for the stream's callbacks.
+  const feedRef = useRef<SeriesFeed | null>(null)
   useEffect(() => {
-    // Subscribing to an external system (the server's stream): the effect's cleanup closes it
-    // when the id changes or the view goes away.
     dispatch({ kind: 'reset' })
     useViewer.getState().reset()
     const series = useSeries.getState()
@@ -80,23 +86,40 @@ export function JobView({ id }: { id: string }) {
       series.bump,
     )
     series.setFeed(feed)
+    feedRef.current = feed
+    return () => {
+      feed.dispose()
+      feedRef.current = null
+      useSeries.getState().setFeed(null)
+    }
+  }, [id, attempt])
+
+  // The viewer drops what it holds of the old format before the new stream's first frame.
+  // (Declared before the stream: effects run in order.)
+  useEffect(() => {
+    viewer?.setMaxSize(maxSize)
+  }, [viewer, maxSize])
+  useEffect(() => {
+    viewer?.setBudget(budget)
+  }, [viewer, budget])
+
+  useEffect(() => {
+    // Subscribing to an external system (the server's stream): the effect's cleanup closes it
+    // when the id or the viewer format changes, or the view goes away.
     const close = followJob(
       id,
       (m) => {
         if (m.type === 'hello') useViewer.getState().seed(seedFromHello(m.ranges))
-        feed.onMessage(m)
+        feedRef.current?.onMessage(m)
         // Rows go to the feed only: they would re-render the whole view ten times a second.
         if (m.type !== 'series') dispatch({ kind: 'message', m })
       },
       (normal) => dispatch({ kind: 'closed', normal }),
       (frame) => viewerRef.current?.pushFrame(frame),
+      maxSize,
     )
-    return () => {
-      close()
-      feed.dispose()
-      useSeries.getState().setFeed(null)
-    }
-  }, [id, attempt])
+    return close
+  }, [id, attempt, maxSize])
 
   // The run's own scene: its cells are the viewer's solid mask.
   useEffect(() => {
@@ -129,8 +152,9 @@ export function JobView({ id }: { id: string }) {
 
   useEffect(() => {
     if (viewer && scene) {
+      // The format when the scene arrives; later changes go through `setMaxSize` above.
       viewer
-        .setScene(scene, id, VIEWER_MAX_SIZE)
+        .setScene(scene, id, maxSizeParam(useViewerSettings.getState().maxSize))
         .catch((e: Error) => setError(`The run's scene cannot be shown: ${e.message}`))
     }
   }, [viewer, scene, id])

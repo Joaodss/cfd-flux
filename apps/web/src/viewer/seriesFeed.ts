@@ -27,6 +27,7 @@ export class SeriesFeed {
   meta: RunMeta | null = null
   private loading = false
   private started = false
+  private greeted = false
   private disposed = false
   private readonly source: SeriesSource
   private readonly onChange: () => void
@@ -39,6 +40,10 @@ export class SeriesFeed {
   onMessage(m: StreamMessage): void {
     switch (m.type) {
       case 'hello':
+        // A new stream for the same job (another viewer format): rows sent while there was
+        // none are only in the files, so they are read again.
+        if (this.greeted) this.buffer.forgetFiles()
+        this.greeted = true
         if (m.series) this.buffer.setColumns(m.series)
         this.started = m.job.status !== 'queued'
         break
