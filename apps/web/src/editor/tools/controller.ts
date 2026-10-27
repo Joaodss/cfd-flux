@@ -3,6 +3,7 @@
 // (undo/redo, clipboard, element and probe commands, shortcuts).
 import type { SceneTable } from '../../scene/io.ts'
 import { KIND_CELL } from '../colours.ts'
+import { INWARD, paintEdge, SIDE_NAMES, WALL_EDGES, type Side } from '../edges.ts'
 import { elementLabel, isElementKind, plainPaint, validElement } from '../elements.ts'
 import { Stroke } from '../history.ts'
 import { CellType } from '../layers.ts'
@@ -227,6 +228,39 @@ export function deleteElement(id: number): void {
     tableBeforeCreate = null
     useEditor.getState().commitTable(label, before)
   }
+  changed()
+}
+
+/**
+ * "Make inlet" / "Make outlet" on a domain edge: a new element of `kind` (an inlet blowing into
+ * the domain) painted on the edge's cells, except drawn walls and heat sources — the same cells as
+ * a drag along the edge between walls. The creation and the cells are one undo entry; the new
+ * element is selected, and the Scene tab stays open (for the next edge).
+ */
+export function makeEdge(side: Side, kind: 'inlet' | 'outlet'): void {
+  if (active) return
+  selectTool.drop()
+  const s = useEditor.getState()
+  if ((s.table.grid.edges ?? WALL_EDGES)[side] === 'periodic') return
+  const before = s.table
+  const tab = s.panelTab
+  const id = s.createElement(kind)
+  if (id === null) return
+  s.editTable((t) => {
+    const e = t.elements.find((x) => x.id === id)
+    if (e?.kind === 'inlet' && e.velocity.type === 'uniform') {
+      const speed = Math.hypot(...e.velocity.value)
+      const [nx, ny] = INWARD[side]
+      e.velocity.value = [nx * speed, ny * speed]
+    }
+  })
+  s.setPanelTab(tab)
+  const stroke = new Stroke(s.layers)
+  paintEdge(stroke, side, { cellType: KIND_CELL[kind], elementId: id })
+  tableBeforeCreate = before
+  const tiles = stroke.finish()
+  if (tiles.size > 0) commit({ label: `${SIDE_NAMES[side]} edge: ${kind}`, tiles })
+  else dropUnusedElement() // every edge cell is a drawn wall: nothing to open
   changed()
 }
 
