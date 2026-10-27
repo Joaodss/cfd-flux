@@ -37,8 +37,9 @@ const EDGE_TEXT: Record<EdgeKindShown, string> = {
 
 /**
  * Each domain edge's boundary, just outside the domain: a band coloured by kind (wall, periodic
- * dashed, inlets and outlets in their element's colour) and its name where the stretch is long
- * enough — so a new scene visibly has walls all around (Q14).
+ * dashed, inlets and outlets in their element's colour) and its name (the drawn element's, or
+ * the edge kind's) where the stretch is long enough — so a new scene visibly has walls all around
+ * (Q14).
  */
 function drawEdges(ctx: CanvasRenderingContext2D, s: EditorState): void {
   const { layers, view } = s
@@ -75,7 +76,7 @@ function drawEdges(ctx: CanvasRenderingContext2D, s: EditorState): void {
       ctx.stroke()
       // The name, outside the band, centred on the run when it fits.
       const e = run.elementId ? s.table.elements.find((x) => x.id === run.elementId) : undefined
-      const text = e && run.kind !== 'wall' ? elementLabel(e) : run.kind
+      const text = e ? elementLabel(e) : run.kind
       const w = ctx.measureText(text).width
       if (w + 8 > b - a) continue
       const label = EDGE_BAND / 2 + 8 // from the band centre to the text's centre line

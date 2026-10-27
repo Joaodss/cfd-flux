@@ -1,10 +1,9 @@
 // The four domain edges (Q14 option B): what each one is along its length — the scene's edge kind
 // (`grid.edges`: wall or periodic) where nothing is drawn on the edge cells, else the drawn wall,
-// inlet or outlet — and the "Make inlet" / "Make outlet" action, which paints the edge cells.
+// inlet or outlet — and the "Make wall/inlet/outlet" actions, which paint the edge cells.
 import type { DomainEdges } from '../generated/scene.ts'
 import type { Stroke } from './history.ts'
 import { CellType, type Layers } from './layers.ts'
-import type { Paint } from './tools/tools.ts'
 
 export const SIDES = ['left', 'right', 'bottom', 'top'] as const
 export type Side = (typeof SIDES)[number]
@@ -84,46 +83,70 @@ export function edgeRuns(layers: Layers, edges: DomainEdges, side: Side): EdgeRu
   return runs
 }
 
-/**
- * Whether "Make inlet/outlet" repaints an edge cell: fluid, empty, inlet and outlet cells are; drawn
- * walls and heat sources stay (so walls drawn along the neighbouring edges keep their corners).
- */
-export function isOpenable(cellType: number): boolean {
-  return cellType !== CellType.Solid && cellType !== CellType.HeatSource
+/** What the Scene tab's buttons make of an edge. */
+export type EdgeAction = 'wall' | 'inlet' | 'outlet'
+export const EDGE_ACTIONS: readonly EdgeAction[] = ['wall', 'inlet', 'outlet']
+
+/** The cell type each action paints. */
+const ACTION_CELL: Record<EdgeAction, CellType> = {
+  wall: CellType.Solid,
+  inlet: CellType.Inlet,
+  outlet: CellType.Outlet,
 }
 
-/** Paints the openable cells of an edge with `paint` (an inlet or outlet element). */
-export function paintEdge(stroke: Stroke, side: Side, paint: Paint): void {
+/**
+ * Whether an edge action repaints a cell. Inlets and outlets take every cell but drawn walls and
+ * heat sources (so walls along the neighbouring edges keep their corners); walls take fluid, empty
+ * and wall cells (another wall element's too) but leave inlets, outlets and heat sources.
+ */
+export function repaints(action: EdgeAction, cellType: number): boolean {
+  if (cellType === CellType.HeatSource) return false
+  if (action === 'wall') return cellType !== CellType.Inlet && cellType !== CellType.Outlet
+  return cellType !== CellType.Solid
+}
+
+/** Paints the cells of an edge that `action` repaints with `elementId` (an element of its kind). */
+export function paintEdge(stroke: Stroke, side: Side, action: EdgeAction, elementId: number): void {
   const l = stroke.layers
   const n = edgeLength(l, side)
   for (let i = 0; i < n; i++) {
     const [x, y] = edgeCell(l, side, i)
-    if (isOpenable(l.cellType[l.index(x, y)])) stroke.write(x, y, paint.cellType, paint.elementId)
+    if (repaints(action, l.cellType[l.index(x, y)])) {
+      stroke.write(x, y, ACTION_CELL[action], elementId)
+    }
   }
+}
+
+/** What an action would paint on an edge. */
+export interface EdgeTarget {
+  /** Cells the action repaints. */
+  cells: number
+  /** The element of the action's kind already on every one of those cells, if there is one. */
+  sole: number | null
 }
 
 /** What the Scene tab shows about an edge and whether its buttons can act. */
 export interface EdgeSummary {
   runs: EdgeRun[]
-  /** Cells "Make inlet/outlet" would paint. */
-  openable: number
-  /** The inlet or outlet element covering every openable cell, if there is one. */
-  sole: { kind: 'inlet' | 'outlet'; elementId: number } | null
+  targets: Record<EdgeAction, EdgeTarget>
 }
 
 export function edgeSummary(layers: Layers, edges: DomainEdges, side: Side): EdgeSummary {
-  const runs = edgeRuns(layers, edges, side)
-  let openable = 0
   const n = edgeLength(layers, side)
-  for (let i = 0; i < n; i++) {
-    if (isOpenable(layers.cellType[layers.index(...edgeCell(layers, side, i))])) openable++
+  const target = (action: EdgeAction): EdgeTarget => {
+    let cells = 0
+    let sole: number | null = null
+    for (let i = 0; i < n; i++) {
+      const c = layers.index(...edgeCell(layers, side, i))
+      if (!repaints(action, layers.cellType[c])) continue
+      const id = layers.cellType[c] === ACTION_CELL[action] ? layers.elementId[c] : 0
+      sole = cells === 0 ? id : sole === id ? sole : 0
+      cells++
+    }
+    return { cells, sole: sole || null }
   }
-  const open = runs.filter((r) => r.kind === 'inlet' || r.kind === 'outlet')
-  const covered = open.reduce((sum, r) => sum + r.end - r.start, 0)
-  const first = open[0]
-  const sole =
-    first && covered === openable && open.every((r) => r.elementId === first.elementId)
-      ? { kind: first.kind as 'inlet' | 'outlet', elementId: first.elementId }
-      : null
-  return { runs, openable, sole }
+  return {
+    runs: edgeRuns(layers, edges, side),
+    targets: { wall: target('wall'), inlet: target('inlet'), outlet: target('outlet') },
+  }
 }

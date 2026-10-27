@@ -3,7 +3,7 @@
 // (undo/redo, clipboard, element and probe commands, shortcuts).
 import type { SceneTable } from '../../scene/io.ts'
 import { KIND_CELL } from '../colours.ts'
-import { INWARD, paintEdge, SIDE_NAMES, WALL_EDGES, type Side } from '../edges.ts'
+import { INWARD, paintEdge, SIDE_NAMES, WALL_EDGES, type EdgeAction, type Side } from '../edges.ts'
 import { elementLabel, isElementKind, plainPaint, validElement } from '../elements.ts'
 import { Stroke } from '../history.ts'
 import { CellType } from '../layers.ts'
@@ -232,19 +232,23 @@ export function deleteElement(id: number): void {
 }
 
 /**
- * "Make inlet" / "Make outlet" on a domain edge: a new element of `kind` (an inlet blowing into
- * the domain) painted on the edge's cells, except drawn walls and heat sources — the same cells as
- * a drag along the edge between walls. The creation and the cells are one undo entry; the new
- * element is selected, and the Scene tab stays open (for the next edge).
+ * "Make wall/inlet/outlet" on a domain edge, painting the cells `repaints` allows (see edges.ts).
+ * A wall uses the active wall element, like the pencil (so the bottom and top edges become one
+ * element; `N` or + starts another, e.g. a moving lid); an inlet or outlet is always a new element,
+ * and an inlet blows into the domain. With the channel walls in place, an inlet or outlet takes
+ * the same cells as a drag along the edge between them. An element's creation and the cells are
+ * one undo entry; the Scene tab stays open (for the next edge).
  */
-export function makeEdge(side: Side, kind: 'inlet' | 'outlet'): void {
+export function makeEdge(side: Side, kind: EdgeAction): void {
   if (active) return
   selectTool.drop()
   const s = useEditor.getState()
   if ((s.table.grid.edges ?? WALL_EDGES)[side] === 'periodic') return
   const before = s.table
   const tab = s.panelTab
-  const id = s.createElement(kind)
+  const reuse =
+    kind === 'wall' ? validElement(s.table.elements, 'wall', s.activeElement.wall) : null
+  const id = reuse ?? s.createElement(kind)
   if (id === null) return
   s.editTable((t) => {
     const e = t.elements.find((x) => x.id === id)
@@ -256,11 +260,11 @@ export function makeEdge(side: Side, kind: 'inlet' | 'outlet'): void {
   })
   s.setPanelTab(tab)
   const stroke = new Stroke(s.layers)
-  paintEdge(stroke, side, { cellType: KIND_CELL[kind], elementId: id })
-  tableBeforeCreate = before
+  paintEdge(stroke, side, kind, id)
+  if (reuse === null) tableBeforeCreate = before
   const tiles = stroke.finish()
   if (tiles.size > 0) commit({ label: `${SIDE_NAMES[side]} edge: ${kind}`, tiles })
-  else dropUnusedElement() // every edge cell is a drawn wall: nothing to open
+  else dropUnusedElement() // nothing on the edge to repaint
   changed()
 }
 

@@ -15,14 +15,16 @@ import {
 } from '../components/fields.tsx'
 import { Button } from '../components/ui/button.tsx'
 import {
+  EDGE_ACTIONS,
   edgeSummary,
   SIDE_NAMES,
   SIDES,
   WALL_EDGES,
+  type EdgeAction,
   type EdgeSummary,
   type Side,
 } from '../editor/edges.ts'
-import { elementLabel } from '../editor/elements.ts'
+import { elementLabel, KIND_NAMES, validElement } from '../editor/elements.ts'
 import { MAX_GRID_SIDE } from '../editor/resize.ts'
 import { useEditor } from '../editor/store.ts'
 import { makeEdge } from '../editor/tools/controller.ts'
@@ -107,29 +109,44 @@ function GridGroup() {
   )
 }
 
-/** One edge: its kind where nothing is drawn, what is drawn on it, and the inlet/outlet buttons. */
+/** One edge: its kind where nothing is drawn, what is drawn on it, and the Make buttons. */
 function EdgeRows(props: { side: Side; edges: DomainEdges; summary: EdgeSummary }) {
   const { side, edges, summary } = props
   const elements = useEditor((s) => s.table.elements)
+  const activeId = useEditor((s) => s.activeElement.wall)
+  const activeWall = validElement(elements, 'wall', activeId)
   const name = (id: number) => {
     const e = elements.find((x) => x.id === id)
     return e ? elementLabel(e) : `Element ${id}`
   }
-  // What is on the edge, longest first: drawn inlets and outlets by name, walls and periodic once.
+  // What is on the edge, longest first: drawn elements by name, the undrawn edge kind once.
   const parts = new Map<string, { length: number; elementId: number }>()
   for (const r of summary.runs) {
-    const open = r.kind === 'inlet' || r.kind === 'outlet'
-    const key = open ? `e${r.elementId}` : r.kind
-    const p = parts.get(key) ?? { length: 0, elementId: open ? r.elementId : 0 }
+    const key = r.elementId ? `e${r.elementId}` : r.kind
+    const p = parts.get(key) ?? { length: 0, elementId: r.elementId }
     p.length += r.end - r.start
     parts.set(key, p)
   }
   const shown = [...parts.entries()].sort((a, b) => b[1].length - a[1].length)
-  const why = (kind: 'inlet' | 'outlet'): string | null => {
-    if (edges[side] === 'periodic') return 'A periodic edge: make it a wall first'
-    if (summary.openable === 0) return 'Every cell of this edge is a drawn wall'
-    if (summary.sole?.kind === kind) return `Already an ${kind}: ${name(summary.sole.elementId)}`
+  const why = (kind: EdgeAction): string | null => {
+    const { cells, sole } = summary.targets[kind]
+    if (edges[side] === 'periodic') return 'A periodic edge: set it to Wall first'
+    if (cells === 0) {
+      return kind === 'wall'
+        ? 'Every cell of this edge is an inlet, outlet or heat source'
+        : 'Every cell of this edge is a drawn wall or heat source'
+    }
+    if (kind !== 'wall' && sole !== null) return `Already an ${kind}: ${name(sole)}`
+    if (kind === 'wall' && sole !== null && sole === activeWall) {
+      return `Already ${name(sole)} (+ or N in the palette starts a new wall element)`
+    }
     return null
+  }
+  const title = (kind: EdgeAction): string => {
+    if (kind !== 'wall') return `Make the ${side} edge a new ${kind} (drawn walls stay)`
+    return activeWall !== null
+      ? `Make the ${side} edge ${name(activeWall)}, the active wall (+ or N for a new one); inlets and outlets stay`
+      : `Make the ${side} edge a new wall; inlets and outlets stay`
   }
   return (
     <div className="flex flex-col gap-1" data-testid={`edge-${side}`}>
@@ -175,17 +192,18 @@ function EdgeRows(props: { side: Side; edges: DomainEdges; summary: EdgeSummary 
           ))}
         </span>
         <div className="flex gap-1">
-          {(['inlet', 'outlet'] as const).map((kind) => (
+          {EDGE_ACTIONS.map((kind) => (
             <Button
               key={kind}
               variant="outline"
               size="sm"
               disabled={why(kind) !== null}
-              title={why(kind) ?? `Paint the ${side} edge as a new ${kind} (drawn walls stay)`}
+              title={why(kind) ?? title(kind)}
+              aria-label={`Make ${side} edge ${kind}`}
               data-testid={`make-${kind}-${side}`}
               onClick={() => makeEdge(side, kind)}
             >
-              Make {kind}
+              {KIND_NAMES[kind]}
             </Button>
           ))}
         </div>
@@ -196,7 +214,7 @@ function EdgeRows(props: { side: Side; edges: DomainEdges; summary: EdgeSummary 
 
 /**
  * The domain edges: walls (or periodic) where nothing is drawn — shown on the canvas too — and one
- * click to turn an edge into an inlet or outlet.
+ * click to make an edge a drawn wall, an inlet or an outlet.
  */
 function EdgesGroup() {
   const edges = useEditor((s) => s.table.grid.edges) ?? WALL_EDGES
@@ -212,8 +230,9 @@ function EdgesGroup() {
   return (
     <Group title="Domain edges">
       <p className="text-[11px] text-muted-foreground">
-        Undrawn edge cells are walls (or periodic). An inlet or outlet replaces the edge's open
-        cells; walls drawn on it stay.
+        Undrawn edge cells are walls (or periodic). The buttons make an edge a drawn wall (the
+        active wall element: a moving lid or a heated side), an inlet or an outlet; an inlet or
+        outlet keeps the walls drawn on the edge, a wall keeps the inlets and outlets.
       </p>
       {SIDES.map((side, i) => (
         <EdgeRows key={side} side={side} edges={edges} summary={summaries[i]} />

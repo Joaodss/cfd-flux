@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // Component tests: the property panels rendered into a simulated DOM (happy-dom), driven like a
 // user would (Testing Library's fireEvent).
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { NumberField } from '../src/components/fields.tsx'
 import { useEditor } from '../src/editor/store.ts'
@@ -116,6 +116,19 @@ describe('Scene tab: domain edges', () => {
     expect(state().panelTab).toBe('element')
     state().undo()
     expect(state().table.elements).toHaveLength(0)
+  })
+
+  it('makes the channel walls one wall element, until a new one is started', () => {
+    render(<ScenePropertiesPanel />)
+    fireEvent.click(screen.getByTestId('make-wall-bottom'))
+    fireEvent.click(screen.getByTestId('make-wall-top'))
+    expect(screen.getByTestId('edge-top-summary').textContent).toBe('Wall 1')
+    const top = screen.getByTestId('make-wall-top') as HTMLButtonElement
+    expect(top.disabled).toBe(true)
+    expect(top.title).toMatch(/^Already Wall 1/)
+    act(() => state().setActiveElement('wall', null)) // "+" or N in the palette
+    expect(top.disabled).toBe(false)
+    expect(top.title).toMatch(/a new wall/)
   })
 
   it('disables the buttons of periodic edges', () => {

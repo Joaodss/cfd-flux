@@ -67,14 +67,22 @@ describe('edge runs', () => {
       ['wall', 0, 3],
       ['wall', 1, 5],
     ])
-    const right = edgeSummary(l, WALL_EDGES, 'right')
-    expect(right.openable).toBe(2)
-    expect(right.sole).toEqual({ kind: 'outlet', elementId: 3 })
-    expect(edgeSummary(l, WALL_EDGES, 'bottom').sole).toBeNull()
+    // What each button would paint: inlets and outlets skip walls and heat sources, walls skip
+    // inlets, outlets and heat sources.
+    expect(edgeSummary(l, WALL_EDGES, 'right').targets).toEqual({
+      wall: { cells: 1, sole: 1 },
+      inlet: { cells: 2, sole: null },
+      outlet: { cells: 2, sole: 3 },
+    })
+    expect(edgeSummary(l, WALL_EDGES, 'bottom').targets).toEqual({
+      wall: { cells: 5, sole: null },
+      inlet: { cells: 5, sole: null },
+      outlet: { cells: 5, sole: null },
+    })
   })
 })
 
-describe('Make inlet / Make outlet', () => {
+describe('Make wall / Make inlet / Make outlet', () => {
   beforeEach(() => {
     state().load(newDocument(40, 20))
     state().setPanelTab('scene')
@@ -100,9 +108,9 @@ describe('Make inlet / Make outlet', () => {
     expect(activeElement.inlet).toBe(1)
     expect(selectedElement).toBe(1)
     expect(panelTab).toBe('scene') // stays on the Scene tab, for the next edge
-    expect(edgeSummary(state().layers, WALL_EDGES, 'left').sole).toEqual({
-      kind: 'inlet',
-      elementId: 1,
+    expect(edgeSummary(state().layers, WALL_EDGES, 'left').targets.inlet).toEqual({
+      cells: 20,
+      sole: 1,
     })
 
     state().undo()
@@ -125,11 +133,10 @@ describe('Make inlet / Make outlet', () => {
     ])
   })
 
-  it('keeps drawn walls: the same cells as a drag along the edge between them', () => {
-    // The channel walls first (one rectangle per row), as in the Phase 4 acceptance scenario.
-    setTool('rect')
-    drag([0, 0], [39, 0])
-    drag([0, 19], [39, 19])
+  it('gives the same cells as the drags of the Phase 4 acceptance scenario', () => {
+    // Every edge by the buttons: the channel walls, then the inlet and outlet between them.
+    makeEdge('bottom', 'wall')
+    makeEdge('top', 'wall')
     makeEdge('left', 'inlet')
     makeEdge('right', 'outlet')
     const byButtons = state().layers
@@ -151,6 +158,48 @@ describe('Make inlet / Make outlet', () => {
       '2:inlet',
       '3:outlet',
     ])
+  })
+
+  it('makes walls with the active wall element: one element for the channel walls', () => {
+    makeEdge('bottom', 'wall')
+    makeEdge('top', 'wall')
+    expect(state().table.elements).toEqual([
+      expect.objectContaining({ id: 1, name: 'Wall 1', kind: 'wall' }),
+    ])
+    for (let x = 0; x < 40; x++) {
+      expect(cell(x, 0)).toEqual([CellType.Solid, 1]) // corners included
+      expect(cell(x, 19)).toEqual([CellType.Solid, 1])
+    }
+    expect(state().history.size.entries).toBe(2)
+    expect(state().history.undoLabel).toBe('Top edge: wall')
+    expect(state().panelTab).toBe('scene')
+    state().undo() // the top row only: the element was created by the bottom one
+    expect(cell(5, 19)).toEqual([CellType.Fluid, 0])
+    expect(state().table.elements).toHaveLength(1)
+    state().undo()
+    expect(state().table.elements).toHaveLength(0)
+    expect(cell(5, 0)).toEqual([CellType.Fluid, 0])
+  })
+
+  it('starts another wall element after N (a moving lid), and paints over the old one', () => {
+    makeEdge('bottom', 'wall')
+    makeEdge('top', 'wall')
+    newElement()
+    makeEdge('top', 'wall')
+    expect(state().table.elements.map((e) => e.name)).toEqual(['Wall 1', 'Wall 2'])
+    expect(cell(7, 19)).toEqual([CellType.Solid, 2])
+    expect(cell(7, 0)).toEqual([CellType.Solid, 1])
+    expect(edgeSummary(state().layers, WALL_EDGES, 'top').targets.wall).toEqual({
+      cells: 40,
+      sole: 2,
+    })
+  })
+
+  it('keeps inlets and outlets when making a wall', () => {
+    makeEdge('left', 'inlet')
+    makeEdge('bottom', 'wall')
+    expect(cell(0, 0)).toEqual([CellType.Inlet, 1])
+    expect(cell(1, 0)).toEqual([CellType.Solid, 2])
   })
 
   it('replaces an earlier inlet or outlet on the edge (which keeps its element)', () => {
