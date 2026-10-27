@@ -217,7 +217,11 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   default, farthest from the playhead evicted first, prefetch in the play direction); the server, which already holds
   every stored frame, is the store, and there is no IndexedDB. Contract tests: frames written by `cfd-io`
   (`tests/fixtures/frames/`, rewritten by `UPDATE_FIXTURES=1`, failing when out of date) are decoded bit for bit in
-  Node, and the f16 table is checked against `DataView.getFloat16` on all 65,536 values.
+  Node, and the f16 table is checked against `DataView.getFloat16` on all 65,536 values. *Amended 2026-10-27 (#24):*
+  one worker did ≈ 3.5 frames/s at 1024²; frames now go to a **pool of 1–4 decode workers** (by the machine's
+  threads, the next to the least busy; frames may come back out of order, the viewer looks at their index), the
+  streamlines to a worker of their own, and playback prefetches one frame more than there are workers
+  ([benchmarks](benchmarks.md), "After the fixes for #24 and #25").
 - **Rendering.** WebGL2 only (no WebGPU path in Phase 5): `R16F`/`RG16F` textures divided by each block's fluid
   fraction, colour maps **generated from Rust's `Colormap`** (the CLI's PNGs and the viewer agree), automatic,
   symmetric (±p99) or manual ranges, instanced arrows read from the velocity texture, streamlines (RK4 on the unit
