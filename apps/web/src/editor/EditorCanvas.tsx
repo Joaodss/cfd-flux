@@ -2,7 +2,10 @@
 // selection outline and the brush cursor. The renderer and the pointer handlers are imperative
 // code kept in an effect; React renders this component once.
 import { useEffect, useRef, useState } from 'react'
-import { coloursFor } from './colours.ts'
+import { CELL_COLOURS, coloursFor, rgbaCss } from './colours.ts'
+import { edgeRuns, SIDES, WALL_EDGES, type EdgeKindShown } from './edges.ts'
+import { elementLabel } from './elements.ts'
+import { CellType } from './layers.ts'
 import { Renderer } from './render/renderer.ts'
 import { useEditor, type EditorState } from './store.ts'
 import { pointerDown, pointerMove, pointerUp } from './tools/controller.ts'
@@ -12,12 +15,100 @@ import { cellToScreen, screenToCell } from './view.ts'
 /** Wheel delta (pixels) per zoom step: a mouse notch is 100–120, trackpads send many small deltas. */
 const WHEEL_STEP = 100
 
-/** Draws the selection outline and the brush footprint (CSS pixels, scaled by the DPR). */
+/** The edge band: CSS pixels between the domain and the band, and the band's width. */
+const EDGE_GAP = 2
+const EDGE_BAND = 4
+
+/** Band colours where there is no element colour (walls, periodic edges). */
+const EDGE_COLOURS: Record<EdgeKindShown, string> = {
+  wall: '#94a3b8',
+  periodic: '#a78bfa',
+  inlet: rgbaCss(CELL_COLOURS[CellType.Inlet]),
+  outlet: rgbaCss(CELL_COLOURS[CellType.Outlet]),
+}
+
+/** Label colours: light enough to read on the dark margin (element colours can be dark). */
+const EDGE_TEXT: Record<EdgeKindShown, string> = {
+  wall: '#cbd5e1',
+  periodic: '#c4b5fd',
+  inlet: '#4ade80',
+  outlet: '#f87171',
+}
+
+/**
+ * Each domain edge's boundary, just outside the domain: a band coloured by kind (wall, periodic
+ * dashed, inlets and outlets in their element's colour) and its name where the stretch is long
+ * enough — so a new scene visibly has walls all around (Q14).
+ */
+function drawEdges(ctx: CanvasRenderingContext2D, s: EditorState): void {
+  const { layers, view } = s
+  const edges = s.table.grid.edges ?? WALL_EDGES
+  const colours = coloursFor(s.table.elements)
+  const x0 = view.offsetX
+  const x1 = view.offsetX + layers.width * view.zoom
+  const yTop = view.offsetY
+  const yBottom = view.offsetY + layers.height * view.zoom
+  const out = EDGE_GAP + EDGE_BAND / 2 // band centre, outside the domain
+  ctx.font = '10px system-ui, sans-serif'
+  ctx.textBaseline = 'middle'
+  for (const side of SIDES) {
+    const vertical = side === 'left' || side === 'right'
+    for (const run of edgeRuns(layers, edges, side)) {
+      // The run's stretch along the edge in screen pixels, and the band's position across it.
+      const a = vertical ? yBottom - run.end * view.zoom : x0 + run.start * view.zoom
+      const b = vertical ? yBottom - run.start * view.zoom : x0 + run.end * view.zoom
+      const across = { left: x0 - out, right: x1 + out, bottom: yBottom + out, top: yTop - out }[
+        side
+      ]
+      const element = run.elementId ? colours.elements.get(run.elementId) : undefined
+      ctx.strokeStyle = element && run.kind !== 'wall' ? rgbaCss(element) : EDGE_COLOURS[run.kind]
+      ctx.lineWidth = EDGE_BAND
+      ctx.setLineDash(run.kind === 'periodic' ? [6, 4] : [])
+      ctx.beginPath()
+      if (vertical) {
+        ctx.moveTo(across, a)
+        ctx.lineTo(across, b)
+      } else {
+        ctx.moveTo(a, across)
+        ctx.lineTo(b, across)
+      }
+      ctx.stroke()
+      // The name, outside the band, centred on the run when it fits.
+      const e = run.elementId ? s.table.elements.find((x) => x.id === run.elementId) : undefined
+      const text = e && run.kind !== 'wall' ? elementLabel(e) : run.kind
+      const w = ctx.measureText(text).width
+      if (w + 8 > b - a) continue
+      const label = EDGE_BAND / 2 + 8 // from the band centre to the text's centre line
+      const at = {
+        left: across - label,
+        right: across + label,
+        bottom: across + label,
+        top: across - label,
+      }[side]
+      ctx.save()
+      ctx.translate(vertical ? at : (a + b) / 2, vertical ? (a + b) / 2 : at)
+      if (vertical) ctx.rotate(-Math.PI / 2)
+      ctx.fillStyle = EDGE_TEXT[run.kind]
+      ctx.textAlign = 'center'
+      ctx.fillText(text, 0, 0)
+      ctx.restore()
+    }
+  }
+  ctx.setLineDash([])
+}
+
+/**
+ * Draws the domain edges, the selection outline, issue markers, probes and the brush footprint
+ * (CSS pixels, scaled by the DPR).
+ */
 function drawOverlay(ctx: CanvasRenderingContext2D, s: EditorState, dpr: number): void {
   const { width, height } = ctx.canvas
   ctx.setTransform(1, 0, 0, 1, 0, 0)
   ctx.clearRect(0, 0, width, height)
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  drawEdges(ctx, s)
+  ctx.textBaseline = 'alphabetic'
+  ctx.textAlign = 'start'
   const H = s.layers.height
   const rect = (x0: number, y0: number, x1: number, y1: number) => {
     // Inclusive cells → the screen rectangle of their outer edges (y up → y down).
