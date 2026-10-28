@@ -1,8 +1,9 @@
-// The Scene tab: name, grid (size, cell size, edges; resize and scale), fluids and solid
-// materials (from the preset library or custom), initial conditions, physics and the reference
-// scales of reported numbers. Every edit is
+// The Scene tab: name, grid (size, cell size; resize and scale), domain edges (their kind, and
+// "Make inlet/outlet"), fluids and solid materials (from the preset library or custom), initial
+// conditions, physics and the reference scales of reported numbers. Every edit is
 // one history entry; values stay in SI units (the solver converts to lattice units).
 import { Plus, Trash2 } from 'lucide-react'
+import { useMemo } from 'react'
 import {
   CheckField,
   Group,
@@ -13,9 +14,27 @@ import {
   VectorField,
 } from '../components/fields.tsx'
 import { Button } from '../components/ui/button.tsx'
+import {
+  EDGE_ACTIONS,
+  edgeSummary,
+  SIDE_NAMES,
+  SIDES,
+  WALL_EDGES,
+  type EdgeAction,
+  type EdgeSummary,
+  type Side,
+} from '../editor/edges.ts'
+import { elementLabel, KIND_NAMES, validElement } from '../editor/elements.ts'
 import { MAX_GRID_SIDE } from '../editor/resize.ts'
 import { useEditor } from '../editor/store.ts'
-import type { EdgeKind, Fluid, ReferenceScales, SolidMaterial } from '../generated/scene.ts'
+import { makeEdge } from '../editor/tools/controller.ts'
+import type {
+  DomainEdges,
+  EdgeKind,
+  Fluid,
+  ReferenceScales,
+  SolidMaterial,
+} from '../generated/scene.ts'
 import { referenceOrNull } from '../scene/io.ts'
 import { FLUID_PRESETS, nextId, presetFluid, presetSolid, SOLID_PRESETS } from '../scene/library.ts'
 import { currentValidation } from '../app/issues.ts'
@@ -30,12 +49,11 @@ const EDGES: readonly (readonly [EdgeKind, string])[] = [
   ['wall', 'Wall (no slip)'],
   ['periodic', 'Periodic'],
 ]
-const OPPOSITE = { left: 'right', right: 'left', bottom: 'top', top: 'bottom' } as const
+const OPPOSITE: Record<Side, Side> = { left: 'right', right: 'left', bottom: 'top', top: 'bottom' }
 
 function GridGroup() {
   const grid = useEditor((s) => s.table.grid)
   const { resizeGrid, scaleDrawing } = useEditor.getState()
-  const edges = grid.edges ?? { left: 'wall', right: 'wall', bottom: 'wall', top: 'wall' }
   const side = { integer: true, min: 1, max: MAX_GRID_SIDE }
   return (
     <Group title="Grid">
@@ -87,21 +105,137 @@ function GridGroup() {
           </Button>
         ))}
       </Row>
-      {(['left', 'right', 'bottom', 'top'] as const).map((side) => (
-        <SelectField
-          key={side}
-          label={`${side[0].toUpperCase()}${side.slice(1)} edge`}
-          value={edges[side]}
-          options={EDGES}
-          title="Where nothing is drawn on the edge. Periodic edges come in opposite pairs."
-          onChange={(v) =>
-            update(`${side} edge`, (t) => {
-              const e = (t.grid.edges ??= { ...edges })
-              e[side] = v
-              e[OPPOSITE[side]] = v // periodic needs its opposite edge
-            })
-          }
-        />
+    </Group>
+  )
+}
+
+/** One edge: its kind where nothing is drawn, what is drawn on it, and the Make buttons. */
+function EdgeRows(props: { side: Side; edges: DomainEdges; summary: EdgeSummary }) {
+  const { side, edges, summary } = props
+  const elements = useEditor((s) => s.table.elements)
+  const activeId = useEditor((s) => s.activeElement.wall)
+  const activeWall = validElement(elements, 'wall', activeId)
+  const name = (id: number) => {
+    const e = elements.find((x) => x.id === id)
+    return e ? elementLabel(e) : `Element ${id}`
+  }
+  // What is on the edge, longest first: drawn elements by name, the undrawn edge kind once.
+  const parts = new Map<string, { length: number; elementId: number }>()
+  for (const r of summary.runs) {
+    const key = r.elementId ? `e${r.elementId}` : r.kind
+    const p = parts.get(key) ?? { length: 0, elementId: r.elementId }
+    p.length += r.end - r.start
+    parts.set(key, p)
+  }
+  const shown = [...parts.entries()].sort((a, b) => b[1].length - a[1].length)
+  const why = (kind: EdgeAction): string | null => {
+    const { cells, sole } = summary.targets[kind]
+    if (edges[side] === 'periodic') return 'A periodic edge: set it to Wall first'
+    if (cells === 0) {
+      return kind === 'wall'
+        ? 'Every cell of this edge is an inlet, outlet or heat source'
+        : 'Every cell of this edge is a drawn wall or heat source'
+    }
+    if (kind !== 'wall' && sole !== null) return `Already an ${kind}: ${name(sole)}`
+    if (kind === 'wall' && sole !== null && sole === activeWall) {
+      return `Already ${name(sole)} (+ or N in the palette starts a new wall element)`
+    }
+    return null
+  }
+  const title = (kind: EdgeAction): string => {
+    if (kind !== 'wall') return `Make the ${side} edge a new ${kind} (drawn walls stay)`
+    return activeWall !== null
+      ? `Make the ${side} edge ${name(activeWall)}, the active wall (+ or N for a new one); inlets and outlets stay`
+      : `Make the ${side} edge a new wall; inlets and outlets stay`
+  }
+  return (
+    <div className="flex flex-col gap-1" data-testid={`edge-${side}`}>
+      <SelectField
+        label={`${SIDE_NAMES[side]} edge`}
+        value={edges[side]}
+        options={EDGES}
+        testId={`edge-${side}-kind`}
+        title="Where nothing is drawn on the edge. Periodic edges come in opposite pairs."
+        onChange={(v) =>
+          update(`${SIDE_NAMES[side]} edge: ${v}`, (t) => {
+            const e = (t.grid.edges ??= { ...edges })
+            e[side] = v
+            e[OPPOSITE[side]] = v // periodic needs its opposite edge
+          })
+        }
+      />
+      <div className="grid grid-cols-[7.5rem_1fr] items-center gap-2">
+        <span
+          className="truncate text-[11px] text-muted-foreground"
+          data-testid={`edge-${side}-summary`}
+          title={shown
+            .map(([key, p]) => `${p.elementId ? name(p.elementId) : key} (${p.length} cells)`)
+            .join(' + ')}
+        >
+          {shown.map(([key, p], i) => (
+            <span key={key}>
+              {i > 0 && ' + '}
+              {p.elementId ? (
+                <button
+                  type="button"
+                  className="underline decoration-dotted hover:text-foreground"
+                  data-testid={`edge-${side}-element-${p.elementId}`}
+                  title={`Open ${name(p.elementId)} in the Element tab`}
+                  onClick={() => useEditor.getState().selectElement(p.elementId)}
+                >
+                  {name(p.elementId)}
+                </button>
+              ) : (
+                key
+              )}
+            </span>
+          ))}
+        </span>
+        <div className="flex gap-1">
+          {EDGE_ACTIONS.map((kind) => (
+            <Button
+              key={kind}
+              variant="outline"
+              size="sm"
+              disabled={why(kind) !== null}
+              title={why(kind) ?? title(kind)}
+              aria-label={`Make ${side} edge ${kind}`}
+              data-testid={`make-${kind}-${side}`}
+              onClick={() => makeEdge(side, kind)}
+            >
+              {KIND_NAMES[kind]}
+            </Button>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The domain edges: walls (or periodic) where nothing is drawn — shown on the canvas too — and one
+ * click to make an edge a drawn wall, an inlet or an outlet.
+ */
+function EdgesGroup() {
+  const edges = useEditor((s) => s.table.grid.edges) ?? WALL_EDGES
+  const layers = useEditor((s) => s.layers)
+  // Cells change with history entries (and new grids), not on the moves of a drag.
+  const version = useEditor((s) => s.historyVersion)
+  const summaries = useMemo(
+    () => SIDES.map((side) => edgeSummary(layers, edges, side)),
+    // `version` stands for the cells of `layers`, which change in place.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+    [layers, edges, version],
+  )
+  return (
+    <Group title="Domain edges">
+      <p className="text-[11px] text-muted-foreground">
+        Undrawn edge cells are walls (or periodic). The buttons make an edge a drawn wall (the
+        active wall element: a moving lid or a heated side), an inlet or an outlet; an inlet or
+        outlet keeps the walls drawn on the edge, a wall keeps the inlets and outlets.
+      </p>
+      {SIDES.map((side, i) => (
+        <EdgeRows key={side} side={side} edges={edges} summary={summaries[i]} />
       ))}
     </Group>
   )
@@ -365,6 +499,7 @@ export function ScenePropertiesPanel() {
         />
       </Group>
       <GridGroup />
+      <EdgesGroup />
       <Group
         title="Fluids"
         actions={
