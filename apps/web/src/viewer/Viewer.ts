@@ -23,6 +23,10 @@ import { advance, prefetch } from './timeline.ts'
 import { inletSpawns, simulatedStep, substeps } from './simulation.ts'
 import { ARROW_SPACING, arrowScale } from './vectors.ts'
 
+/** What an export says while the WebGL context is lost (nothing can be drawn). */
+export const CONTEXT_LOST =
+  'The graphics context was lost; the view comes back once the browser restores it (reload the page if it does not), then export again'
+
 const COLOURS: ViewerColours = {
   // Fluid cells before the first frame: a neutral dark grey.
   cellTypes: [[63, 63, 70, 255], ...CELL_COLOURS.slice(1)] as Rgba[],
@@ -39,6 +43,8 @@ interface Cells {
   /** Blocks of the frames: size and box factor, with the fluid fraction of each block. */
   blocks: { width: number; height: number; k: number }
   fraction: Float32Array
+  /** Where particles are released at the inlets. */
+  spawns: Float32Array
 }
 
 export class Viewer {
@@ -94,6 +100,8 @@ export class Viewer {
     useViewer.getState().setFloatTargets(this.renderer.floatTargets)
     this.decoder = decoder ?? new FrameDecoder()
     this.cache = cache ?? new FrameCache()
+    canvas.addEventListener('webglcontextlost', this.onContextLost)
+    canvas.addEventListener('webglcontextrestored', this.onContextRestored)
     this.unsubscribe = useViewer.subscribe((s) => {
       if (s.overlays !== this.overlays) {
         const streamlinesChanged = s.overlays.streamlines !== this.overlays.streamlines
@@ -125,18 +133,49 @@ export class Viewer {
   private setBlocks(cellType: Uint8Array, width: number, height: number, k: number): void {
     const blocks = { width: Math.ceil(width / k), height: Math.ceil(height / k), k }
     const fraction = fluidFraction(cellType, width, height, k)
-    this.cells = { cellType, width, height, blocks, fraction }
     const spawns = inletSpawns(cellType, width, height)
-    this.renderer.setCells(cellType, width, height, fraction, blocks, spawns)
+    this.cells = { cellType, width, height, blocks, fraction, spawns }
+    this.uploadCells()
     // Without inlets (a closed cavity) particles are released anywhere in the fluid.
     if (spawns.length === 0 && useViewer.getState().release === 'inlets') {
       useViewer.getState().setRelease('domain')
     }
     this.decoder.setMask(fraction)
     this.decoder.setCells(cellType, width, height)
+  }
+
+  /** Gives the renderer the cells; the shown frame's textures and the streamlines follow. */
+  private uploadCells(): void {
+    const c = this.cells
+    if (!c) return
+    this.renderer.setCells(c.cellType, c.width, c.height, c.fraction, c.blocks, c.spawns)
     this.streamlines = { frame: null, index: -1, busy: this.streamlines.busy }
     this.renderer.setStreamlines(null)
     this.uploaded = { frame: null, velocity: null, field: null, lut: this.uploaded.lut }
+  }
+
+  /**
+   * The browser took the WebGL context away (a driver reset, GPU memory pressure). Without
+   * `preventDefault` it would never give it back; until it does, nothing is drawn.
+   */
+  private readonly onContextLost = (e: Event): void => {
+    e.preventDefault()
+    cancelAnimationFrame(this.frameRequest)
+    this.frameRequest = 0
+    this.syncAnimation()
+  }
+
+  /** The context is back, empty: everything on the GPU is made and uploaded again, and redrawn. */
+  private readonly onContextRestored = (): void => {
+    if (this.disposed) return
+    this.renderer.restore()
+    useViewer.getState().setFloatTargets(this.renderer.floatTargets)
+    this.uploaded.lut = null
+    this.marked = null
+    this.uploadCells()
+    this.updateStreamlines(true)
+    this.syncAnimation()
+    this.schedule()
   }
 
   /** A compressed frame from the stream (moved to the worker). */
@@ -260,7 +299,8 @@ export class Viewer {
   /** Starts or stops the animation loop that advects particles and dye. */
   private syncAnimation(): void {
     const { particles, dye } = useViewer.getState().overlays
-    const want = (particles || dye) && !this.disposed && this.renderer.floatTargets
+    const want =
+      (particles || dye) && !this.disposed && !this.renderer.lost && this.renderer.floatTargets
     if (want && this.sim.request === 0) {
       this.sim.last = performance.now()
       this.sim.request = requestAnimationFrame(this.animate)
@@ -454,11 +494,20 @@ export class Viewer {
         s.setTimeline({ mode: 'paused' })
         return
       }
-      // Enough frames ahead to keep every frame worker busy.
-      const ahead = Math.max(3, this.decoder.parallel + 1)
-      for (const i of prefetch(index, t.last, ahead)) void this.load(i)
+      this.prefetch(index, t.last, 1)
     }
     this.playback.request = requestAnimationFrame(this.tick)
+  }
+
+  /**
+   * Loads the frames after `index` (every `step`-th, up to `last`): enough to keep every frame
+   * worker busy, as long as they fit in half the cache (the rest holds the frames around them).
+   */
+  private prefetch(index: number, last: number, step: number): void {
+    let ahead = Math.max(3, this.decoder.parallel + 1)
+    const bytes = this.current?.fields.reduce((n, f) => n + f.data.byteLength, 0) ?? 0
+    if (bytes > 0) ahead = Math.max(1, Math.min(ahead, Math.floor(this.cache.budget / 2 / bytes)))
+    for (const i of prefetch(index, last, ahead, step)) void this.load(i)
   }
 
   /** Streamline segments being drawn (tests). */
@@ -516,7 +565,7 @@ export class Viewer {
 
   /** Draws on the next animation frame (at most once per frame). */
   schedule(): void {
-    if (this.frameRequest === 0 && !this.disposed) {
+    if (this.frameRequest === 0 && !this.disposed && !this.renderer.lost) {
       this.frameRequest = requestAnimationFrame(() => {
         this.frameRequest = 0
         this.draw()
@@ -525,6 +574,7 @@ export class Viewer {
   }
 
   private draw(override?: { view: View; dpr: number }): void {
+    if (this.renderer.lost) return
     const start = performance.now()
     const s: ViewerState = useViewer.getState()
     const q = currentQuantity(s)
@@ -608,6 +658,7 @@ export class Viewer {
    * The domain is drawn by resizing the canvas for a moment: the browser shows nothing in between.
    */
   renderImage(scale: number | null, withFooter = true): HTMLCanvasElement {
+    if (this.renderer.lost) throw new Error(CONTEXT_LOST)
     const s = useViewer.getState()
     const canvas = this.renderer.canvas
     const copy = () => {
@@ -649,9 +700,14 @@ export class Viewer {
     return frameCsv(this.current, this.cells.fraction, s.grid, this.cells.blocks.k)
   }
 
-  /** Shows frame `index` and waits until everything drawn over it (streamlines) is ready. */
-  private async showFrame(index: number): Promise<boolean> {
-    const d = await this.load(index)
+  /**
+   * Shows frame `index` and waits until everything drawn over it (streamlines) is ready, with the
+   * next frames of the export (every `step`-th, up to `last`) loading meanwhile.
+   */
+  private async showFrame(index: number, last: number, step: number): Promise<boolean> {
+    const loading = this.load(index)
+    this.prefetch(index, last, step)
+    const d = await loading
     if (!d || this.disposed) return false
     this.display(index, d)
     this.ensureVelocity()
@@ -685,7 +741,8 @@ export class Viewer {
     this.exporting = true
     try {
       const { from, to, step, fps, scale, quality } = range
-      if (!(await this.showFrame(from))) throw new Error(`Frame ${from} is not available`)
+      if (this.renderer.lost) throw new Error(CONTEXT_LOST)
+      if (!(await this.showFrame(from, to, step))) throw new Error(`Frame ${from} is not available`)
       const size = this.renderImage(scale)
       const width = size.width - (size.width % 2)
       const height = size.height - (size.height % 2)
@@ -708,7 +765,9 @@ export class Viewer {
         onProgress: (done) => onProgress(done, total),
         draw: async (i) => {
           const index = from + i * step
-          if (!(await this.showFrame(index))) throw new Error(`Frame ${index} is not available`)
+          if (!(await this.showFrame(index, to, step))) {
+            throw new Error(`Frame ${index} is not available`)
+          }
           if (i > 0 && (particles || dye)) {
             for (let k = 0; k < step; k++) this.stepSimBy(this.sim.frameInterval)
           }
@@ -725,6 +784,8 @@ export class Viewer {
 
   dispose(): void {
     this.disposed = true
+    this.renderer.canvas.removeEventListener('webglcontextlost', this.onContextLost)
+    this.renderer.canvas.removeEventListener('webglcontextrestored', this.onContextRestored)
     cancelAnimationFrame(this.frameRequest)
     cancelAnimationFrame(this.sim.request)
     this.stopLoop()

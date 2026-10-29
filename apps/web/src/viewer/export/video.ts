@@ -1,6 +1,6 @@
 // Video export (design proposal §8): WebCodecs `VideoEncoder` feeding `mp4-muxer`, one encoded
 // frame per output frame used (frame-exact), or a `MediaRecorder` WebM when WebCodecs is missing
-// (a real-time recording, paused while each frame is drawn, so its length is close but not exact).
+// (a real-time recording, paused while frames load, so its length is close but not exact).
 //
 // The video's clock follows the flow's: a speed (real time, × N) and the simulated interval
 // between output frames give the frame rate, and frames are skipped when it would pass a cap.
@@ -185,11 +185,21 @@ async function encodeWebCodecs(
   }
 }
 
+/** Drawn frames the recorder may hold ahead of the one it shows (RGBA bytes). */
+export const RECORDER_BUFFER = 128 * 2 ** 20
+
+/** Frames held ahead by the recorder at a size: as many as fit in `RECORDER_BUFFER`, at least 2. */
+export function recorderFrames(width: number, height: number): number {
+  return Math.max(2, Math.floor(RECORDER_BUFFER / (width * height * 4)))
+}
+
 /**
- * Fallback: record a canvas as it is redrawn, one frame per `1 / fps` s. The recorder is paused
- * while a frame loads and draws (that time is not recorded), and each wait is measured, the next
- * one shortened by what a timer overslept, so the length is right to within a few milliseconds
- * whatever the machine.
+ * Fallback: record a canvas as it is redrawn, one frame per `1 / fps` s of recording. Frames are
+ * drawn ahead into a buffer (`recorderFrames`) while the recorder runs; when it runs dry (frames
+ * load slower than the video plays), the recorder is paused until the buffer is full again. Each
+ * pause and resume costs the recording a few milliseconds, so there are a few long pauses rather
+ * than one per frame. The time recorded is measured and every wait aims at the frame's due time,
+ * so a timer that oversleeps is made up on the next frame.
  */
 async function encodeRecorder(job: VideoJob): Promise<VideoResult> {
   if (typeof MediaRecorder === 'undefined') {
@@ -207,24 +217,81 @@ async function encodeRecorder(job: VideoJob): Promise<VideoResult> {
   const parts: Blob[] = []
   recorder.ondataavailable = (e) => e.data.size > 0 && parts.push(e.data)
   const stopped = new Promise<void>((resolve) => (recorder.onstop = () => resolve()))
-  recorder.start()
-  // Milliseconds recorded so far (the recorder running, not paused).
+
+  // The frames drawn ahead, filled by `produce` while the loop below records them.
+  const capacity = recorderFrames(job.width, job.height)
+  const queue: ImageBitmap[] = []
+  let produced = false
+  let failure: unknown = null
+  let stop = false
+  // One waiter on each side: the recorder for a frame, the producer for room.
+  let frameAdded: (() => void) | null = null
+  let roomMade: (() => void) | null = null
+  const wake = (w: (() => void) | null) => w?.()
+  const produce = async () => {
+    try {
+      for (let i = 0; i < job.count && !stop; i++) {
+        while (queue.length >= capacity && !stop) await new Promise<void>((r) => (roomMade = r))
+        if (stop) break
+        queue.push(await createImageBitmap(await job.draw(i)))
+        wake(frameAdded)
+      }
+    } catch (e) {
+      failure = e
+    } finally {
+      produced = true
+      wake(frameAdded)
+    }
+  }
+  /** Waits until the buffer is full or every frame has been drawn. */
+  const filled = async () => {
+    while (queue.length < capacity && !produced) {
+      await new Promise<void>((r) => (frameAdded = r))
+    }
+  }
+  const producing = produce()
+
+  // Milliseconds recorded before the current stretch, and when that stretch began.
   let recorded = 0
+  let since = 0
   try {
+    await filled()
     for (let i = 0; i < job.count; i++) {
       job.signal.throwIfAborted()
-      if (i > 0) recorder.pause()
-      const canvas = await job.draw(i)
-      ctx.drawImage(canvas, 0, 0, job.width, job.height)
-      if (i > 0) recorder.resume()
-      const shown = performance.now()
+      if (queue.length === 0 && !produced) {
+        recorder.pause()
+        recorded += performance.now() - since
+        await filled()
+        job.signal.throwIfAborted()
+        recorder.resume()
+        since = performance.now()
+      }
+      if (failure) throw failure
+      const bitmap = queue.shift()
+      if (!bitmap) throw new Error(`Frame ${i} was not drawn`)
+      wake(roomMade)
+      ctx.drawImage(bitmap, 0, 0, job.width, job.height)
+      bitmap.close()
+      if (i === 0) {
+        recorder.start()
+        since = performance.now()
+      }
       track.requestFrame?.()
-      const due = ((i + 1) * 1000) / job.fps - recorded
+      const due = ((i + 1) * 1000) / job.fps - recorded - (performance.now() - since)
       await new Promise((r) => setTimeout(r, Math.max(0, due)))
-      recorded += performance.now() - shown
       job.onProgress(i + 1)
     }
+    // A recording ends where its last frame starts: the same image once more marks where the last
+    // frame's time is up, so the video lasts `count / fps`. (Redrawn: a canvas that has not changed
+    // gives no frame.) It needs a moment to reach the recorder before it stops.
+    ctx.drawImage(surface, 0, 0)
+    track.requestFrame?.()
+    await new Promise((r) => setTimeout(r, 1000 / job.fps))
   } finally {
+    stop = true
+    wake(roomMade)
+    await producing
+    for (const b of queue.splice(0)) b.close()
     if (recorder.state !== 'inactive') recorder.stop()
   }
   await stopped

@@ -50,9 +50,12 @@ export function advance(
   return { position: t.last, mode: 'paused' }
 }
 
-/** The frames to fetch ahead of `index` while playing (the next few, within the known frames). */
-export function prefetch(index: number, last: number, count = 3): number[] {
+/**
+ * The frames to fetch ahead of `index` while playing or exporting: the next `count` (every
+ * `step`-th), up to `last`.
+ */
+export function prefetch(index: number, last: number, count = 3, step = 1): number[] {
   const out: number[] = []
-  for (let i = index + 1; i <= Math.min(last, index + count); i++) out.push(i)
+  for (let i = index + step; i <= Math.min(last, index + count * step); i += step) out.push(i)
   return out
 }

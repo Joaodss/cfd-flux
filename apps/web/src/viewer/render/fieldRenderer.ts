@@ -59,24 +59,65 @@ function filteredTexture(gl: WebGL2RenderingContext): WebGLTexture {
   return t
 }
 
+/** Everything the renderer holds on the GPU: made again when a lost context comes back. */
+interface Gpu {
+  program: WebGLProgram
+  vao: WebGLVertexArrayObject
+  u: Record<string, WebGLUniformLocation | null>
+  cellTex: WebGLTexture
+  fieldTex: WebGLTexture
+  /** The velocity, for the arrows (the shown field may be another one). */
+  velocityTex: WebGLTexture
+  fractionTex: WebGLTexture
+  lutTex: WebGLTexture
+  vectorLayer: VectorLayer
+  lineLayer: LineLayer
+  markLayer: LineLayer
+  sim: SimLayer
+}
+
+function createGpu(gl: WebGL2RenderingContext): Gpu {
+  const program = link(gl, VERTEX, FIELD_FRAGMENT)
+  return {
+    program,
+    vao: gl.createVertexArray(),
+    u: Object.fromEntries(
+      [
+        'u_cellType',
+        'u_field',
+        'u_fraction',
+        'u_lut',
+        'u_hasField',
+        'u_grid',
+        'u_fieldCells',
+        'u_component',
+        'u_range',
+        'u_origin',
+        'u_zoom',
+        'u_cellColours',
+        'u_background',
+        'u_borderColour',
+        'u_noData',
+      ].map((n) => [n, gl.getUniformLocation(program, n)]),
+    ),
+    cellTex: integerTexture(gl),
+    fieldTex: filteredTexture(gl),
+    velocityTex: filteredTexture(gl),
+    fractionTex: filteredTexture(gl),
+    lutTex: filteredTexture(gl),
+    vectorLayer: new VectorLayer(gl),
+    lineLayer: new LineLayer(gl),
+    markLayer: new LineLayer(gl),
+    sim: new SimLayer(gl),
+  }
+}
+
 export class FieldRenderer {
   readonly canvas: HTMLCanvasElement
   readonly maxTextureSize: number
   private readonly gl: WebGL2RenderingContext
-  private readonly program: WebGLProgram
-  private readonly vao: WebGLVertexArrayObject
-  private readonly u: Record<string, WebGLUniformLocation | null>
-  private readonly cellTex: WebGLTexture
-  private readonly fieldTex: WebGLTexture
-  /** The velocity, for the arrows (the shown field may be another one). */
-  private readonly velocityTex: WebGLTexture
+  private gpu: Gpu
   private hasVelocity = false
-  private readonly fractionTex: WebGLTexture
-  private readonly lutTex: WebGLTexture
-  private readonly vectorLayer: VectorLayer
-  private readonly lineLayer: LineLayer
-  private readonly markLayer: LineLayer
-  private readonly sim: SimLayer
   private grid: [number, number] | null = null
   /** The field texture's size in blocks and the box factor k. */
   private field: { width: number; height: number; k: number } | null = null
@@ -95,69 +136,63 @@ export class FieldRenderer {
     if (!gl) throw new Error('WebGL2 is not available in this browser')
     this.gl = gl
     this.maxTextureSize = gl.getParameter(gl.MAX_TEXTURE_SIZE) as number
-    this.program = link(gl, VERTEX, FIELD_FRAGMENT)
-    this.vao = gl.createVertexArray()
-    this.u = Object.fromEntries(
-      [
-        'u_cellType',
-        'u_field',
-        'u_fraction',
-        'u_lut',
-        'u_hasField',
-        'u_grid',
-        'u_fieldCells',
-        'u_component',
-        'u_range',
-        'u_origin',
-        'u_zoom',
-        'u_cellColours',
-        'u_background',
-        'u_borderColour',
-        'u_noData',
-      ].map((n) => [n, gl.getUniformLocation(this.program, n)]),
-    )
-    this.cellTex = integerTexture(gl)
-    this.fieldTex = filteredTexture(gl)
-    this.velocityTex = filteredTexture(gl)
-    this.fractionTex = filteredTexture(gl)
-    this.lutTex = filteredTexture(gl)
-    this.vectorLayer = new VectorLayer(gl)
-    this.lineLayer = new LineLayer(gl)
-    this.markLayer = new LineLayer(gl)
-    this.sim = new SimLayer(gl)
+    this.gpu = createGpu(gl)
+  }
+
+  /**
+   * Whether the context is lost (a driver reset, GPU memory pressure): nothing is drawn or read
+   * back until the browser restores it and `restore` is called.
+   */
+  get lost(): boolean {
+    return this.gl.isContextLost()
+  }
+
+  /**
+   * After `webglcontextrestored`: makes the programs, textures and buffers again (the old ones
+   * went with the lost context). The cells, fields, colour map and overlays must then be set
+   * again; the particles and the dye start afresh.
+   */
+  restore(): void {
+    this.gpu = createGpu(this.gl)
+    this.grid = null
+    this.field = null
+    this.nearest = false
+    this.hasField = false
+    this.hasVelocity = false
   }
 
   /** The largest image side this GPU can draw (viewport and render buffer limits). */
   get maxImage(): number {
     const { gl } = this
+    if (gl.isContextLost()) return 0
     const dims = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array
     return Math.min(dims[0], dims[1], gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) as number)
   }
 
   /** Whether particles and dye can run (float textures can be rendered to). */
   get floatTargets(): boolean {
-    return this.sim.supported
+    return this.gpu.sim.supported
   }
 
   /** The release line to mark, as segments in cells, or null. */
   setMark(segments: Float32Array | null): void {
-    this.markLayer.set(segments)
+    this.gpu.markLayer.set(segments)
   }
 
   /** Empties the dye and the particles. */
   clearSim(): void {
-    this.sim.clear()
+    this.gpu.sim.clear()
   }
 
   /** Released particles and the dye's total (tests). */
   measureSim(): { particles: number; dye: number } {
-    return this.sim.measure()
+    return this.gpu.sim.measure()
   }
 
   /** Advances the particles and the dye (needs the velocity of a frame to have been uploaded). */
   stepSim(view: View, dpr: number, params: StepParams): void {
     const ctx = this.context(view, dpr)
-    if (ctx && this.hasVelocity) this.sim.step(ctx, params)
+    if (ctx && this.hasVelocity) this.gpu.sim.step(ctx, params)
   }
 
   private context(view: View, dpr: number): LayerContext | null {
@@ -170,20 +205,20 @@ export class FieldRenderer {
       zoom,
       grid,
       fieldCells: [field.width * field.k, field.height * field.k],
-      cellTex: this.cellTex,
-      fieldTex: this.velocityTex,
-      fractionTex: this.fractionTex,
+      cellTex: this.gpu.cellTex,
+      fieldTex: this.gpu.velocityTex,
+      fractionTex: this.gpu.fractionTex,
     }
   }
 
   /** Streamline segments held (tests). */
   get streamlineCount(): number {
-    return this.lineLayer.count
+    return this.gpu.lineLayer.count
   }
 
   /** Replaces the streamline segments (cells) or clears them. */
   setStreamlines(segments: Float32Array | null): void {
-    this.lineLayer.set(segments)
+    this.gpu.lineLayer.set(segments)
   }
 
   /** The run's cells (full resolution; 0 = fluid) and the fluid fraction of each block (size w × h). */
@@ -202,7 +237,7 @@ export class FieldRenderer {
       )
     }
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
-    gl.bindTexture(gl.TEXTURE_2D, this.cellTex)
+    gl.bindTexture(gl.TEXTURE_2D, this.gpu.cellTex)
     gl.texImage2D(
       gl.TEXTURE_2D,
       0,
@@ -216,7 +251,7 @@ export class FieldRenderer {
     )
     // The fraction as a normalised byte (R8 filters linearly everywhere; 1/255 is plenty).
     const bytes = Uint8Array.from(fraction, (f) => Math.round(f * 255))
-    gl.bindTexture(gl.TEXTURE_2D, this.fractionTex)
+    gl.bindTexture(gl.TEXTURE_2D, this.gpu.fractionTex)
     gl.texImage2D(
       gl.TEXTURE_2D,
       0,
@@ -232,7 +267,7 @@ export class FieldRenderer {
     this.field = { ...blocks }
     this.hasField = false
     this.hasVelocity = false
-    this.sim.setCells([width, height], blocks, spawns)
+    this.gpu.sim.setCells([width, height], blocks, spawns)
   }
 
   /**
@@ -240,14 +275,14 @@ export class FieldRenderer {
    * filters half floats linearly without extensions), or f32 values into R32F/RG32F.
    */
   setField(field: DecodedField, width: number, height: number): void {
-    this.upload(this.fieldTex, field, width, height)
+    this.upload(this.gpu.fieldTex, field, width, height)
     this.filter(field.dtype === 'f32' || this.nearest)
     this.hasField = true
   }
 
   /** Uploads the frame's velocity for the arrows. */
   setVelocity(field: DecodedField, width: number, height: number): void {
-    this.upload(this.velocityTex, field, width, height)
+    this.upload(this.gpu.velocityTex, field, width, height)
     const { gl } = this
     const f = field.dtype === 'f32' ? gl.NEAREST : gl.LINEAR
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f)
@@ -291,17 +326,17 @@ export class FieldRenderer {
   /** Uploads a colour map's 256-entry lookup table. */
   setLut(lut: Uint8Array): void {
     const { gl } = this
-    gl.bindTexture(gl.TEXTURE_2D, this.lutTex)
+    gl.bindTexture(gl.TEXTURE_2D, this.gpu.lutTex)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, 256, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, lut)
   }
 
   private filter(nearest: boolean): void {
     const { gl } = this
     const f = nearest ? gl.NEAREST : gl.LINEAR
-    gl.bindTexture(gl.TEXTURE_2D, this.fieldTex)
+    gl.bindTexture(gl.TEXTURE_2D, this.gpu.fieldTex)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f)
-    gl.bindTexture(gl.TEXTURE_2D, this.fractionTex)
+    gl.bindTexture(gl.TEXTURE_2D, this.gpu.fractionTex)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f)
   }
@@ -328,7 +363,8 @@ export class FieldRenderer {
       mark: null,
     },
   ): void {
-    const { gl, u, grid, field } = this
+    const { gl, grid, field } = this
+    const { u } = this.gpu
     gl.viewport(0, 0, this.canvas.width, this.canvas.height)
     const bg = colours.background
     gl.clearColor(bg[0] / 255, bg[1] / 255, bg[2] / 255, 1)
@@ -338,12 +374,12 @@ export class FieldRenderer {
       this.nearest = style.nearest
       this.filter(style.nearest)
     }
-    gl.useProgram(this.program)
-    gl.bindVertexArray(this.vao)
-    bind(gl, 0, this.cellTex, u.u_cellType)
-    bind(gl, 1, this.fieldTex, u.u_field)
-    bind(gl, 2, this.fractionTex, u.u_fraction)
-    bind(gl, 3, this.lutTex, u.u_lut)
+    gl.useProgram(this.gpu.program)
+    gl.bindVertexArray(this.gpu.vao)
+    bind(gl, 0, this.gpu.cellTex, u.u_cellType)
+    bind(gl, 1, this.gpu.fieldTex, u.u_field)
+    bind(gl, 2, this.gpu.fractionTex, u.u_fraction)
+    bind(gl, 3, this.gpu.lutTex, u.u_lut)
     gl.uniform1i(u.u_hasField, this.hasField ? 1 : 0)
     gl.uniform2i(u.u_grid, grid[0], grid[1])
     gl.uniform2f(u.u_fieldCells, field.width * field.k, field.height * field.k)
@@ -363,13 +399,13 @@ export class FieldRenderer {
     gl.drawArrays(gl.TRIANGLES, 0, 3)
     if (!this.hasField) return
     const ctx = this.context(view, dpr)!
-    if (overlays.dye && this.hasVelocity) this.sim.drawDye(ctx)
-    if (overlays.streamlines) this.lineLayer.draw(ctx, overlays.streamlines)
-    if (overlays.mark) this.markLayer.draw(ctx, overlays.mark)
+    if (overlays.dye && this.hasVelocity) this.gpu.sim.drawDye(ctx)
+    if (overlays.streamlines) this.gpu.lineLayer.draw(ctx, overlays.streamlines)
+    if (overlays.mark) this.gpu.markLayer.draw(ctx, overlays.mark)
     if (overlays.particles && this.hasVelocity) {
-      this.sim.drawParticles(ctx, overlays.particles.colour, overlays.particles.size)
+      this.gpu.sim.drawParticles(ctx, overlays.particles.colour, overlays.particles.size)
     }
-    if (overlays.vectors && this.hasVelocity) this.vectorLayer.draw(ctx, overlays.vectors)
+    if (overlays.vectors && this.hasVelocity) this.gpu.vectorLayer.draw(ctx, overlays.vectors)
   }
 
   /** The RGBA pixel at a device-pixel position from the top-left corner (tests, eyedropper). */
@@ -382,13 +418,15 @@ export class FieldRenderer {
 
   dispose(): void {
     const { gl } = this
-    for (const t of [this.cellTex, this.fieldTex, this.velocityTex, this.fractionTex, this.lutTex])
+    const g = this.gpu
+    for (const t of [g.cellTex, g.fieldTex, g.velocityTex, g.fractionTex, g.lutTex]) {
       gl.deleteTexture(t)
-    gl.deleteProgram(this.program)
-    gl.deleteVertexArray(this.vao)
-    this.vectorLayer.dispose()
-    this.lineLayer.dispose()
-    this.markLayer.dispose()
-    this.sim.dispose()
+    }
+    gl.deleteProgram(g.program)
+    gl.deleteVertexArray(g.vao)
+    g.vectorLayer.dispose()
+    g.lineLayer.dispose()
+    g.markLayer.dispose()
+    g.sim.dispose()
   }
 }
