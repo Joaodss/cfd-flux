@@ -8,7 +8,13 @@ import { formatValue } from '../panels/format.ts'
 import { COLORMAPS, colormap, cssGradient } from './colormaps.ts'
 import { RANGE_MODES, ticks, type RangeMode } from './ranges.ts'
 import { ARROW_SPACING, arrowScale } from './vectors.ts'
-import type { ReleaseMode } from './simulation.ts'
+import {
+  DENSITIES,
+  PARTICLE_SIZES,
+  type Density,
+  type ParticleSize,
+  type ReleaseMode,
+} from './simulation.ts'
 import { SettingsPopover } from './SettingsPopover.tsx'
 import {
   colormapOf,
@@ -204,6 +210,40 @@ export function ViewerToolbar(props: { viewer: Viewer | null }) {
                   Along the line
                 </option>
                 <option value="domain">Anywhere</option>
+              </select>
+            </Labelled>
+          )}
+          {s.overlays.particles && (
+            <Labelled label="Density">
+              <select
+                className={SELECT}
+                data-testid="viewer-particle-density"
+                title="Particles per fluid cell (fewer leave the flow readable behind them)"
+                value={s.particleDensity}
+                onChange={(e) => s.setParticleDensity(e.target.value as Density)}
+              >
+                {(Object.keys(DENSITIES) as Density[]).map((d) => (
+                  <option key={d} value={d}>
+                    {DENSITIES[d].label}
+                  </option>
+                ))}
+              </select>
+            </Labelled>
+          )}
+          {s.overlays.particles && (
+            <Labelled label="Size">
+              <select
+                className={SELECT}
+                data-testid="viewer-particle-size"
+                title="Particle diameter on screen, and in pixels of an exported picture or video"
+                value={s.particleSize}
+                onChange={(e) => s.setParticleSize(Number(e.target.value) as ParticleSize)}
+              >
+                {PARTICLE_SIZES.map((n) => (
+                  <option key={n} value={n}>
+                    {n} px
+                  </option>
+                ))}
               </select>
             </Labelled>
           )}

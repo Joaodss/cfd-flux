@@ -5,7 +5,7 @@
 // (also in SwiftShader); without it the layer reports `supported = false`.
 import { VERTEX } from '../../editor/render/shaders.ts'
 import { bind, link } from '../../gl/gl.ts'
-import { DYE_COLOURS, type ReleaseMode } from '../simulation.ts'
+import { DYE_COLOURS, MAX_PARTICLES, type ReleaseMode } from '../simulation.ts'
 import type { Colour4, LayerContext } from './overlays.ts'
 import {
   DYE_ADVECT,
@@ -17,7 +17,7 @@ import {
 
 /** Particles: a 256 × 128 state texture. */
 const STATE_W = 256
-const STATE_H = 128
+const STATE_H = MAX_PARTICLES / STATE_W
 const SPAWN_ROW = 1024
 const MODES: Record<ReleaseMode, number> = { inlets: 0, line: 1, domain: 2 }
 
@@ -66,6 +66,8 @@ export interface StepParams {
   /** Passes the step is split into (nothing moves more than a cell per pass). */
   passes: number
   particles: boolean
+  /** Particles in use (the first texels of the state; the others stay unreleased). */
+  count: number
   dye: boolean
   release: ReleaseMode
   line: [number, number, number, number] | null
@@ -118,6 +120,7 @@ export class SimLayer {
       'u_dt',
       'u_cellSize',
       'u_release',
+      'u_count',
       'u_seed',
     ])
     this.uDraw = uniforms(gl, this.drawProgram, [
@@ -260,6 +263,7 @@ export class SimLayer {
       gl.uniform1f(u.u_dt, dt)
       gl.uniform1f(u.u_cellSize, p.cellSize)
       gl.uniform1f(u.u_release, p.releaseRate)
+      gl.uniform1i(u.u_count, p.count)
       for (let i = 0; i < p.passes; i++) {
         bind(gl, 0, this.particles.read.texture, u.u_state)
         gl.uniform1ui(u.u_seed, this.counter++)
@@ -321,8 +325,8 @@ export class SimLayer {
     gl.disable(gl.BLEND)
   }
 
-  /** The released particles as points. */
-  drawParticles(ctx: LayerContext, colour: Colour4, size: number): void {
+  /** The released particles among the first `count` as points. */
+  drawParticles(ctx: LayerContext, colour: Colour4, size: number, count: number): void {
     const { gl } = this
     if (!this.supported || !this.particles) return
     const u = this.uDraw
@@ -336,7 +340,7 @@ export class SimLayer {
     gl.uniform4f(u.u_colour, ...colour)
     gl.enable(gl.BLEND)
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-    gl.drawArrays(gl.POINTS, 0, STATE_W * STATE_H)
+    gl.drawArrays(gl.POINTS, 0, Math.min(count, STATE_W * STATE_H))
     gl.disable(gl.BLEND)
   }
 

@@ -32,7 +32,8 @@ export interface Overlays {
   streamlines: Colour4 | null
   /** The dye texture over the field. */
   dye: boolean
-  particles: { colour: Colour4; size: number } | null
+  /** Diameter in device pixels, and how many of the particles are drawn. */
+  particles: { colour: Colour4; size: number; count: number } | null
   /** A marker line (the release line being drawn). */
   mark: Colour4 | null
 }
@@ -449,7 +450,8 @@ export class FieldRenderer {
     if (overlays.streamlines) this.gpu.lineLayer.draw(ctx, overlays.streamlines)
     if (overlays.mark) this.gpu.markLayer.draw(ctx, overlays.mark)
     if (overlays.particles && this.hasVelocity) {
-      this.gpu.sim.drawParticles(ctx, overlays.particles.colour, overlays.particles.size)
+      const { colour, size, count } = overlays.particles
+      this.gpu.sim.drawParticles(ctx, colour, size, count)
     }
     if (overlays.vectors && this.hasVelocity) this.gpu.vectorLayer.draw(ctx, overlays.vectors)
   }

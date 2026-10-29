@@ -15,7 +15,8 @@ float rand(uint a) { return float(pcg(a)) / 4294967295.0; }
  * One step of every particle: a texel of the state texture (RG32F: x, y; x < 0 = not released).
  * Live particles move by the velocity at the frame shown (midpoint rule) and die when they reach
  * a non-fluid cell or leave the domain; dead ones are released with probability `u_release` at
- * the source (the inlets' neighbours, a line, or anywhere).
+ * the source (the inlets' neighbours, a line, or anywhere). Texels from `u_count` on are not in use
+ * (a lower density): they stay, or become, unreleased.
  */
 export const PARTICLE_UPDATE = `#version 300 es
 precision highp float;
@@ -35,6 +36,7 @@ uniform vec2 u_fieldCells;
 uniform float u_dt;             // simulated seconds
 uniform float u_cellSize;       // metres per cell
 uniform float u_release;
+uniform int u_count;
 uniform uint u_seed;
 out vec4 outState;
 
@@ -52,6 +54,10 @@ void main() {
   ivec2 t = ivec2(gl_FragCoord.xy);
   vec2 p = texelFetch(u_state, t, 0).xy;
   uint id = uint(t.y * textureSize(u_state, 0).x + t.x);
+  if (int(id) >= u_count) {
+    outState = vec4(-1.0, -1.0, 0.0, 1.0);
+    return;
+  }
   if (p.x >= 0.0) {
     vec2 mid = p + 0.5 * velocityAt(p) * u_dt / u_cellSize;
     vec2 next = p + velocityAt(mid) * u_dt / u_cellSize;

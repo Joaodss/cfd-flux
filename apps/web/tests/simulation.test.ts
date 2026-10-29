@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { CellType } from '../src/editor/layers.ts'
-import { inletSpawns, simulatedStep, substeps } from '../src/viewer/simulation.ts'
+import {
+  inletSpawns,
+  MAX_PARTICLES,
+  particleCount,
+  particlePixels,
+  simulatedStep,
+  substeps,
+} from '../src/viewer/simulation.ts'
 
 describe('particle release', () => {
   it('uses the fluid cells next to inlets, each once, as cell centres', () => {
@@ -23,6 +30,28 @@ describe('particle release', () => {
     expect(Array.from(a)).toEqual(Array.from(inletSpawns(cells, 4, 100, 10)))
     const ys = Array.from(a).filter((_, i) => i % 2 === 1)
     expect(ys).toEqual([0.5, 10.5, 20.5, 30.5, 40.5, 50.5, 60.5, 70.5, 80.5, 90.5])
+  })
+})
+
+describe('particle density and size', () => {
+  it('scales with the fluid cells, capped per density and at least 64', () => {
+    // The cylinder at 4 px per cell: 442 × 96 cells, about 42,000 of them fluid.
+    expect([particleCount(42000, 'few'), particleCount(42000, 'normal')]).toEqual([2100, 6300])
+    expect(particleCount(42000, 'many')).toBe(21000)
+    // The 1023² cavity: every density at its cap, and they still differ.
+    const cavity = 1023 * 1023
+    expect(['few', 'normal', 'many'].map((d) => particleCount(cavity, d as 'few'))).toEqual([
+      4096,
+      12288,
+      MAX_PARTICLES,
+    ])
+    expect(particleCount(100, 'normal')).toBe(64)
+  })
+
+  it('keeps the chosen size in exports instead of growing with the pixels per cell', () => {
+    expect(particlePixels(2, 2, false)).toBe(4) // CSS pixels on a 2× screen
+    expect(particlePixels(2, 4, true)).toBe(2) // an export at 4 px per cell
+    expect(particlePixels(3, 1, true)).toBe(3)
   })
 })
 

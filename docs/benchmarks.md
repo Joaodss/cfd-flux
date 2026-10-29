@@ -267,7 +267,9 @@ from a `<video>` element in the page.
   the picture, and where they are dense the flow is hard to read. Each particle is drawn `max(2, 2 × dpr)` pixels
   wide (`Viewer.ts`), and a 4 px per cell export draws with dpr 4, so every particle is an 8 × 8 px square. There is
   no control for how many particles there are or how large they are drawn. Smaller or fewer particles would help.
-- Follow-up issues with these numbers: the particles' density and size are #29 (medium), the lost WebGL context #30
+- Follow-up issues with these numbers: the particles' density and size are #29 (medium; since 2026-10-29 a
+  density and a size on the toolbar, 2 px in exports at any pixels per cell; the author judged the same cylinder export at *Normal*, 2 px, and
+  found it readable), the lost WebGL context #30
   (medium), and the export loading frames one at a time, with the short WebM, #31 (low).
 
 ### After the fixes for #30 and #31 (2026-10-29)

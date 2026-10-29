@@ -98,6 +98,20 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   await expect.poll(async () => (await sim()).dye, { timeout: 30_000 }).toBeGreaterThan(5)
   const flowing = await image()
   expect(flowing).not.toEqual(plain)
+  // The density sets how many particles are in use: per fluid cell, so at most this many of the
+  // grid's cells. Fewer are unreleased at once; more are released over the next passes.
+  const cells = scene.grid.width * scene.grid.height
+  const particles = async () => (await sim()).particles
+  expect(await particles()).toBeLessThanOrEqual(0.15 * cells)
+  await page.getByTestId('viewer-particle-density').selectOption('few')
+  await expect.poll(particles, { timeout: 10_000 }).toBeLessThanOrEqual(0.05 * cells)
+  await page.getByTestId('viewer-particle-density').selectOption('many')
+  await expect.poll(particles, { timeout: 30_000 }).toBeGreaterThan(0.15 * cells)
+  await page.getByTestId('viewer-particle-density').selectOption('normal')
+  // A larger size draws the same particles bigger.
+  await page.getByTestId('viewer-particle-size').selectOption('4')
+  await expect.poll(image).not.toEqual(flowing)
+  await page.getByTestId('viewer-particle-size').selectOption('2')
   await page.getByTestId('viewer-particles').uncheck()
   await page.getByTestId('viewer-dye').uncheck()
   expect(await image()).toEqual(plain)
