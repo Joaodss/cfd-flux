@@ -295,9 +295,10 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   preview stored next to each frame would fix it). The stream's rows and the CSVs cannot disagree. The statistics
   have two implementations (Rust for the suite, TypeScript for the viewer), tied by fixtures instead of by WASM;
   compiling `cfd-core` to WASM stays the option for a serverless demo (ADR-010). Streamlines run on the CPU,
-  particles and dye on the GPU, and neither is part of any acceptance number. Not done: a Nusselt plot in the Plots
-  tab; the MediaRecorder fallback and the video's image were not looked at by eye; open question Q14 (the editor's
-  discoverability, Phase 4's hand-timed run) is unchanged.
+  particles and dye on the GPU, and neither is part of any acceptance number. Not done: the MediaRecorder fallback
+  and the video's image were not looked at by eye; open question Q14 (the editor's discoverability, Phase 4's
+  hand-timed run) is unchanged. *(2026-10-29, #20: the Nu(t) plot in the Plots tab, its CSV and the `heat.csv` link
+  in the Export tab, left out at first, are done.)*
 
 ## Open questions
 
