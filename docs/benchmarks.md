@@ -206,6 +206,41 @@ while the pane was hidden: the renderer then runs at a lower priority, so these 
   384 with the footer instead of 884 × 216). Not yet re-judged by eye: the author's verdict on the same cylinder export
   is pending.
 
+### After the fixes for #30 and #31 (2026-10-29)
+
+Same machine, browser (Chromium 152, ANGLE on D3D11) and release `cfd-server` on CUDA; a new 1023 × 1024 cavity run
+(`cavity-scene … 1023 1 0.02`, 51 frames, 0.85 GB stored), vorticity, frames 0–50 at 1 px per cell (1022 × 1072 with
+the footer), 50 fps, *High quality*. Both builds were measured the same day in the same pane while it was **hidden**
+(the page then renders at a lower priority, so absolute times are on the slow side; compare the rows): *before* is the
+app at `8715bb3` (#28), *after* this change. A script in the page calls `__viewer.exportVideo` and reads the file back:
+its length from a `<video>` element (WebM: seeked to the end) and, for WebM, the frames (`BlockGroup`s) in the file.
+*From the server* is the first export after a reload (an empty frame cache; the URL's query must change, or the pane
+only follows the hash and keeps the page), *cached* the next one on the same page.
+
+| Path | Frames from the server: took | Cached: took | Length (expected 1.020 s) | Frames in the file (of 51) |
+|---|---:|---:|---|---:|
+| WebCodecs → MP4, before | 5.09, 6.37, 6.42 s | 0.63 s | 1.020 s | 51 |
+| WebCodecs → MP4, after | **2.32–2.54 s** (6 runs) | 0.63–0.73 s | 1.020 s | 51 |
+| `MediaRecorder` → WebM, before | 7.19, 7.19, 7.23 s | 1.35 s | 1.002–1.004 s from the server; 1.013, 1.026 s cached | **33–36** from the server; 51 cached |
+| `MediaRecorder` → WebM, after | 2.59–2.73 s (5 runs) | 1.27–1.30 s | **1.003–1.033 s** from the server, 1.011–1.028 s cached (−1.7 … +1.3 %) | 51 (+ the end mark) |
+
+- **#31, loading:** `exportVideo` waited for each frame in turn (≈ 8–10 frames/s here). It now asks for the next frames
+  of the export (every *n*-th with a step) while the current one is shown, as many as playback keeps in flight (one
+  more than the frame workers: 5 with 4 workers) and no more than half the frame cache holds: ≈ 21 frames/s from the
+  server, close to the decode pool's rate measured above (≈ 24 frames/s, also with the pane hidden). The MP4 is 2.4×
+  faster.
+- **#31, WebM:** with the recorder paused and resumed around every frame that loaded slowly, the file kept only two
+  thirds of the frames from the server (the length looked right: the frames left lasted longer). Its timestamps also
+  show why the length drifts: the recorder stamps a frame when its encoder takes it (the first frame lasts ≈ 100 ms,
+  then frames come in bursts 6–34 ms apart), not when it was asked for. Now frames are drawn ahead into a buffer
+  (`ImageBitmap`s, up to 128 MiB: 30 frames at this size) while the recorder runs, and it is paused only when the
+  buffer runs dry, until it is full again: a few pauses instead of one per frame. A recording ends where its last frame
+  starts, so that frame is drawn once more when its time is up (without it: 0.987–1.011 s). Every frame is in the file
+  and the length is within 2 %.
+- **#30** is not a timing: the Playwright test *a lost WebGL context is restored and the frame drawn again* loses and
+  restores the context with `WEBGL_lose_context` and compares the picture before and after (and fails without
+  `preventDefault()`).
+
 ## Run loop and server — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-13
 
 Phase 3 code (`cfd_job::run`: batches of at most ≈ 50 ms, each followed by `finish`, frames on an

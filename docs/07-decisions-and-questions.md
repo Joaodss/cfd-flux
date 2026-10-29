@@ -229,6 +229,11 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   `EXT_color_buffer_float`; the checkboxes are disabled without it). Export draws the same scene at `cells × scale`
   into a PNG, and a video with `VideoEncoder` + `mp4-muxer` (H.264, else VP9/AV1; a `MediaRecorder` WebM without
   WebCodecs). New dependencies: `uPlot`, `mp4-muxer`; in Rust `rust-embed`, `webbrowser`.
+  *Amended 2026-10-29 (#30, #31):* a lost WebGL context is restored (`preventDefault()` on `webglcontextlost`, every
+  GPU resource made again on `webglcontextrestored`; exports say the context was lost meanwhile); the video export
+  prefetches its frames like playback, and the WebM recorder draws ahead into a bounded buffer and pauses only when it
+  runs dry — paused once per frame, it dropped a third of the frames loaded from the server
+  ([benchmarks](benchmarks.md), "After the fixes for #30 and #31").
 - **Series.** The solver's samples reach the viewer as `series` WebSocket messages (rows of `forces.csv`,
   `probes.csv`, `diagnostics.csv`, and `heat.csv` for thermal runs), batched by the server right before a (throttled)
   `progress` and before `done`. `cfd-job` hands each sample to `JobObserver::sample` as the numbers of its CSV line —
