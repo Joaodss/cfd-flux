@@ -2,6 +2,7 @@
 // the run's cells and the WebGL renderer. React components drive it and read `useViewer`.
 import { CELL_COLOURS } from '../editor/colours.ts'
 import type { Rgba } from '../editor/colours.ts'
+import { CellType } from '../editor/layers.ts'
 import { cellToScreen, type View } from '../editor/view.ts'
 import { FrameCache } from '../frames/cache.ts'
 import { DecodeError, FrameDecoder } from '../frames/decoder.ts'
@@ -21,7 +22,13 @@ import { FieldRenderer, type Overlays, type ViewerColours } from './render/field
 import { colormapOf, currentQuantity, currentRange, useViewer, type ViewerState } from './store.ts'
 import { advance, prefetch } from './timeline.ts'
 import { fullFrameBytes, needsSharpen, type SharpenState } from './sharpen.ts'
-import { inletSpawns, simulatedStep, substeps } from './simulation.ts'
+import {
+  inletSpawns,
+  particleCount,
+  particlePixels,
+  simulatedStep,
+  substeps,
+} from './simulation.ts'
 import { ARROW_SPACING, arrowScale } from './vectors.ts'
 
 /** What an export says while the WebGL context is lost (nothing can be drawn). */
@@ -46,6 +53,8 @@ interface Cells {
   fraction: Float32Array
   /** Where particles are released at the inlets. */
   spawns: Float32Array
+  /** Fluid cells (the particle density is per fluid cell). */
+  fluid: number
 }
 
 export class Viewer {
@@ -180,7 +189,9 @@ export class Viewer {
     const blocks = { width: Math.ceil(width / k), height: Math.ceil(height / k), k }
     const fraction = fluidFraction(cellType, width, height, k)
     const spawns = inletSpawns(cellType, width, height)
-    this.cells = { cellType, width, height, blocks, fraction, spawns }
+    let fluid = 0
+    for (const t of cellType) if (t === CellType.Fluid) fluid++
+    this.cells = { cellType, width, height, blocks, fraction, spawns, fluid }
     this.uploadCells()
     this.sharp = null
     // Without inlets (a closed cavity) particles are released anywhere in the fluid.
@@ -480,12 +491,18 @@ export class Viewer {
       cellSize: g.cellSize,
       passes: count,
       particles,
+      count: this.particles(s),
       dye,
       release: s.release,
       line: s.releaseLine,
       stamps: this.sim.stamps.splice(0, 8),
       releaseRate: 0.03,
     })
+  }
+
+  /** How many particles are in use at the chosen density. */
+  private particles(s: ViewerState): number {
+    return particleCount(this.cells?.fluid ?? 0, s.particleDensity)
   }
 
   /** Uploads the shown frame's velocity for the arrows, particles and dye. */
@@ -763,7 +780,10 @@ export class Viewer {
     measureSince('viewer:draw', start)
   }
 
-  /** The overlays to draw: arrows scaled to the fastest speed seen so far, translucent lines. */
+  /**
+   * The overlays to draw: arrows scaled to the fastest speed seen so far, translucent lines. A
+   * `ratio` is an export's pixels per cell.
+   */
   private overlayStyle(s: ViewerState, ratio?: number): Overlays {
     const dpr = ratio ?? window.devicePixelRatio
     const arrows = s.overlays.vectors ? arrowScale(s.seen['velocity']?.max ?? 0) : null
@@ -778,7 +798,11 @@ export class Viewer {
       streamlines: s.overlays.streamlines ? [1, 1, 1, 0.55] : null,
       dye: s.overlays.dye,
       particles: s.overlays.particles
-        ? { colour: [0.9, 0.97, 1, 0.95], size: Math.max(2, 2 * dpr) }
+        ? {
+            colour: [0.9, 0.97, 1, 0.95],
+            size: particlePixels(s.particleSize, dpr, ratio !== undefined),
+            count: this.particles(s),
+          }
         : null,
       mark: s.releaseLine && (s.tool === 'line' || s.overlays.particles) ? [1, 0.85, 0.2, 1] : null,
     }

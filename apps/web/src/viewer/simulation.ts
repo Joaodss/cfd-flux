@@ -74,6 +74,41 @@ export function substeps(
 /** Where particles are released. */
 export type ReleaseMode = 'inlets' | 'line' | 'domain'
 
+/** Particles the GPU state holds (a 256 × 128 texture): the most that can be shown. */
+export const MAX_PARTICLES = 32768
+
+/**
+ * How many particles are shown: tracers per fluid cell, so a small grid is not buried under them,
+ * capped per density so the choices still differ on a large grid (where every one would reach
+ * `MAX_PARTICLES`).
+ */
+export const DENSITIES = {
+  few: { label: 'Few', perCell: 0.05, max: 4096 },
+  normal: { label: 'Normal', perCell: 0.15, max: 12288 },
+  many: { label: 'Many', perCell: 0.5, max: MAX_PARTICLES },
+} as const
+export type Density = keyof typeof DENSITIES
+
+/** The particles shown on a grid of `fluidCells` fluid cells at a density (at least 64). */
+export function particleCount(fluidCells: number, density: Density): number {
+  const d = DENSITIES[density]
+  return Math.min(d.max, Math.max(64, Math.round(fluidCells * d.perCell)))
+}
+
+/** Particle diameters offered, in CSS pixels on screen and in pixels of an exported picture. */
+export const PARTICLE_SIZES = [1, 2, 3, 4] as const
+export type ParticleSize = (typeof PARTICLE_SIZES)[number]
+
+/**
+ * A particle's diameter in device pixels. On screen it is CSS pixels, so × the device-pixel
+ * ratio; an export at n pixels per cell draws with a ratio of n, but its pixels are the
+ * picture's own: the size stays as chosen instead of growing to n × 2 px (2 × 2 cells at 4 px
+ * per cell).
+ */
+export function particlePixels(size: ParticleSize, dpr: number, exported: boolean): number {
+  return exported ? size : size * dpr
+}
+
 /** Dye colours (the three channels): smoke white, orange and cyan. */
 export const DYE_COLOURS: readonly [number, number, number][] = [
   [1, 1, 1],

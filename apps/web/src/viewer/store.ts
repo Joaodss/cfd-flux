@@ -5,7 +5,7 @@ import { create } from 'zustand'
 import { fitView, stepZoom, zoomAt, type View } from '../editor/view.ts'
 import type { FrameHeader } from '../frames/lffr.ts'
 import type { SharpenState } from './sharpen.ts'
-import type { ReleaseMode } from './simulation.ts'
+import type { Density, ParticleSize, ReleaseMode } from './simulation.ts'
 import { quantitiesOf, type Quantity } from './quantities.ts'
 import { accumulate, rangeFor, type RangeMode, type Seen } from './ranges.ts'
 import type { FrameStats } from './stats.ts'
@@ -28,6 +28,9 @@ export interface ViewerState {
   /** Where particles are released, and the line drawn for `line`. */
   release: ReleaseMode
   releaseLine: [number, number, number, number] | null
+  /** How many particles are shown, and their diameter (CSS pixels; picture pixels in exports). */
+  particleDensity: Density
+  particleSize: ParticleSize
   /** What dragging on the canvas does. */
   tool: 'pan' | 'line' | 'paint'
   /** The dye the brush paints (0-2). */
@@ -60,6 +63,8 @@ export interface ViewerState {
   setOverlay(key: keyof ViewerState['overlays'], on: boolean): void
   setRelease(release: ReleaseMode): void
   setReleaseLine(line: ViewerState['releaseLine']): void
+  setParticleDensity(density: Density): void
+  setParticleSize(size: ParticleSize): void
   setTool(tool: ViewerState['tool']): void
   setPaintDye(dye: number): void
   setFloatTargets(ok: boolean): void
@@ -83,6 +88,8 @@ const INITIAL = {
   overlays: { vectors: false, streamlines: false, particles: false, dye: false },
   release: 'inlets',
   releaseLine: null,
+  particleDensity: 'normal',
+  particleSize: 2,
   tool: 'pan',
   paintDye: 0,
   floatTargets: true,
@@ -98,7 +105,15 @@ const INITIAL = {
 
 export const useViewer = create<ViewerState>()((set, get) => ({
   ...INITIAL,
-  reset: () => set({ ...INITIAL, viewport: get().viewport, floatTargets: get().floatTargets }),
+  // The particles' look is a preference: it carries over to the next run's view.
+  reset: () =>
+    set({
+      ...INITIAL,
+      viewport: get().viewport,
+      floatTargets: get().floatTargets,
+      particleDensity: get().particleDensity,
+      particleSize: get().particleSize,
+    }),
   setGrid: (grid) => {
     const { viewport } = get()
     set({
@@ -144,6 +159,8 @@ export const useViewer = create<ViewerState>()((set, get) => ({
   setOverlay: (key, on) => set((s) => ({ overlays: { ...s.overlays, [key]: on } })),
   setRelease: (release) => set({ release }),
   setReleaseLine: (releaseLine) => set({ releaseLine }),
+  setParticleDensity: (particleDensity) => set({ particleDensity }),
+  setParticleSize: (particleSize) => set({ particleSize }),
   setTool: (tool) => set({ tool }),
   setPaintDye: (paintDye) => set({ paintDye }),
   setFloatTargets: (floatTargets) => set({ floatTargets }),

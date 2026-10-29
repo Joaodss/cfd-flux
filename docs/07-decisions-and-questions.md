@@ -244,6 +244,10 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   prefetches its frames like playback, and the WebM recorder draws ahead into a bounded buffer and pauses only when it
   runs dry — paused once per frame, it dropped a third of the frames loaded from the server
   ([benchmarks](benchmarks.md), "After the fixes for #30 and #31").
+  *Amended 2026-10-29 (#29):* particles have a density (few / normal / many, per fluid cell with a cap per
+  choice; normal, 0.15 per cell, is the default — all 32,768 buried the cylinder's wake) and a size (1–4 px, 2 by
+  default) on the toolbar; an export draws them at that size in its own pixels, no longer × its pixels per cell
+  (8 × 8 px at 4 px per cell).
 - **Series.** The solver's samples reach the viewer as `series` WebSocket messages (rows of `forces.csv`,
   `probes.csv`, `diagnostics.csv`, and `heat.csv` for thermal runs), batched by the server right before a (throttled)
   `progress` and before `done`. `cfd-job` hands each sample to `JobObserver::sample` as the numbers of its CSV line —
