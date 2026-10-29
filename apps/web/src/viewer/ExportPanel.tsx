@@ -1,10 +1,10 @@
 // The Export tab (design proposal §8): PNG of the view or of the whole domain, CSV (the run's own
-// files, the force coefficients, the window statistics, the fields of the frame shown) and a video
-// of a range of frames with the overlays.
+// files, the force coefficients, the walls' Nusselt numbers over time, the window statistics, the
+// fields of the frame shown) and a video of a range of frames with the overlays.
 import { useRef, useState } from 'react'
 import { NumberInput } from '../components/fields.tsx'
 import { Button } from '../components/ui/button.tsx'
-import { coefficientsCsv, RUN_FILES, statisticsCsv } from './export/csv.ts'
+import { coefficientsCsv, nusseltCsv, runFiles, statisticsCsv } from './export/csv.ts'
 import { canvasBlob, download, fileName, textBlob } from './export/download.ts'
 import {
   defaultScale,
@@ -17,6 +17,7 @@ import {
 import { formatValue } from '../panels/format.ts'
 import { currentQuantity, useViewer } from './store.ts'
 import { useElement, useMeta, useSeries, useStatistics } from './seriesFeed.ts'
+import { nusseltScales } from './statistics.ts'
 import type { Viewer } from './Viewer.ts'
 
 const SELECT = 'h-7 rounded-md border border-border bg-background px-1.5 text-xs'
@@ -74,6 +75,16 @@ export function ExportPanel({ viewer, jobId }: { viewer: Viewer | null; jobId: s
     download(textBlob(csv), fileName(jobId, `coefficients-${element}`, 'csv'))
   }
 
+  // Thermal runs only: the button shows once `heat.csv` has been read.
+  const nuScales = nusseltScales(meta)
+  const hasHeat = !!feed?.buffer.table('heat') && nuScales !== null
+  const saveNusselt = () => {
+    const heat = feed?.buffer.table('heat')
+    const csv = heat && nuScales ? nusseltCsv(heat, nuScales) : null
+    if (!csv) return setMessage('No heat series yet')
+    download(textBlob(csv), fileName(jobId, 'nusselt', 'csv'))
+  }
+
   const saveStatistics = () => {
     if (!stats || !element) return setMessage('No statistics yet (they need the force series)')
     download(
@@ -120,7 +131,7 @@ export function ExportPanel({ viewer, jobId }: { viewer: Viewer | null; jobId: s
       </Section>
       <Section title="Data (CSV)">
         <ul className="flex flex-col gap-0.5 text-xs">
-          {RUN_FILES.map((name) => (
+          {runFiles(meta).map((name) => (
             <li key={name}>
               <a
                 className="underline"
@@ -136,6 +147,11 @@ export function ExportPanel({ viewer, jobId }: { viewer: Viewer | null; jobId: s
           <Button variant="outline" size="sm" onClick={saveCoefficients} data-testid="export-cd">
             C_D, C_L of {element ?? '…'}
           </Button>
+          {hasHeat && (
+            <Button variant="outline" size="sm" onClick={saveNusselt} data-testid="export-nu">
+              Nu of the walls
+            </Button>
+          )}
           <Button variant="outline" size="sm" onClick={saveStatistics} data-testid="export-stats">
             Window statistics
           </Button>

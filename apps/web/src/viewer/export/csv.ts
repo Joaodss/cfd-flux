@@ -1,11 +1,12 @@
-// CSV exports (design proposal §8): the force coefficients, the window statistics and the fields of
-// the frame shown. Pure functions returning text; the run's own files are plain downloads.
+// CSV exports (design proposal §8): the force coefficients, the window statistics, the walls'
+// Nusselt numbers and the fields of the frame shown. Pure functions returning text; the run's own
+// files are plain downloads.
 import type { RunMeta } from '../../api/jobs.ts'
 import { halfToFloat } from '../../frames/half.ts'
 import type { DecodedFrame } from '../../frames/lffr.ts'
 import { coefficients } from '../plots.ts'
 import type { Table } from '../series.ts'
-import type { ForceStatistics } from '../statistics.ts'
+import { nusseltSeries, type ForceStatistics, type NusseltScales } from '../statistics.ts'
 
 /** A number as short CSV text: 7 significant digits, `NaN` for gaps. */
 export function num(v: number | null | undefined): string {
@@ -92,5 +93,29 @@ export function frameCsv(
   return lines.join('\n') + '\n'
 }
 
-/** Files of the run the server stores, offered as they are. */
-export const RUN_FILES = ['forces.csv', 'probes.csv', 'diagnostics.csv', 'meta.json', 'scene.json']
+/**
+ * Step, time and the Nusselt number of every thermal wall: `step,time_s,{element}.nu,…`. Null
+ * without thermal walls.
+ */
+export function nusseltCsv(heat: Table, scales: NusseltScales): string | null {
+  const series = nusseltSeries(heat.columns, heat.data, scales)
+  if (series.length === 0) return null
+  const lines = [['step', 'time_s', ...series.map((s) => `${s.element}.nu`)].join(',')]
+  const [step, time] = heat.data
+  for (let i = 0; i < time.length; i++) {
+    lines.push([step[i], time[i], ...series.map((s) => s.values[i])].map(num).join(','))
+  }
+  return lines.join('\n') + '\n'
+}
+
+/** Files of the run the server stores, offered as they are (`heat.csv` when the run has one). */
+export function runFiles(meta: RunMeta | null): string[] {
+  return [
+    'forces.csv',
+    'probes.csv',
+    'diagnostics.csv',
+    ...(meta?.run.heat ? ['heat.csv'] : []),
+    'meta.json',
+    'scene.json',
+  ]
+}
