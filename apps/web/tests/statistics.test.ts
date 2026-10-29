@@ -10,7 +10,9 @@ import {
   isBenchmark,
   toleranceAt,
 } from '../src/viewer/references.ts'
+import { isOverridden, withScales } from '../src/viewer/scales.ts'
 import { SeriesBuffer } from '../src/viewer/series.ts'
+import { useSeries } from '../src/viewer/seriesFeed.ts'
 import {
   defaultWindow,
   forceStatistics,
@@ -190,5 +192,89 @@ describe('Nusselt number', () => {
     expect(benchmarkOfScene('Heated cavity Ra=1e5 (quick)')).toBe('deVahlDavis1e5')
     expect(check(b, 'nuHot', 4.5417, 0.02)?.pass).toBe(true)
     expect(check(b, 'nuHot', 4.7, 0.02)?.pass).toBe(false)
+  })
+})
+
+describe('reference-scale override', () => {
+  // A synthetic shedding: F_x = 0.3 + 0.01 sin(2·2πft), F_y = 0.02 sin(2πft) N/m, f = 3 Hz.
+  const f = 3
+  const time = Array.from({ length: 4001 }, (_, i) => i / 1000)
+  const forces = {
+    columns: ['step', 'time_s', 'body.fx_N_m', 'body.fy_N_m'],
+    data: [
+      time.map((_, i) => i),
+      time,
+      time.map((t) => 0.3 + 0.01 * Math.sin(4 * Math.PI * f * t)),
+      time.map((t) => 0.02 * Math.sin(2 * Math.PI * f * t)),
+    ],
+  }
+  const run: RunMeta = {
+    ...meta(1.2, 1, 0.1),
+    dimensionless: {
+      reference: {
+        length: 0.1,
+        velocity: 1,
+        reynolds: 100,
+        temperatureDifference: 2,
+        conductivity: 0.025,
+      },
+    },
+  }
+  const window = { from: 1, to: 4 }
+  const stats = (m: RunMeta) => {
+    const c = coefficients(forces, 'body', m)!
+    return forceStatistics(time, c.cd, c.cl, window, m)!
+  }
+
+  it('leaves the run alone when nothing is overridden', () => {
+    expect(withScales(run, {})).toBe(run)
+    expect(isOverridden({})).toBe(false)
+    expect(isOverridden({ velocity: 2 })).toBe(true)
+  })
+
+  it('scales C_D and C_L as 1/(U² L), St as L/U, Re as U L', () => {
+    const a = stats(run)
+    const m = withScales(run, { velocity: 2, length: 0.3 })
+    const b = stats(m)
+    const k = (1 * 1 * 0.1) / (2 * 2 * 0.3)
+    expect(b.cdMean / a.cdMean).toBeCloseTo(k, 12)
+    expect(b.cdMax / a.cdMax).toBeCloseTo(k, 12)
+    expect(b.clAmplitude / a.clAmplitude).toBeCloseTo(k, 12)
+    expect(b.clMax / a.clMax).toBeCloseTo(k, 12)
+    expect(b.frequency).toBe(a.frequency) // a property of the flow, not of the scales
+    expect(b.strouhal! / a.strouhal!).toBeCloseTo(0.3 / 0.1 / 2, 12)
+    expect(m.dimensionless.reference.reynolds).toBeCloseTo(600, 9)
+    // The run's copy is untouched.
+    expect(run.dimensionless.reference).toMatchObject({ length: 0.1, velocity: 1, reynolds: 100 })
+  })
+
+  it('scales Nu as L/ΔT', () => {
+    const heat = {
+      columns: ['step', 'time_s', 'W.q_W_m', 'W.length_m'],
+      data: [
+        [0, 1],
+        [1, 2],
+        [5, 7],
+        [0.1, 0.1],
+      ],
+    }
+    const nu = (m: RunMeta) => {
+      const r = m.dimensionless.reference
+      return wallNusselt(heat.columns, heat.data, window, {
+        length: r.length,
+        conductivity: r.conductivity!,
+        deltaT: r.temperatureDifference,
+      })[0].mean
+    }
+    const m = withScales(run, { length: 0.2, temperatureDifference: 8 })
+    expect(nu(m) / nu(run)).toBeCloseTo(0.2 / 0.1 / (8 / 2), 12)
+  })
+
+  it('is per job: a new feed starts from the run’s scales', () => {
+    const s = useSeries.getState()
+    s.setScales({ velocity: 2 })
+    expect(useSeries.getState().scales).toEqual({ velocity: 2 })
+    s.setFeed(null)
+    expect(useSeries.getState().scales).toEqual({})
   })
 })

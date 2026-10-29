@@ -1,12 +1,13 @@
 // @vitest-environment happy-dom
 // Component tests: the property panels rendered into a simulated DOM (happy-dom), driven like a
 // user would (Testing Library's fireEvent).
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { NumberField } from '../src/components/fields.tsx'
 import { useEditor } from '../src/editor/store.ts'
 import { ElementPanel } from '../src/panels/ElementPanel.tsx'
 import { RunPanel } from '../src/panels/RunPanel.tsx'
+import { ScenePropertiesPanel } from '../src/panels/ScenePropertiesPanel.tsx'
 import { newDocument } from '../src/scene/defaults.ts'
 
 const state = () => useEditor.getState()
@@ -90,5 +91,52 @@ describe('RunPanel', () => {
     expect(screen.getByText('41')).toBeTruthy()
     fireEvent.change(screen.getByTestId('run-backend'), { target: { value: 'cpu' } })
     expect(state().table.run.backend).toBe('cpu')
+  })
+})
+
+describe('Scene tab: domain edges', () => {
+  beforeEach(() => {
+    state().load(newDocument(40, 20))
+    state().setPanelTab('scene')
+  })
+
+  it('shows each edge kind, and makes an edge an inlet in one click', () => {
+    render(<ScenePropertiesPanel />)
+    for (const side of ['left', 'right', 'bottom', 'top']) {
+      expect(screen.getByTestId(`edge-${side}-summary`).textContent).toBe('wall')
+    }
+    const inlet = screen.getByTestId('make-inlet-left') as HTMLButtonElement
+    fireEvent.click(inlet)
+    expect(state().table.elements.map((e) => e.name)).toEqual(['Inlet 1'])
+    expect(screen.getByTestId('edge-left-summary').textContent).toBe('Inlet 1')
+    expect(inlet.disabled).toBe(true) // already an inlet
+    expect(inlet.title).toBe('Already an inlet: Inlet 1')
+    // The name opens the element in the Element tab.
+    fireEvent.click(screen.getByTestId('edge-left-element-1'))
+    expect(state().panelTab).toBe('element')
+    state().undo()
+    expect(state().table.elements).toHaveLength(0)
+  })
+
+  it('makes the channel walls one wall element, until a new one is started', () => {
+    render(<ScenePropertiesPanel />)
+    fireEvent.click(screen.getByTestId('make-wall-bottom'))
+    fireEvent.click(screen.getByTestId('make-wall-top'))
+    expect(screen.getByTestId('edge-top-summary').textContent).toBe('Wall 1')
+    const top = screen.getByTestId('make-wall-top') as HTMLButtonElement
+    expect(top.disabled).toBe(true)
+    expect(top.title).toMatch(/^Already Wall 1/)
+    act(() => state().setActiveElement('wall', null)) // "+" or N in the palette
+    expect(top.disabled).toBe(false)
+    expect(top.title).toMatch(/a new wall/)
+  })
+
+  it('disables the buttons of periodic edges', () => {
+    render(<ScenePropertiesPanel />)
+    fireEvent.change(screen.getByTestId('edge-top-kind'), { target: { value: 'periodic' } })
+    expect(state().table.grid.edges).toMatchObject({ top: 'periodic', bottom: 'periodic' })
+    expect(screen.getByTestId('edge-bottom-summary').textContent).toBe('periodic')
+    expect((screen.getByTestId('make-outlet-bottom') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByTestId('make-outlet-left') as HTMLButtonElement).disabled).toBe(false)
   })
 })

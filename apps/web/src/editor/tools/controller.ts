@@ -3,6 +3,7 @@
 // (undo/redo, clipboard, element and probe commands, shortcuts).
 import type { SceneTable } from '../../scene/io.ts'
 import { KIND_CELL } from '../colours.ts'
+import { INWARD, paintEdge, SIDE_NAMES, WALL_EDGES, type EdgeAction, type Side } from '../edges.ts'
 import { elementLabel, isElementKind, plainPaint, validElement } from '../elements.ts'
 import { Stroke } from '../history.ts'
 import { CellType } from '../layers.ts'
@@ -227,6 +228,43 @@ export function deleteElement(id: number): void {
     tableBeforeCreate = null
     useEditor.getState().commitTable(label, before)
   }
+  changed()
+}
+
+/**
+ * "Make wall/inlet/outlet" on a domain edge, painting the cells `repaints` allows (see edges.ts).
+ * A wall uses the active wall element, like the pencil (so the bottom and top edges become one
+ * element; `N` or + starts another, e.g. a moving lid); an inlet or outlet is always a new element,
+ * and an inlet blows into the domain. With the channel walls in place, an inlet or outlet takes
+ * the same cells as a drag along the edge between them. An element's creation and the cells are
+ * one undo entry; the Scene tab stays open (for the next edge).
+ */
+export function makeEdge(side: Side, kind: EdgeAction): void {
+  if (active) return
+  selectTool.drop()
+  const s = useEditor.getState()
+  if ((s.table.grid.edges ?? WALL_EDGES)[side] === 'periodic') return
+  const before = s.table
+  const tab = s.panelTab
+  const reuse =
+    kind === 'wall' ? validElement(s.table.elements, 'wall', s.activeElement.wall) : null
+  const id = reuse ?? s.createElement(kind)
+  if (id === null) return
+  s.editTable((t) => {
+    const e = t.elements.find((x) => x.id === id)
+    if (e?.kind === 'inlet' && e.velocity.type === 'uniform') {
+      const speed = Math.hypot(...e.velocity.value)
+      const [nx, ny] = INWARD[side]
+      e.velocity.value = [nx * speed, ny * speed]
+    }
+  })
+  s.setPanelTab(tab)
+  const stroke = new Stroke(s.layers)
+  paintEdge(stroke, side, kind, id)
+  if (reuse === null) tableBeforeCreate = before
+  const tiles = stroke.finish()
+  if (tiles.size > 0) commit({ label: `${SIDE_NAMES[side]} edge: ${kind}`, tiles })
+  else dropUnusedElement() // nothing on the edge to repaint
   changed()
 }
 

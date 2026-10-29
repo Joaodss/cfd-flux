@@ -9,6 +9,7 @@ import { COLORMAPS, colormap, cssGradient } from './colormaps.ts'
 import { RANGE_MODES, ticks, type RangeMode } from './ranges.ts'
 import { ARROW_SPACING, arrowScale } from './vectors.ts'
 import type { ReleaseMode } from './simulation.ts'
+import { SettingsPopover } from './SettingsPopover.tsx'
 import {
   colormapOf,
   currentQuantity,
@@ -39,6 +40,9 @@ export function ViewerToolbar(props: { viewer: Viewer | null }) {
     return (
       <div className="flex h-10 shrink-0 items-center border-b border-border px-3 text-xs text-muted-foreground">
         Waiting for the first frame…
+        <span className="ml-auto">
+          <SettingsPopover />
+        </span>
       </div>
     )
   }
@@ -227,6 +231,7 @@ export function ViewerToolbar(props: { viewer: Viewer | null }) {
       <Button variant="ghost" size="sm" className="ml-auto" onClick={s.fit} title="Fit the domain">
         <Maximize /> Fit
       </Button>
+      <SettingsPopover />
     </div>
   )
 }
@@ -283,7 +288,26 @@ export function Legend() {
       {header && (
         <span data-testid="viewer-frame">
           t = {formatValue(header.simTime)} s · frame {header.frameIndex} · step{' '}
-          {header.step.toLocaleString('en')}
+          {header.step.toLocaleString('en')} ·{' '}
+          <span
+            data-testid="viewer-size"
+            title={
+              s.sharpen.state === 'on'
+                ? 'Paused and zoomed in: the frame at full resolution'
+                : 'The frame as streamed (the viewer settings choose its resolution)'
+            }
+          >
+            {s.sharpen.state === 'on'
+              ? `${s.sharpen.width} × ${s.sharpen.height} (full resolution)`
+              : `${header.width} × ${header.height}`}
+          </span>
+          {s.sharpen.state === 'loading' && ' · sharpening…'}
+          {s.sharpen.state === 'skipped' && (
+            <span className="text-amber-500" data-testid="viewer-sharpen-note">
+              {' '}
+              · {s.sharpen.note}
+            </span>
+          )}
         </span>
       )}
       {stats && stats.nonFinite > 0 && (

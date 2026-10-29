@@ -4,6 +4,7 @@
 import { create } from 'zustand'
 import { fitView, stepZoom, zoomAt, type View } from '../editor/view.ts'
 import type { FrameHeader } from '../frames/lffr.ts'
+import type { SharpenState } from './sharpen.ts'
 import type { ReleaseMode } from './simulation.ts'
 import { quantitiesOf, type Quantity } from './quantities.ts'
 import { accumulate, rangeFor, type RangeMode, type Seen } from './ranges.ts'
@@ -44,6 +45,8 @@ export interface ViewerState {
   viewport: { width: number; height: number }
   /** The cell under the pointer and the shown quantity's value there. */
   cursor: { cell: [number, number]; value: number | null } | null
+  /** The paused frame at full resolution ("sharpen", the Viewer drives it). */
+  sharpen: SharpenState
 
   reset(): void
   setGrid(grid: ViewerState['grid']): void
@@ -66,6 +69,7 @@ export interface ViewerState {
   fit(): void
   setCursor(cursor: ViewerState['cursor']): void
   setTimeline(patch: Partial<Timeline>): void
+  setSharpen(sharpen: SharpenState): void
 }
 
 const INITIAL = {
@@ -89,6 +93,7 @@ const INITIAL = {
   view: { zoom: 1, offsetX: 0, offsetY: 0 },
   viewport: { width: 0, height: 0 },
   cursor: null,
+  sharpen: { state: 'off' },
 } satisfies Partial<ViewerState>
 
 export const useViewer = create<ViewerState>()((set, get) => ({
@@ -162,6 +167,7 @@ export const useViewer = create<ViewerState>()((set, get) => ({
   },
   setCursor: (cursor) => set({ cursor }),
   setTimeline: (patch) => set((s) => ({ timeline: { ...s.timeline, ...patch } })),
+  setSharpen: (sharpen) => set({ sharpen }),
 }))
 
 function sameFields(quantities: Quantity[], header: FrameHeader): boolean {

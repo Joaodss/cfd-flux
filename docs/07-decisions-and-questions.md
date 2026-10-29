@@ -200,7 +200,10 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   the editor needs the local server for checks and estimates — compiling `cfd-core` to WASM stays the option for a
   serverless demo (ADR-010). Contract tests keep the two sides in step: an editor-written scene file read by
   `cfd-core`, a sample of the browser's deflate decoded in Rust, every issue code worded by the editor, generated
-  types and library checked as up to date. The acceptance scenario is a Playwright test in CI.
+  types and library checked as up to date. The acceptance scenario is a Playwright test in CI. *Amended 2026-10-27
+  (Q14, #23):* the overlay also draws the domain edges (a band per stretch of equal boundary, from `grid.edges` and the
+  edge cells), and "Make wall/inlet/outlet" on an edge is an ordinary `Stroke` whose entry carries the element's
+  creation (walls reuse the active wall element, as the pencil does).
 
 ### ADR-031 — Phase 5 viewer: decoding in a worker, one viewer format, series from the server, statistics in TypeScript, the app served by `cfd-server` · *Accepted (2026-10-22)*
 - **Context:** Phase 5 turns the job view into the viewer of the MVP (FR-20–FR-24): live and stored frames, a timeline,
@@ -221,7 +224,14 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   one worker did ≈ 3.5 frames/s at 1024²; frames now go to a **pool of 1–4 decode workers** (by the machine's
   threads, the next to the least busy; frames may come back out of order, the viewer looks at their index), the
   streamlines to a worker of their own, and playback prefetches one frame more than there are workers
-  ([benchmarks](benchmarks.md), "After the fixes for #24 and #25").
+  ([benchmarks](benchmarks.md), "After the fixes for #24 and #25"). *Amended 2026-10-27 (#17, #18):* the
+  viewer format's `maxSize` (256/512/1024/2048/full) and the cache budget (128 MiB–4 GiB) are **settings**
+  remembered per browser in `localStorage`; another `maxSize` reconnects the stream, empties the cache and reloads
+  the playhead's frame (frames of the old format still in a worker or a fetch are dropped), a smaller budget evicts
+  at once. **Sharpen:** a paused frame zoomed in past the viewer format (a block wider than one device pixel) is
+  fetched once at full resolution — `frames/{n}` without `maxSize`, whose values are the f16 rounding of the
+  stored f32 (a Rust test) — and drawn with a per-cell fluid fraction; not a second cache: one frame, dropped when
+  playing, scrubbing or zooming out, one request at a time, skipped past the cache budget.
 - **Rendering.** WebGL2 only (no WebGPU path in Phase 5): `R16F`/`RG16F` textures divided by each block's fluid
   fraction, colour maps **generated from Rust's `Colormap`** (the CLI's PNGs and the viewer agree), automatic,
   symmetric (±p99) or manual ranges, instanced arrows read from the velocity texture, streamlines (RK4 on the unit
@@ -242,7 +252,9 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   (`cfd_core::heat`: the heat through each fixed-temperature or flux wall, from the stored frame's temperature) is
   written by the **output thread**, so it is the same for every engine; adiabatic walls, inlets and outlets are not
   counted. `Scene.reference` (optional length, velocity, ΔT) gives Re, Ra and the force coefficients their scales
-  without changing the time step.
+  without changing the time step. *Amended 2026-10-27 (#19):* the Statistics tab overrides them **for the session**
+  (not saved; reset with the job, an "overridden" marker and Reset) through a modified copy of `meta.json`'s
+  reference, so C_D, C_L, St, Nu, the plots, the CSV exports and the tolerance's cells per length follow together.
 - **Statistics in TypeScript, references from Rust.** St, C_D and C_L statistics and the Nusselt averages are computed
   in the browser over a window (default: the second half of the run so far; draggable on a plot). Rust fixtures keep
   the two implementations together: a trimmed real `forces.csv` and the frequency `cfd-verify` finds in it (St agrees
@@ -302,7 +314,7 @@ Answers to these questions can change priorities. Record the answer and the date
 | Q11 | Prior experience with Rust, GPUs and CFD (to calibrate documentation detail and pace)? | **Answered (2026-10-09):** strong CFD experience; little Rust and GPU experience (learns fast); C# background. → Phase 0 includes learning prototypes (see the plan) |
 | Q12 | Project name: the repository is `cfd-flux`, the docs and packages say `live-fluids`. Which one is final? | **Answered (2026-10-13):** **`cfd-flux`** (the repository name); **renamed 2026-10-18** in the docs, crate and package descriptions, the web app, the license notice and the server's database file (`<data>/cfd-flux.db`); session logs keep the old name as written, and the local folder is the author's to rename |
 | Q13 | Frame encoding: the pure-Rust `ruzstd` encoder (ADR-007) takes 12.6 ms per stored f32 frame of the 442 × 84 cylinder (4 values per cell) and 7.2 ms per f16 stream frame, for a gain of only 3–4% (594 → 574 kB, 297 → 286 kB: the low mantissa bits of physical fields are noise). This caps the server at ≈ 37 frames/s there (ADR-025) and would cost ≈ 0.35 s per stored 1024² frame. Options: no compression for stream frames, a byte-shuffle filter before zstd (as HDF5/Blosc do for floats), the C `zstd` crate, f16 storage by default. | **Answered (2026-10-13): byte shuffle + `lz4_flex`** (pure Rust) for stored and streamed frames, with a `codec` field in a v2 frame header (v1 zstd frames stay readable); **implemented 2026-10-16** (LFFR v2, ADR-007). Measured on 2026-10-13 ([benchmarks](benchmarks.md#frame-encoding-open-question-q13--amd-ryzen-7-3700x-2026-10-13)): a byte shuffle makes every codec 25–35% smaller; shuffle + `lz4_flex` (pure Rust) encodes a 1024² f32 frame in 25 ms to 64% (now: 305 ms, 88%), shuffle + C `zstd` level 1 in 34 ms to 60%. |
-| Q14 | Editor discoverability (the Phase 4 hand-timed acceptance took 9 min 30 s against < 2 min): the author drew the channel's walls, inlet and outlet by hand before finding out that the domain edges are walls already and that an edge can be painted as an inlet/outlet in one action. Options: **A** — a "Channel" starting template in *New scene* next to the empty one (edges walls, a parabolic inlet on the left edge, a pressure outlet on the right, the elements created); **B** — visible edge presets: the canvas draws the four domain edges with their current kind (wall/periodic), and the Scene tab gets per-edge buttons "Make inlet" / "Make outlet" that paint the edge column and create the element in one undo entry; **C** — both, plus a one-line hint in the status bar ("edges are walls; drag along an edge to make it an inlet"). | **Answered (2026-10-21): B**, visible edge presets — the canvas shows each domain edge's kind, and the Scene tab gets per-edge "Make inlet" / "Make outlet" actions that paint the edge column and create the element in one undo entry (it fixes the cause, the edges' invisible state, for every scene). A only if a re-timed run is still slow. To implement after the Phase 5 acceptance, then the author re-times the Phase 4 run. |
+| Q14 | Editor discoverability (the Phase 4 hand-timed acceptance took 9 min 30 s against < 2 min): the author drew the channel's walls, inlet and outlet by hand before finding out that the domain edges are walls already and that an edge can be painted as an inlet/outlet in one action. Options: **A** — a "Channel" starting template in *New scene* next to the empty one (edges walls, a parabolic inlet on the left edge, a pressure outlet on the right, the elements created); **B** — visible edge presets: the canvas draws the four domain edges with their current kind (wall/periodic), and the Scene tab gets per-edge buttons "Make inlet" / "Make outlet" that paint the edge column and create the element in one undo entry; **C** — both, plus a one-line hint in the status bar ("edges are walls; drag along an edge to make it an inlet"). | **Answered (2026-10-21): B**, visible edge presets — the canvas shows each domain edge's kind, and the Scene tab gets per-edge "Make inlet" / "Make outlet" actions that paint the edge column and create the element in one undo entry (it fixes the cause, the edges' invisible state, for every scene). A only if a re-timed run is still slow. To implement after the Phase 5 acceptance, then the author re-times the Phase 4 run. **Implemented 2026-10-27** ([#23](https://github.com/Joaodss/cfd-flux/issues/23)): a band outside each edge, coloured and named (wall, periodic, or the inlet/outlet drawn on it); "Domain edges" in the Scene tab with "Make inlet" / "Make outlet" (the edge's cells except drawn walls and heat sources; an inlet points into the domain; one undo entry). **Re-timed run (2026-10-27): 2 min 03 s** (was 9 min 30 s), on the author's second attempt — the first went into finding which properties to change. The author suggested an automatic wall along an edge as well (the two wall rectangles were the remaining drawing): **added 2026-10-27 as "Make wall"**, which paints the edge with the active wall element (one element for both channel walls; a new one for a moving lid or a heated side, as the cavity scenes need), keeping inlets, outlets and heat sources. Not re-timed by hand. |
 
 ### License options (Q10)
 

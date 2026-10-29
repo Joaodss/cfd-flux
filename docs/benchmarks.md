@@ -206,6 +206,70 @@ while the pane was hidden: the renderer then runs at a lower priority, so these 
   384 with the footer instead of 884 × 216). Not yet re-judged by eye: the author's verdict on the same cylinder export
   is pending.
 
+### Re-measured on `master` after #28 (same day, evening)
+
+A clean build of `master` at `8715bb3` (`npm run build`, release `cfd-server --web-dir apps/web/dist`, a fresh
+`--data` directory), the same machine, driver 617.42 and browser pane (Chromium 152.0.7977.167, ANGLE on D3D11, pane
+visible, display 50 Hz). New runs of both cavities (`cavity-scene … 1024 3 0.02` and `… 1023 3 0.02`, 150 and 151
+frames) and of the cylinder example (1,000 frames). The protocol is the one above.
+
+**Run → first frame shown** (ms after pressing Run; the first job of the server process in brackets):
+
+| Scene | Shown | Painted | Live frames shown | Before (morning) |
+|---|---:|---:|---:|---|
+| Cavity 1024 × 1025 (viewer 512²) | 222, 251 (cold: 554) | 251–283 (cold: 586) | 150 of 150 | 242–339 ms, 150 of 150 |
+| Cavity 1023 × 1024 (viewer 1024²) | 277, 292, 354 | 313–390 | **150 of 151** | 392–440 ms, 123–124 of 151 |
+
+- A true 1024² run is now on screen ≈ 25 % sooner, and live it shows every frame but the first: the worker
+  (≈ 70 ms per frame) now keeps up with the solver (one frame every ≈ 200 ms).
+
+**Playback from stored frames** (page reloaded for an empty cache, frame 0, 60 fps asked, display 50 Hz):
+
+| Run | Frames/s shown | Frames shown | Gap median / p95 | Page frame interval (median / p95 / max) | Before |
+|---|---:|---:|---:|---:|---:|
+| Cavity 1024 × 1025 (viewer 512²) | **47.0, 50.0, 50.0** | 126–127 of 150 | 20.0–20.1 / 20.2–35.9 ms | 20.0 / 20.1 / 20.2–20.3 ms | 12.4 |
+| Cavity 1023 × 1024 (viewer 1024²) | **26.8, 27.5, 28.3** | 127 of 151 in 4.5–4.7 s | 24.7–25.9 / 79–95 ms | 20.0 / 20.1–20.2 / 20.3–20.5 ms | 3.3 |
+| Same, all four overlays on (dye on, not painted) | **22.4** (one run) | 126 of 151 in 5.6 s | 36.9 / 120 ms | 20.0 / 20.2 / 20.3 ms | 3.0 |
+
+- **#24's target (≥ 20 frames/s at 1024²) holds on a clean build**, with and without overlays (#28 measured
+  28.5–29.3 without). A 512² viewer frame now plays at the display's own rate (50 Hz). The page never stuttered.
+- Per 1024² frame (frame 20, 4.27 MB as served): server 35 ms (`curl`), and in Node 24 `decodeFrame` 18.6 ms and
+  `frameStats` 35.5 ms (before: 42 and 235 ms). This `frameStats` time is with every cell fluid (fraction 1), so it
+  is not the same input as #28's 25.4 ms (the lid row solid).
+
+**Video export.** The cylinder export is the same as in the morning (frames 600–750 = 12–15 s, vorticity, all four
+overlays) with the panel's new defaults: real time (50 frames/s), *High quality*, 4 px per cell = 1768 × 384. The
+cavity export repeats #28's (1023 × 1024, frames 0–50, vorticity, 1 px per cell = 1022 × 1072). Lengths were read
+from a `<video>` element in the page.
+
+| Export | Path | Took | File | Length (expected) | Before |
+|---|---|---:|---:|---:|---|
+| Cylinder | WebCodecs → MP4 | 6.0 s | 19.0 MB (50 Mbit/s, the cap) | **3.020 s** (3.02) | 5.6 s, 838 kB, 5.03 s |
+| Cylinder | `MediaRecorder` → WebM | 10.0 s | 27.7 MB (≈ 75 Mbit/s) | **2.97 s** (3.02, −1.7 %) | 12.6 s, 693 kB, 12.58 s |
+| Cavity | WebCodecs → MP4, ×5 | 5.5–5.9 s (first), 0.7 s (frames cached) | 1.11 MB (8.7 Mbit/s) | 1.020 s every time | #28: 5.0 s, 2.8 MB |
+| Cavity | `MediaRecorder` → WebM, ×5 | 6.0 s (first), 1.4 s (cached) | 0.21–0.27 MB | first on a page **0.925, 0.945 s (−7 to −9 %)**; cached 1.011–1.023 s | #28: 1.005 s |
+
+- **The clock is right.** 3 s of flow is 3.02 s of MP4, and 2.97 s of WebM. Both are 4× the morning's picture size,
+  at 25–40× the bit rate. `MediaRecorder` does not honour its bit rate: it used ≈ 75 Mbit/s against the 50 asked.
+- **Exporting is bound by loading frames.** The export waits for each frame in turn, ≈ 110 ms per 1024² frame from
+  the server (≈ 9 frames/s), where playback has several in flight. With the frames in the cache, 51 frames take
+  0.7 s.
+- **WebM length:** within 1 % when the frames come from the cache, but 7–9 % short when they load from the server
+  (the first export on a page). The recorder's pause and resume around a slow load lose time from the video. The
+  panel says the length is approximate.
+- **A lost WebGL context is not survived.** Once, the viewer's context was lost after a WebM export. It did not
+  happen again in eight exports back to back (four MP4, four WebM). The viewer has no handler for
+  `webglcontextlost`, so the context is never restored. The canvas stays blank until a reload, and every export then
+  fails with "Cannot read properties of null (reading '0')": `FieldRenderer.maxImage` reads `gl.getParameter` on the
+  lost context. This was reproduced with `WEBGL_lose_context` (`loseContext()`, then `restoreContext()`).
+- **Judged by eye** (the author, the same desktop player, full screen): both cylinder videos look good, with much
+  better quality than in the morning and much more fluid motion; #25 is settled. One remark: the particles clutter
+  the picture, and where they are dense the flow is hard to read. Each particle is drawn `max(2, 2 × dpr)` pixels
+  wide (`Viewer.ts`), and a 4 px per cell export draws with dpr 4, so every particle is an 8 × 8 px square. There is
+  no control for how many particles there are or how large they are drawn. Smaller or fewer particles would help.
+- Follow-up issues with these numbers: the particles' density and size are #29 (medium), the lost WebGL context #30
+  (medium), and the export loading frames one at a time, with the short WebM, #31 (low).
+
 ### After the fixes for #30 and #31 (2026-10-29)
 
 Same machine, browser (Chromium 152, ANGLE on D3D11) and release `cfd-server` on CUDA; a new 1023 × 1024 cavity run

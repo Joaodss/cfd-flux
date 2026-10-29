@@ -16,8 +16,11 @@ import { decodeFrame, type DecodedFrame } from './lffr.ts'
 
 export type Request =
   | { id: number; kind: 'decode'; buffer: ArrayBuffer }
-  /** Fetches a stored frame (same origin, e.g. `/api/simulations/{id}/frames/{n}?…`) and decodes it. */
-  | { id: number; kind: 'fetch'; url: string }
+  /**
+   * Fetches a stored frame (same origin, e.g. `/api/simulations/{id}/frames/{n}?…`) and decodes
+   * it; `stats: false` leaves the statistics out (a full-resolution frame shown only paused).
+   */
+  | { id: number; kind: 'fetch'; url: string; stats?: boolean }
   /**
    * The fluid fraction per block of the frames to come (`null`: every block is fluid), used by
    * their statistics. No answer; later requests see it (messages are handled in order).
@@ -102,7 +105,7 @@ async function decodeRequest(
       buffer = req.buffer
     }
     const frame = decodeFrame(buffer)
-    const stats = frameStats(frame, fraction)
+    const stats = req.kind === 'fetch' && req.stats === false ? {} : frameStats(frame, fraction)
     return { response: { id: req.id, ok: true, frame, stats }, transfer: transferables(frame) }
   } catch (e) {
     return { response: { id: req.id, ok: false, error: (e as Error).message }, transfer: [] }

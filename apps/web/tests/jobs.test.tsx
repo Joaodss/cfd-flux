@@ -9,6 +9,13 @@ import { parseRoute, routeHash } from '../src/app/route.ts'
 import { runScene } from '../src/app/run.ts'
 import { useEditor } from '../src/editor/store.ts'
 import { newDocument } from '../src/scene/defaults.ts'
+import {
+  DEFAULT_SETTINGS,
+  loadSettings,
+  maxSizeParam,
+  saveSettings,
+  useViewerSettings,
+} from '../src/viewer/settings.ts'
 
 const state = () => useEditor.getState()
 
@@ -199,5 +206,61 @@ describe('JobView', () => {
     const socket = FakeSocket.last
     unmount()
     expect(socket.closed).toBe(true)
+  })
+
+  it('asks for the chosen viewer format and reconnects when it changes', () => {
+    useViewerSettings.getState().setMaxSize(256)
+    render(<JobView id="job-1" />)
+    const first = FakeSocket.last
+    expect(first.url).toMatch(/\/stream\?maxSize=256$/)
+    first.send({ type: 'hello', job })
+    act(() => useViewerSettings.getState().setMaxSize('full'))
+    expect(first.closed).toBe(true)
+    // The old stream is detached: nothing it says reaches the view any more.
+    expect(first.onmessage).toBeNull()
+    expect(FakeSocket.last).not.toBe(first)
+    expect(FakeSocket.last.url).toMatch(/\/stream\?maxSize=16384$/)
+    // The job's state survives the reconnect.
+    expect(screen.getByTestId('job-status').textContent).toBe('running')
+    act(() => useViewerSettings.getState().setMaxSize(1024))
+  })
+})
+
+describe('viewer settings', () => {
+  const store = (initial: Record<string, string> = {}) => {
+    const items = new Map(Object.entries(initial))
+    return {
+      getItem: (k: string) => items.get(k) ?? null,
+      setItem: (k: string, v: string) => void items.set(k, v),
+      items,
+    }
+  }
+
+  it('are remembered, and checked when read back', () => {
+    const s = store()
+    expect(loadSettings(s)).toEqual(DEFAULT_SETTINGS)
+    saveSettings(s, { maxSize: 'full', budget: 2048 * 2 ** 20 })
+    expect(loadSettings(s)).toEqual({ maxSize: 'full', budget: 2048 * 2 ** 20 })
+    const bad = store({ 'cfd-flux.viewer.settings': '{"maxSize": 300, "budget": "lots"}' })
+    expect(loadSettings(bad)).toEqual(DEFAULT_SETTINGS)
+    expect(loadSettings(store({ 'cfd-flux.viewer.settings': 'not json' }))).toEqual(
+      DEFAULT_SETTINGS,
+    )
+    expect(maxSizeParam('full')).toBe(16384)
+    expect(maxSizeParam(512)).toBe(512)
+  })
+
+  it('survive a storage that throws', () => {
+    const throwing = {
+      getItem: () => {
+        throw new Error('denied')
+      },
+      setItem: () => {
+        throw new Error('quota')
+      },
+    }
+    expect(loadSettings(throwing)).toEqual(DEFAULT_SETTINGS)
+    expect(() => saveSettings(throwing, DEFAULT_SETTINGS)).not.toThrow()
+    expect(loadSettings(null)).toEqual(DEFAULT_SETTINGS)
   })
 })

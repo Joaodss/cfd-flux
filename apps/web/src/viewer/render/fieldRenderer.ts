@@ -69,6 +69,11 @@ interface Gpu {
   /** The velocity, for the arrows (the shown field may be another one). */
   velocityTex: WebGLTexture
   fractionTex: WebGLTexture
+  /**
+   * The fraction of a full-resolution field: 1 at fluid cells, 0 elsewhere (built on the first
+   * sharpened frame), so bilinear samples next to a wall are still means over fluid cells.
+   */
+  cellFractionTex: WebGLTexture
   lutTex: WebGLTexture
   vectorLayer: VectorLayer
   lineLayer: LineLayer
@@ -104,6 +109,7 @@ function createGpu(gl: WebGL2RenderingContext): Gpu {
     fieldTex: filteredTexture(gl),
     velocityTex: filteredTexture(gl),
     fractionTex: filteredTexture(gl),
+    cellFractionTex: filteredTexture(gl),
     lutTex: filteredTexture(gl),
     vectorLayer: new VectorLayer(gl),
     lineLayer: new LineLayer(gl),
@@ -118,6 +124,13 @@ export class FieldRenderer {
   private readonly gl: WebGL2RenderingContext
   private gpu: Gpu
   private hasVelocity = false
+  /**
+   * The full-resolution fraction (`Gpu.cellFractionTex`) is built from these cells on the first
+   * sharpened frame.
+   */
+  private cellFraction: { cellType: Uint8Array; built: boolean } | null = null
+  /** The field texture holds a full-resolution frame (sharpened), not the frames' blocks. */
+  private full = false
   private grid: [number, number] | null = null
   /** The field texture's size in blocks and the box factor k. */
   private field: { width: number; height: number; k: number } | null = null
@@ -157,6 +170,8 @@ export class FieldRenderer {
     this.grid = null
     this.field = null
     this.nearest = false
+    this.cellFraction = null
+    this.full = false
     this.hasField = false
     this.hasVelocity = false
   }
@@ -265,6 +280,8 @@ export class FieldRenderer {
     )
     this.grid = [width, height]
     this.field = { ...blocks }
+    this.cellFraction = { cellType, built: false }
+    this.full = false
     this.hasField = false
     this.hasVelocity = false
     this.gpu.sim.setCells([width, height], blocks, spawns)
@@ -272,12 +289,38 @@ export class FieldRenderer {
 
   /**
    * Uploads a field of the current frame: f16 bits straight into an R16F/RG16F texture (WebGL2
-   * filters half floats linearly without extensions), or f32 values into R32F/RG32F.
+   * filters half floats linearly without extensions), or f32 values into R32F/RG32F. `full`: a
+   * full-resolution frame (one value per cell, the grid's size) instead of the frames' blocks;
+   * the overlays keep the blocks' velocity and fraction.
    */
-  setField(field: DecodedField, width: number, height: number): void {
+  setField(field: DecodedField, width: number, height: number, full = false): void {
+    if (full) this.buildCellFraction()
     this.upload(this.gpu.fieldTex, field, width, height)
+    this.full = full
     this.filter(field.dtype === 'f32' || this.nearest)
     this.hasField = true
+  }
+
+  private buildCellFraction(): void {
+    const c = this.cellFraction
+    if (!c || c.built || !this.grid) return
+    const { gl } = this
+    const bytes = new Uint8Array(c.cellType.length)
+    for (let i = 0; i < bytes.length; i++) bytes[i] = c.cellType[i] === 0 ? 255 : 0
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
+    gl.bindTexture(gl.TEXTURE_2D, this.gpu.cellFractionTex)
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.R8,
+      this.grid[0],
+      this.grid[1],
+      0,
+      gl.RED,
+      gl.UNSIGNED_BYTE,
+      bytes,
+    )
+    c.built = true
   }
 
   /** Uploads the frame's velocity for the arrows. */
@@ -336,9 +379,11 @@ export class FieldRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.gpu.fieldTex)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f)
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f)
-    gl.bindTexture(gl.TEXTURE_2D, this.gpu.fractionTex)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f)
+    for (const t of [this.gpu.fractionTex, this.gpu.cellFractionTex]) {
+      gl.bindTexture(gl.TEXTURE_2D, t)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, f)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, f)
+    }
   }
 
   resize(cssWidth: number, cssHeight: number, dpr: number): void {
@@ -378,11 +423,12 @@ export class FieldRenderer {
     gl.bindVertexArray(this.gpu.vao)
     bind(gl, 0, this.gpu.cellTex, u.u_cellType)
     bind(gl, 1, this.gpu.fieldTex, u.u_field)
-    bind(gl, 2, this.gpu.fractionTex, u.u_fraction)
+    bind(gl, 2, this.full ? this.gpu.cellFractionTex : this.gpu.fractionTex, u.u_fraction)
     bind(gl, 3, this.gpu.lutTex, u.u_lut)
     gl.uniform1i(u.u_hasField, this.hasField ? 1 : 0)
     gl.uniform2i(u.u_grid, grid[0], grid[1])
-    gl.uniform2f(u.u_fieldCells, field.width * field.k, field.height * field.k)
+    if (this.full) gl.uniform2f(u.u_fieldCells, grid[0], grid[1])
+    else gl.uniform2f(u.u_fieldCells, field.width * field.k, field.height * field.k)
     gl.uniform1i(u.u_component, COMPONENT[style.component])
     gl.uniform2f(u.u_range, style.range[0], style.range[1])
     const zoom = view.zoom * dpr
@@ -419,7 +465,14 @@ export class FieldRenderer {
   dispose(): void {
     const { gl } = this
     const g = this.gpu
-    for (const t of [g.cellTex, g.fieldTex, g.velocityTex, g.fractionTex, g.lutTex]) {
+    for (const t of [
+      g.cellTex,
+      g.fieldTex,
+      g.velocityTex,
+      g.fractionTex,
+      g.cellFractionTex,
+      g.lutTex,
+    ]) {
       gl.deleteTexture(t)
     }
     gl.deleteProgram(g.program)

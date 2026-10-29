@@ -16,7 +16,7 @@ import {
 } from './export/video.ts'
 import { formatValue } from '../panels/format.ts'
 import { currentQuantity, useViewer } from './store.ts'
-import { useElement, useSeries, useStatistics } from './seriesFeed.ts'
+import { useElement, useMeta, useSeries, useStatistics } from './seriesFeed.ts'
 import type { Viewer } from './Viewer.ts'
 
 const SELECT = 'h-7 rounded-md border border-border bg-background px-1.5 text-xs'
@@ -49,6 +49,7 @@ export function ExportPanel({ viewer, jobId }: { viewer: Viewer | null; jobId: s
   const feed = useSeries((s) => s.feed)
   const { element } = useElement()
   const stats = useStatistics()
+  const meta = useMeta() // the reference scales in use, like the Statistics tab's
   const frame = index ?? 0
   const field = quantity?.key.replace('.', '-') ?? 'field'
 
@@ -68,7 +69,6 @@ export function ExportPanel({ viewer, jobId }: { viewer: Viewer | null; jobId: s
 
   const saveCoefficients = () => {
     const forces = feed?.buffer.table('forces')
-    const meta = feed?.meta
     const csv = forces && meta && element ? coefficientsCsv(forces, element, meta) : null
     if (!csv) return setMessage('No force series for that element yet')
     download(textBlob(csv), fileName(jobId, `coefficients-${element}`, 'csv'))

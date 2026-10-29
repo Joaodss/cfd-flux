@@ -130,6 +130,34 @@ async fn a_job_runs_to_completion_and_its_results_are_served() {
         assert_eq!(f.job_id, id);
         assert!(f.fields.iter().all(|f| f.desc.dtype == expected));
     }
+    // Without `maxSize`, f16 frames (the viewer's full-resolution "sharpen", with or without
+    // `fields`) hold every cell: each value is the f16 rounding of the stored f32 value.
+    let frame = |query: &'static str| {
+        let url = s.url(&format!("/api/simulations/{id}/frames/4{query}"));
+        async move {
+            let r = client().get(url).send().await.unwrap();
+            assert_eq!(r.status(), StatusCode::OK);
+            Frame::decode(&r.bytes().await.unwrap()).unwrap()
+        }
+    };
+    let stored = frame("").await;
+    for query in ["?dtype=f16", "?dtype=f16&fields=velocity,pressure"] {
+        let half = frame(query).await;
+        assert_eq!((half.width, half.height), (stored.width, stored.height));
+        assert!(!half.fields.is_empty());
+        for f in &half.fields {
+            let s = stored
+                .fields
+                .iter()
+                .find(|s| s.desc.name == f.desc.name)
+                .unwrap();
+            assert_eq!(f.desc.dtype, Dtype::F16);
+            assert_eq!(f.values.len(), s.values.len());
+            for (h, v) in f.values.iter().zip(&s.values) {
+                assert_eq!(h.to_bits(), half::f16::from_f32(*v).to_f32().to_bits());
+            }
+        }
+    }
     let missing = client()
         .get(s.url(&format!("/api/simulations/{id}/frames/5")))
         .send()

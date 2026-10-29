@@ -20,6 +20,7 @@ import { componentValue } from './quantities.ts'
 import { FieldRenderer, type Overlays, type ViewerColours } from './render/fieldRenderer.ts'
 import { colormapOf, currentQuantity, currentRange, useViewer, type ViewerState } from './store.ts'
 import { advance, prefetch } from './timeline.ts'
+import { fullFrameBytes, needsSharpen, type SharpenState } from './sharpen.ts'
 import { inletSpawns, simulatedStep, substeps } from './simulation.ts'
 import { ARROW_SPACING, arrowScale } from './vectors.ts'
 
@@ -57,6 +58,11 @@ export class Viewer {
   private pending: ArrayBuffer[] = []
   /** Where stored frames come from: the job and the viewer format's longest side. */
   private source: { jobId: string; maxSize: number } | null = null
+  /**
+   * Bumped when the viewer format changes: frames asked for before (live ones still in a worker,
+   * stored ones still being fetched) are of the old format and are dropped.
+   */
+  private generation = 0
   /** Whether the run still produces frames. */
   private running = true
   private readonly inFlight = new Map<number, Promise<Decoded | null>>()
@@ -78,6 +84,13 @@ export class Viewer {
     index: -1,
     busy: false,
   }
+  /**
+   * The paused frame at full resolution ("sharpen"): the frame it sharpens and its fields at
+   * every cell; one request at a time; the frame whose request failed (not asked again).
+   */
+  private sharp: { of: DecodedFrame; frame: DecodedFrame } | null = null
+  private sharpening = false
+  private sharpFailed: DecodedFrame | null = null
   private overlays = useViewer.getState().overlays
   /** Particles and dye: the animation loop, simulated seconds between frames, queued brush stamps. */
   private sim = {
@@ -109,6 +122,7 @@ export class Viewer {
         if (streamlinesChanged) this.updateStreamlines(true)
         this.syncAnimation()
       }
+      this.updateSharpen()
       this.schedule()
     })
   }
@@ -130,12 +144,45 @@ export class Viewer {
     if (t.index === null && t.last >= 0 && !this.running) this.seek(t.last)
   }
 
+  /**
+   * Another viewer format (a setting): the cache is emptied, the blocks and their fluid
+   * fraction rebuilt, and the playhead's frame loaded again in the new format. The caller
+   * reconnects the stream with the same `maxSize`.
+   */
+  setMaxSize(maxSize: number): void {
+    // Before the scene there is nothing to rebuild: `setScene` brings the format.
+    if (!this.source || this.source.maxSize === maxSize) return
+    this.source = { ...this.source, maxSize }
+    this.generation++
+    this.cache.clear()
+    this.inFlight.clear()
+    this.current = null
+    const c = this.cells
+    if (c) this.setBlocks(c.cellType, c.width, c.height, boxFactor(c.width, c.height, maxSize))
+    this.schedule()
+    const t = useViewer.getState().timeline
+    if (t.last >= 0 && this.cells) this.request(t.index ?? t.last)
+  }
+
+  /** A new cache budget (a setting): frames over it are evicted at once. */
+  setBudget(bytes: number): void {
+    const t = useViewer.getState().timeline
+    this.cache.setBudget(bytes, t.index ?? t.last)
+    this.updateSharpen() // a full-resolution frame may fit now, or no longer
+  }
+
+  /** The cache's budget in bytes. */
+  get budget(): number {
+    return this.cache.budget
+  }
+
   private setBlocks(cellType: Uint8Array, width: number, height: number, k: number): void {
     const blocks = { width: Math.ceil(width / k), height: Math.ceil(height / k), k }
     const fraction = fluidFraction(cellType, width, height, k)
     const spawns = inletSpawns(cellType, width, height)
     this.cells = { cellType, width, height, blocks, fraction, spawns }
     this.uploadCells()
+    this.sharp = null
     // Without inlets (a closed cavity) particles are released anywhere in the fluid.
     if (spawns.length === 0 && useViewer.getState().release === 'inlets') {
       useViewer.getState().setRelease('domain')
@@ -152,6 +199,93 @@ export class Viewer {
     this.streamlines = { frame: null, index: -1, busy: this.streamlines.busy }
     this.renderer.setStreamlines(null)
     this.uploaded = { frame: null, velocity: null, field: null, lut: this.uploaded.lut }
+  }
+
+  /**
+   * Shows the paused playhead's frame at full resolution when zoomed in past the viewer format
+   * (`needsSharpen`), and goes back to the viewer format's frame otherwise. Looked at on every
+   * change of the viewer's state: one fetch at a time, answers for a frame no longer shown are
+   * dropped, and a frame larger than the cache budget is not fetched (the readout says so).
+   */
+  private updateSharpen(): void {
+    const s = useViewer.getState()
+    const c = this.cells
+    const frame = this.current
+    const want =
+      !!c &&
+      !!frame &&
+      !!this.source &&
+      !this.exporting &&
+      needsSharpen({
+        k: c.blocks.k,
+        zoom: s.view.zoom,
+        dpr: window.devicePixelRatio,
+        mode: s.timeline.mode,
+        buffering: s.timeline.buffering,
+      })
+    // A full-resolution frame larger than the cache budget is not fetched (nor kept).
+    const bytes = c && frame ? fullFrameBytes(c.width, c.height, frame.header.fields) : 0
+    const fits = bytes <= this.cache.budget
+    if (this.sharp && (!want || !fits || this.sharp.of !== frame)) {
+      this.sharp = null
+      this.schedule()
+    }
+    if (!want || !c || !frame || !this.source) {
+      this.setSharpenState({ state: 'off' })
+      return
+    }
+    if (this.sharp) return
+    if (!fits) {
+      const mb = (bytes / 2 ** 20).toFixed(0)
+      this.setSharpenState({
+        state: 'skipped',
+        note: `full resolution needs ${mb} MiB, more than the frame cache`,
+      })
+      return
+    }
+    if (this.sharpFailed === frame) return
+    if (this.sharpening) {
+      // Looked at again when the request in flight ends.
+      this.setSharpenState({ state: 'loading' })
+      return
+    }
+    // Marked before the store hears of it: its listeners call this method again.
+    this.sharpening = true
+    this.setSharpenState({ state: 'loading' })
+    const index = frame.header.frameIndex
+    const names = frame.header.fields.map((f) => f.name).join(',')
+    const url = `/api/simulations/${encodeURIComponent(this.source.jobId)}/frames/${index}?dtype=f16&fields=${encodeURIComponent(names)}`
+    const generation = this.generation
+    this.decoder.fetch(url, { stats: false }).then(
+      (d) => {
+        this.sharpening = false
+        if (this.disposed) return
+        const h = d.frame.header
+        if (
+          generation === this.generation &&
+          this.current === frame &&
+          h.width === c.width &&
+          h.height === c.height
+        ) {
+          this.sharp = { of: frame, frame: d.frame }
+          this.setSharpenState({ state: 'on', width: h.width, height: h.height })
+          this.schedule()
+        }
+        this.updateSharpen() // the playhead or the view may have moved meanwhile
+      },
+      (e: Error) => {
+        this.sharpening = false
+        if (this.disposed) return
+        this.sharpFailed = frame
+        this.setSharpenState({ state: 'skipped', note: `full resolution: ${e.message}` })
+        this.updateSharpen()
+      },
+    )
+  }
+
+  private setSharpenState(next: SharpenState): void {
+    const s = useViewer.getState()
+    if (JSON.stringify(s.sharpen) !== JSON.stringify(next)) s.setSharpen(next)
   }
 
   /**
@@ -184,15 +318,16 @@ export class Viewer {
       this.pending.push(buffer)
       return
     }
+    const generation = this.generation
     this.decoder.decode(buffer).then(
-      (d) => this.onLive(d),
+      (d) => this.onLive(d, generation),
       (e: Error) => console.warn(`frame skipped: ${e.message}`),
     )
   }
 
   /** A live frame: cached; shown when following the run. */
-  private onLive(d: Decoded): void {
-    if (this.disposed) return
+  private onLive(d: Decoded, generation: number): void {
+    if (this.disposed || generation !== this.generation) return
     const index = d.frame.header.frameIndex
     const s = useViewer.getState()
     const t = s.timeline
@@ -392,16 +527,19 @@ export class Viewer {
     if (!this.source) return Promise.resolve(null)
     const { jobId, maxSize } = this.source
     const url = `/api/simulations/${encodeURIComponent(jobId)}/frames/${index}?dtype=f16&maxSize=${maxSize}`
-    const p = this.decoder.fetch(url).then(
+    const generation = this.generation
+    const done = () => {
+      if (this.inFlight.get(index) === p) this.inFlight.delete(index)
+      return !this.disposed && generation === this.generation
+    }
+    const p: Promise<Decoded | null> = this.decoder.fetch(url).then(
       (d) => {
-        this.inFlight.delete(index)
-        if (this.disposed) return null
+        if (!done()) return null
         this.cache.put(index, d, useViewer.getState().timeline.index ?? index)
         return d
       },
       (e: DecodeError) => {
-        this.inFlight.delete(index)
-        if (!this.disposed) {
+        if (done()) {
           useViewer.getState().setTimeline({
             buffering: false,
             note:
@@ -534,6 +672,15 @@ export class Viewer {
     const f = this.current?.fields.find((f) => f.name === q?.field)
     if (!c || !q || !f || x < 0 || y < 0 || x >= c.width || y >= c.height) return null
     if (c.cellType[y * c.width + x] !== 0) return null
+    const sharp = this.sharp?.of === this.current ? this.sharp.frame : null
+    const full = sharp?.fields.find((g) => g.name === q.field)
+    if (full) {
+      // One value per cell: the cell's own (it is fluid).
+      const i = y * c.width + x
+      const at = (j: number) => (full.dtype === 'f16' ? halfToFloat(full.data[j]) : full.data[j])
+      const m = full.components
+      return componentValue(q.component, at(i * m), m > 1 ? at(i * m + 1) : 0)
+    }
     const { k, width } = c.blocks
     const b = Math.floor(y / k) * width + Math.floor(x / k)
     const frac = c.fraction[b]
@@ -587,10 +734,13 @@ export class Viewer {
       this.marked = l
     }
     if (q && frame) {
-      const field = frame.fields.find((f) => f.name === q.field)
-      if (field && (this.uploaded.frame !== frame || this.uploaded.field !== q.field)) {
-        this.renderer.setField(field, frame.header.width, frame.header.height)
-        this.uploaded.frame = frame
+      // The sharpened frame when there is one for the frame shown (overlays keep the blocks).
+      const sharp = this.sharp?.of === frame ? this.sharp.frame : null
+      const source = sharp ?? frame
+      const field = source.fields.find((f) => f.name === q.field)
+      if (field && (this.uploaded.frame !== source || this.uploaded.field !== q.field)) {
+        this.renderer.setField(field, source.header.width, source.header.height, sharp !== null)
+        this.uploaded.frame = source
         this.uploaded.field = q.field
       }
       const map = colormapOf(s, q)
@@ -737,8 +887,9 @@ export class Viewer {
     signal: AbortSignal,
   ): Promise<VideoResult> {
     const before = useViewer.getState().timeline.index
-    this.pause()
+    // Before pausing: a paused, zoomed-in view would otherwise fetch full-resolution frames.
     this.exporting = true
+    this.pause()
     try {
       const { from, to, step, fps, scale, quality } = range
       if (this.renderer.lost) throw new Error(CONTEXT_LOST)
