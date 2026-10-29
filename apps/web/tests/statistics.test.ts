@@ -18,6 +18,8 @@ import {
   forceStatistics,
   heatElements,
   nusselt,
+  nusseltScales,
+  nusseltSeries,
   oscillationFrequency,
   upwardCrossings,
   wallNusselt,
@@ -180,6 +182,59 @@ describe('Nusselt number', () => {
         expect(Math.abs(got[i][key] - e[key]), `${e.element}.${key}`).toBeLessThan(1e-12)
       }
     }
+  })
+
+  it('plots Nu per row: a constant series is its window mean at every row', () => {
+    const columns = ['step', 'time_s', 'A.q_W_m', 'A.length_m']
+    const data = [
+      [0, 1, 2, 3],
+      [0, 1, 2, 3],
+      [0.5, 0.5, null, 0.5],
+      [0.2, 0.2, 0.2, 0.2],
+    ]
+    const scales = { length: 0.1, conductivity: 0.0257, deltaT: 2 }
+    const [a] = nusseltSeries(columns, data, scales)
+    const [w] = wallNusselt(columns, data, { from: 0, to: 3 }, scales)
+    expect(a.element).toBe('A')
+    expect(a.values[2]).toBeNull() // the gap stays a gap in the plot
+    for (const i of [0, 1, 3]) expect(a.values[i]).toBeCloseTo(w.mean, 12)
+    expect(w.mean).toBeCloseTo(((0.5 / 0.2) * 0.1) / (0.0257 * 2), 12)
+    expect(w.spread).toBe(0)
+  })
+
+  it('plots the cavity’s Nu per row, whose mean, min and max are Rust’s', () => {
+    const b = new SeriesBuffer()
+    b.setFile('heat', csv)
+    const heat = b.table('heat')!
+    const series = nusseltSeries(heat.columns, heat.data, expected.reference)
+    expect(series.map((s) => s.element)).toEqual(expected.elements.map((e) => e.element))
+    for (const [i, e] of expected.elements.entries()) {
+      const v = series[i].values as number[]
+      expect(v.length).toBe(e.samples)
+      const mean = v.reduce((s, x) => s + x, 0) / v.length
+      expect(Math.abs(mean - e.mean), e.element).toBeLessThan(1e-12)
+      expect(Math.min(...v)).toBe(e.min)
+      expect(Math.max(...v)).toBe(e.max)
+    }
+  })
+
+  it('takes its scales from the meta, and has none without a conductivity', () => {
+    const m: RunMeta = {
+      units: { dx: 0.001, dt: 0.001, rho0: 1.2 },
+      dimensionless: {
+        reference: {
+          length: 0.1,
+          velocity: 0.1,
+          reynolds: 374,
+          temperatureDifference: 0.9572,
+          conductivity: 0.0257,
+        },
+      },
+      run: { outputEverySteps: 10, sampleEverySteps: 1, endTime: 80, heat: true },
+    }
+    expect(nusseltScales(m)).toEqual({ length: 0.1, conductivity: 0.0257, deltaT: 0.9572 })
+    expect(nusseltScales(meta(1, 1, 0.1))).toBeNull()
+    expect(nusseltScales(null)).toBeNull()
   })
 
   it('has a benchmark for the heated cavity examples, checked at the suite’s tolerance', () => {

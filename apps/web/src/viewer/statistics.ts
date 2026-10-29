@@ -137,33 +137,73 @@ export function heatElements(columns: string[]): string[] {
   return columns.filter((c) => c.endsWith('.q_W_m')).map((c) => c.slice(0, -'.q_W_m'.length))
 }
 
+/** The scales of Nu: the reference length and temperature difference, the fluid's conductivity. */
+export interface NusseltScales {
+  length: number
+  conductivity: number
+  deltaT: number
+}
+
+/** The Nusselt scales of a run (the reference scales in use), or null without a conductivity. */
+export function nusseltScales(meta: RunMeta | null): NusseltScales | null {
+  const r = meta?.dimensionless.reference
+  if (!r?.conductivity) return null
+  return { length: r.length, conductivity: r.conductivity, deltaT: r.temperatureDifference }
+}
+
+/** The Nusselt number of one thermal wall element at every row of `heat.csv`. */
+export interface NusseltSeries {
+  element: string
+  /** One per row; `null` where the row has a gap. */
+  values: Value[]
+}
+
+/**
+ * The Nusselt number of every thermal wall element at every row of `heat.csv` (`columns` and
+ * `data` as the series table holds them): what the Plots tab draws and `wallNusselt` averages.
+ */
+export function nusseltSeries(
+  columns: string[],
+  data: Value[][],
+  scales: NusseltScales,
+): NusseltSeries[] {
+  const out: NusseltSeries[] = []
+  for (const element of heatElements(columns)) {
+    const q = data[columns.indexOf(`${element}.q_W_m`)]
+    const length = data[columns.indexOf(`${element}.length_m`)]
+    if (!q || !length) continue
+    const values = q.map((qi, i) => {
+      const li = length[i]
+      return qi === null || li === null
+        ? null
+        : nusselt(qi, li, scales.length, scales.conductivity, scales.deltaT)
+    })
+    out.push({ element, values })
+  }
+  return out
+}
+
 /**
  * The mean Nusselt number of every thermal wall element over the frames of `heat.csv` inside the
- * window (`columns` and `data` as the series table holds them; rows with gaps are left out). The
- * scales are the run's reference length and temperature difference and the fluid's conductivity.
+ * window: the rows of `nusseltSeries` whose time is in the window (rows with gaps are left out).
  */
 export function wallNusselt(
   columns: string[],
   data: Value[][],
   window: Window,
-  scales: { length: number; conductivity: number; deltaT: number },
+  scales: NusseltScales,
 ): WallNusselt[] {
   const time = data[1] ?? []
   const out: WallNusselt[] = []
-  for (const element of heatElements(columns)) {
-    const q = data[columns.indexOf(`${element}.q_W_m`)]
-    const length = data[columns.indexOf(`${element}.length_m`)]
-    if (!q || !length) continue
+  for (const { element, values } of nusseltSeries(columns, data, scales)) {
     let sum = 0
     let min = Infinity
     let max = -Infinity
     let n = 0
     for (let i = 0; i < time.length; i++) {
       const t = time[i]
-      const qi = q[i]
-      const li = length[i]
-      if (t === null || qi === null || li === null || t < window.from || t > window.to) continue
-      const nu = nusselt(qi, li, scales.length, scales.conductivity, scales.deltaT)
+      const nu = values[i]
+      if (t === null || nu === null || t < window.from || t > window.to) continue
       sum += nu
       min = Math.min(min, nu)
       max = Math.max(max, nu)
