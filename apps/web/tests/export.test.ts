@@ -3,7 +3,13 @@ import type { RunMeta } from '../src/api/jobs.ts'
 import type { DecodedFrame } from '../src/frames/lffr.ts'
 import { annotatedSize, FOOTER_HEIGHT, footerText } from '../src/viewer/export/annotate.ts'
 import { coefficientsCsv, frameCsv, num, statisticsCsv } from '../src/viewer/export/csv.ts'
-import { bitrateFor, chooseCodec, defaultScale, videoTiming } from '../src/viewer/export/video.ts'
+import {
+  bitrateFor,
+  chooseCodec,
+  defaultScale,
+  recorderFrames,
+  videoTiming,
+} from '../src/viewer/export/video.ts'
 import type { Table } from '../src/viewer/series.ts'
 import type { ForceStatistics } from '../src/viewer/statistics.ts'
 
@@ -168,5 +174,11 @@ describe('video codec', () => {
     expect(defaultScale(512, 513)).toBe(2)
     expect(defaultScale(1023, 1024)).toBe(1)
     expect(defaultScale(4000, 4001)).toBe(1)
+  })
+
+  it('lets the WebM recorder draw ahead within 128 MiB, at least 2 frames', () => {
+    expect(recorderFrames(1022, 1072)).toBe(30)
+    expect(recorderFrames(1768, 384)).toBe(49)
+    expect(recorderFrames(8192, 8192)).toBe(2)
   })
 })

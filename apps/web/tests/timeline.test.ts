@@ -79,5 +79,8 @@ describe('timeline rules', () => {
     expect(prefetch(5, 20)).toEqual([6, 7, 8])
     expect(prefetch(19, 20)).toEqual([20])
     expect(prefetch(20, 20)).toEqual([])
+    // An export of every 3rd frame up to 20.
+    expect(prefetch(5, 20, 4, 3)).toEqual([8, 11, 14, 17])
+    expect(prefetch(14, 20, 4, 3)).toEqual([17, 20])
   })
 })

@@ -169,6 +169,61 @@ test('a run is shown live, then scrubbed and played back from stored frames', as
   await expect(page.getByTestId('stat-cdMax')).toHaveText(/^C_D,max\d/)
 })
 
+test('a lost WebGL context is restored and the frame drawn again', async ({ page, request }) => {
+  const r = await request.post('/api/simulations', {
+    data: { scene, options: { endTime: 0.2, outputInterval: 0.02 } },
+  })
+  expect(r.status()).toBe(201)
+  const { id } = (await r.json()) as { id: string }
+  await page.goto(`/#/jobs/${id}`)
+  await expect(page.getByTestId('job-status')).toHaveText('completed', { timeout: 60_000 })
+  await expect(page.getByTestId('timeline-position')).toHaveText(/^(\d+) \/ \1 /)
+
+  // The field with arrows and streamlines: every kind of GPU resource the viewer holds.
+  const image = () =>
+    page.evaluate(() => (globalThis as unknown as { __viewer: ViewerHook }).__viewer.snapshot())
+  const segments = () =>
+    page.evaluate(
+      () => (globalThis as unknown as { __viewer: ViewerHook }).__viewer.streamlineSegments,
+    )
+  await page.getByTestId('viewer-vectors').check()
+  await page.getByTestId('viewer-streamlines').check()
+  await expect.poll(() => segments(), { timeout: 30_000 }).toBeGreaterThan(100)
+  const before = await image()
+  expect(await pixel(page, ...CYLINDER)).toEqual(SOLID)
+
+  // `WEBGL_lose_context` does what a driver reset does (the same context as the viewer's: a
+  // canvas has one).
+  const loseContext = (call: 'loseContext' | 'restoreContext') =>
+    page.evaluate((call) => {
+      const canvas = document.querySelector<HTMLCanvasElement>('[data-testid="viewer-canvas"]')!
+      const w = globalThis as unknown as { __lose?: WEBGL_lose_context }
+      w.__lose ??= canvas.getContext('webgl2')!.getExtension('WEBGL_lose_context')!
+      w.__lose[call]()
+    }, call)
+  await loseContext('loseContext')
+
+  // While it is lost, exports say so instead of failing on what the lost context returns.
+  await page.getByTestId('job-tab-export').click()
+  await page.getByTestId('export-size').selectOption('2')
+  await page.getByTestId('export-png').click()
+  await expect(page.getByTestId('export-message')).toHaveText(/graphics context was lost/)
+  await page.getByTestId('video-record').click()
+  await expect(page.getByTestId('export-message')).toHaveText(
+    /^Video failed: The graphics context was lost/,
+  )
+
+  // Restored: the programs, textures and buffers are made again and the same picture comes back.
+  await loseContext('restoreContext')
+  await expect.poll(() => image(), { timeout: 30_000 }).toEqual(before)
+  expect(await pixel(page, ...CYLINDER)).toEqual(SOLID)
+  const png = await savedFile(page, 'export-png')
+  expect([png.bytes.readUInt32BE(16), png.bytes.readUInt32BE(20)]).toEqual([
+    scene.grid.width * 2,
+    scene.grid.height * 2 + 48,
+  ])
+})
+
 test('going from one run straight to another shows the second run', async ({ page, request }) => {
   // Two runs of different lengths, so their last frames differ.
   const start = async (endTime: number) => {
