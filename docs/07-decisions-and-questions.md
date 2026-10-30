@@ -295,10 +295,16 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   preview stored next to each frame would fix it). The stream's rows and the CSVs cannot disagree. The statistics
   have two implementations (Rust for the suite, TypeScript for the viewer), tied by fixtures instead of by WASM;
   compiling `cfd-core` to WASM stays the option for a serverless demo (ADR-010). Streamlines run on the CPU,
-  particles and dye on the GPU, and neither is part of any acceptance number. Not done: the MediaRecorder fallback
-  and the video's image were not looked at by eye; open question Q14 (the editor's discoverability, Phase 4's
-  hand-timed run) is unchanged. *(2026-10-29, #20: the Nu(t) plot in the Plots tab, its CSV and the `heat.csv` link
-  in the Export tab, left out at first, are done.)*
+  particles and dye on the GPU, and neither is part of any acceptance number. Left out of the MVP: GIF and VTK
+  export (FR-24; Phase 5c in the plan) and the phase-fraction field (FR-20; with the free surface, Phase 6a).
+  *Amended 2026-10-30 (#22):* the first "not done" list is closed. The Nu(t) plot in the Plots tab, its CSV and the
+  `heat.csv` link in the Export tab came with #20 (2026-10-29). The author judged both video paths by eye, the MP4 and
+  the `MediaRecorder` WebM, after the fixes for #24 and #25, and the cylinder export again with the particle
+  controls of #29 ([benchmarks](benchmarks.md)). Q14 (the editor's discoverability) was answered B and implemented in
+  #23: the re-timed Phase 4 run took 2 min 03 s (target < 2 min). The editor's
+  main JavaScript chunk had passed Vite's 500 kB warning (507 kB). Its dialogs now load on first use: the example
+  gallery with the bundled scenes, the image import and *Open from the server*. The start-up JavaScript is 481 kB
+  ([development](development.md), "Bundle size").
 
 ## Open questions
 
