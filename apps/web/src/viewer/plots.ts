@@ -1,10 +1,12 @@
 // What the Plots tab draws, derived from the run's series (design proposal §7.1): the force
-// coefficients of every element, the probes, the mass drift and the largest Mach number.
+// coefficients of every element, the Nusselt number of the thermal walls, the probes, the mass
+// drift and the largest Mach number.
 //
 // Force coefficients use the scene's reference scales (`meta.json`'s `dimensionless.reference`,
 // with the defaults filled in): C = 2F / (ρ U² L), forces per unit span (N/m).
 import type { RunMeta } from '../api/jobs.ts'
 import type { Table, Value } from './series.ts'
+import { nusseltScales, nusseltSeries } from './statistics.ts'
 
 export interface PlotLine {
   label: string
@@ -67,6 +69,21 @@ export function forcePlots(
       ],
     },
   ]
+}
+
+/**
+ * The Nusselt number of every thermal wall over time (thermal runs with `heat.csv`): a line per
+ * wall, so the user sees whether the flow has settled before reading the window's mean.
+ */
+export function nusseltPlots(heat: Table | null, meta: RunMeta | null): Plot[] {
+  const scales = nusseltScales(meta)
+  if (!heat || !scales) return []
+  const lines = nusseltSeries(heat.columns, heat.data, scales).map((s) => ({
+    label: s.element.replace(/_/g, ' '),
+    values: s.values,
+  }))
+  if (lines.length === 0) return []
+  return [{ id: 'heat:nusselt', title: 'Nusselt number', time: heat.data[1], lines }]
 }
 
 const PROBE_QUANTITIES = [

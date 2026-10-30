@@ -10,6 +10,7 @@ import { withScales, type ScaleOverride } from './scales.ts'
 import {
   defaultWindow,
   forceStatistics,
+  nusseltScales,
   wallNusselt,
   type ForceStatistics,
   type WallNusselt,
@@ -217,12 +218,8 @@ export function useNusselt(): WallNusselt[] {
   return useMemo(() => {
     void version
     const heat = feed?.buffer.table('heat')
-    const reference = meta?.dimensionless.reference
-    if (!heat || !reference?.conductivity || !window) return []
-    return wallNusselt(heat.columns, heat.data, window, {
-      length: reference.length,
-      conductivity: reference.conductivity,
-      deltaT: reference.temperatureDifference,
-    })
+    const scales = nusseltScales(meta)
+    if (!heat || !scales || !window) return []
+    return wallNusselt(heat.columns, heat.data, window, scales)
   }, [feed, version, meta, window])
 }

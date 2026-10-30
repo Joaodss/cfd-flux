@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest'
 import type { RunMeta } from '../src/api/jobs.ts'
 import type { DecodedFrame } from '../src/frames/lffr.ts'
 import { annotatedSize, FOOTER_HEIGHT, footerText } from '../src/viewer/export/annotate.ts'
-import { coefficientsCsv, frameCsv, num, statisticsCsv } from '../src/viewer/export/csv.ts'
+import {
+  coefficientsCsv,
+  frameCsv,
+  num,
+  nusseltCsv,
+  runFiles,
+  statisticsCsv,
+} from '../src/viewer/export/csv.ts'
 import {
   bitrateFor,
   chooseCodec,
@@ -42,6 +49,37 @@ describe('CSV exports', () => {
       'step,time_s,cd,cl\n0,0,1,NaN\n10,0.01,2,-0.5\n',
     )
     expect(coefficientsCsv(forces, 'Nothing', meta)).toBeNull()
+  })
+
+  it('writes the Nusselt number of every thermal wall per row', () => {
+    // Nu = (q / length) L / (k ΔT) = 2 q here.
+    const heat: Table = {
+      columns: ['step', 'time_s', 'Hot.q_W_m', 'Hot.length_m', 'Cold.q_W_m', 'Cold.length_m'],
+      data: [
+        [0, 10],
+        [0, 0.01],
+        [1, 1.5],
+        [0.5, 0.5],
+        [-1, null],
+        [0.5, 0.5],
+      ],
+    }
+    const scales = { length: 0.1, conductivity: 0.1, deltaT: 1 }
+    expect(nusseltCsv(heat, scales)).toBe('step,time_s,Hot.nu,Cold.nu\n0,0,2,-2\n10,0.01,3,NaN\n')
+    expect(nusseltCsv({ columns: ['step', 'time_s'], data: [[], []] }, scales)).toBeNull()
+  })
+
+  it('offers heat.csv only for runs that have one', () => {
+    expect(runFiles(meta)).not.toContain('heat.csv')
+    expect(runFiles(null)).not.toContain('heat.csv')
+    expect(runFiles({ ...meta, run: { ...meta.run, heat: true } })).toEqual([
+      'forces.csv',
+      'probes.csv',
+      'diagnostics.csv',
+      'heat.csv',
+      'meta.json',
+      'scene.json',
+    ])
   })
 
   it('writes the window statistics with the element and window', () => {

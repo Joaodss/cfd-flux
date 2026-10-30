@@ -9,7 +9,14 @@
 import { useEffect, useMemo, useRef } from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
-import { diagnosticPlots, forcePlots, frameAt, probePlots, type Plot } from './plots.ts'
+import {
+  diagnosticPlots,
+  forcePlots,
+  frameAt,
+  nusseltPlots,
+  probePlots,
+  type Plot,
+} from './plots.ts'
 import { useElement, useMeta, useSeries, useWindow } from './seriesFeed.ts'
 import type { Window } from './statistics.ts'
 import { useViewer } from './store.ts'
@@ -29,6 +36,7 @@ function usePlots(element: string | null): Plot[] {
     const b = feed.buffer
     return [
       ...forcePlots(b.table('forces'), meta, element),
+      ...nusseltPlots(b.table('heat'), meta),
       ...probePlots(b.table('probes')),
       ...diagnosticPlots(b.table('diagnostics')),
     ]

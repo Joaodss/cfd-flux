@@ -219,5 +219,44 @@ describe('Plots tab', () => {
     expect(screen.getByTestId('nu-Cold_wall').textContent).toMatch(/^Cold wall-4.54/)
     expect(screen.getByTestId('nu-Cold_wall-check').textContent).toBe('')
     expect(screen.getByTestId('stats-tolerance').textContent).toMatch(/2 %.* 64 cells/)
+
+    // Nu(t) of both walls in the Plots tab, the hot one settled near the window's 4.54.
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByTestId('job-tab-plots'))
+      fireEvent.click(screen.getByTestId('job-tab-plots'))
+    })
+    expect(screen.getByTestId('plot-heat:nusselt')).toBeTruthy()
+    const nu = charts.find((c) => c.title === 'Nusselt number')!
+    const [time, hot, cold] = nu.data as number[][]
+    expect(time.length).toBe(40)
+    expect(hot.every((v) => Math.abs(v - 4.54) < 0.04)).toBe(true)
+    expect(cold.every((v) => Math.abs(v + 4.54) < 0.04)).toBe(true)
+
+    // heat.csv is one of the run's files, and Nu(t) has a CSV of its own.
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByTestId('job-tab-export'))
+      fireEvent.click(screen.getByTestId('job-tab-export'))
+    })
+    expect(screen.getByText('heat.csv').getAttribute('href')).toBe(
+      '/api/simulations/job-1/files/heat.csv',
+    )
+    expect(screen.getByTestId('export-nu')).toBeTruthy()
+  })
+
+  it('offers no heat.csv and no Nu for a run without thermal walls', async () => {
+    FILES['forces.csv'] = readFileSync('tests/fixtures/series/cylinder-forces.csv', 'utf8')
+    FILES['meta.json'] = JSON.stringify(META)
+    render(<JobView id="job-1" />)
+    FakeSocket.last.send({ type: 'hello', job: { ...job, status: 'completed' } })
+    FakeSocket.last.send({ type: 'done', status: 'completed', stepsDone: 100, frames: 10 })
+    await act(async () => new Promise((r) => setTimeout(r, 10)))
+    await act(async () => {
+      fireEvent.mouseDown(screen.getByTestId('job-tab-export'))
+      fireEvent.click(screen.getByTestId('job-tab-export'))
+    })
+    expect(screen.getByText('forces.csv')).toBeTruthy()
+    expect(screen.queryByText('heat.csv')).toBeNull()
+    expect(screen.queryByTestId('export-nu')).toBeNull()
+    expect(charts.find((c) => c.title === 'Nusselt number')).toBeUndefined()
   })
 })
