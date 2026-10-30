@@ -9,7 +9,7 @@ import {
   Play,
   Save,
 } from 'lucide-react'
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { Button } from '../components/ui/button.tsx'
 import {
   DropdownMenu,
@@ -19,13 +19,25 @@ import {
 } from '../components/ui/dropdown-menu.tsx'
 import { isDirty, useEditor } from '../editor/store.ts'
 import { newScene, openFile, save, saveAsFile, saveToServer } from './documents.ts'
-import { ExampleGallery } from './ExampleGallery.tsx'
-import { ImportImageDialog } from './ImportImageDialog.tsx'
 import { IssuesButton } from './IssuesButton.tsx'
 import { navigate } from './route.ts'
 import { mark } from '../perf.ts'
 import { runScene } from './run.ts'
-import { ServerScenesDialog } from './ServerScenesDialog.tsx'
+
+// The dialogs load when first opened, each a chunk of its own: the gallery carries every example
+// scene of `scenes/` (it grows with each example), the image import its mask code. This keeps the
+// main chunk under Vite's 500 kB warning (docs/development.md, "Bundle size").
+const ExampleGallery = lazy(() =>
+  import('./ExampleGallery.tsx').then((m) => ({ default: m.ExampleGallery })),
+)
+const ImportImageDialog = lazy(() =>
+  import('./ImportImageDialog.tsx').then((m) => ({ default: m.ImportImageDialog })),
+)
+const ServerScenesDialog = lazy(() =>
+  import('./ServerScenesDialog.tsx').then((m) => ({ default: m.ServerScenesDialog })),
+)
+
+type DialogName = 'server' | 'gallery' | 'image'
 
 function sourceLabel(s: ReturnType<typeof useEditor.getState>['source']): string {
   if (!s) return 'not saved'
@@ -40,8 +52,14 @@ export function Header() {
   const dirty = useEditor(isDirty)
   const runnable = useEditor((s) => s.validation.status === 'done' && s.validation.result.ok)
   const [running, setRunning] = useState(false)
-  const [dialog, setDialog] = useState<'server' | 'gallery' | 'image' | null>(null)
-  const close = (open: boolean) => !open && setDialog(null)
+  const [dialog, setDialog] = useState<DialogName | null>(null)
+  // The dialogs opened so far: mounted from then on, so they keep their state between opens.
+  const [opened, setOpened] = useState<DialogName[]>([])
+  const open = (d: DialogName) => {
+    setDialog(d)
+    setOpened((o) => (o.includes(d) ? o : [...o, d]))
+  }
+  const close = (isOpen: boolean) => !isOpen && setDialog(null)
 
   return (
     <header className="flex h-11 shrink-0 items-center gap-1 border-b border-border px-3">
@@ -57,7 +75,7 @@ export function Header() {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           <DropdownMenuItem onSelect={() => void openFile()}>File… (Ctrl+O)</DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setDialog('server')} data-testid="open-server">
+          <DropdownMenuItem onSelect={() => open('server')} data-testid="open-server">
             From the server…
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -78,18 +96,13 @@ export function Header() {
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => setDialog('gallery')}
-        data-testid="open-gallery"
-      >
+      <Button variant="ghost" size="sm" onClick={() => open('gallery')} data-testid="open-gallery">
         <LayoutGrid /> Examples
       </Button>
       <Button
         variant="ghost"
         size="sm"
-        onClick={() => setDialog('image')}
+        onClick={() => open('image')}
         title="Import a PNG as a mask"
       >
         <ImageUp /> Import image
@@ -126,9 +139,17 @@ export function Header() {
       >
         <Play /> Run
       </Button>
-      <ServerScenesDialog open={dialog === 'server'} onOpenChange={close} />
-      <ExampleGallery open={dialog === 'gallery'} onOpenChange={close} />
-      <ImportImageDialog open={dialog === 'image'} onOpenChange={close} />
+      <Suspense fallback={null}>
+        {opened.includes('server') && (
+          <ServerScenesDialog open={dialog === 'server'} onOpenChange={close} />
+        )}
+        {opened.includes('gallery') && (
+          <ExampleGallery open={dialog === 'gallery'} onOpenChange={close} />
+        )}
+        {opened.includes('image') && (
+          <ImportImageDialog open={dialog === 'image'} onOpenChange={close} />
+        )}
+      </Suspense>
     </header>
   )
 }
