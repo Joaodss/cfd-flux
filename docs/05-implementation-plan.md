@@ -181,6 +181,7 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 ## Phase 6 — Liquids (free surface — **part of the MVP**) and multiphase
 
 ### 6a — Free surface (MVP, [ADR-008](07-decisions-and-questions.md))
+Design: [phase6a-design-proposal.md](sessions/phase6a-design-proposal.md) (proposed 2026-10-30, awaiting the author's answers to its §17).
 - [ ] L — Free-surface LBM on the CPU (mass per cell, fill fraction, interface cells, `f_i` reconstruction at the interface, cell-type conversion).
 - [ ] L — Port to wgpu and CUDA (cell conversion in separate race-free passes); parity with the CPU via `cfd-cli compare`.
 - [ ] M — Editor: "initial liquid region" tool, fill level, choice of liquid.
