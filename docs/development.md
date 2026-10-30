@@ -142,6 +142,18 @@ export use the `MediaRecorder` fallback. Large test grids: `cargo run --release 
 cavity-scene out/cavity-1023.json 1023 3 0.02` (a 1023 × 1024 cavity: a true 1024² viewer format), then
 `POST /api/scenes` and *Open → From the server*. Delete the server's data folder afterwards (GBs of frames).
 
+**Bundle size.** `npm run build` warns when a chunk passes Vite's 500 kB (minified, before gzip). The limit stays:
+the warning is the signal to look again. What the editor loads at start-up (2026-10-30, #22): `index` 400 kB and
+`utils` 81 kB (a chunk Rolldown shares with the lazy chunks, preloaded with `index`), together 481 kB, 157 kB gzipped.
+Of `index`, React and react-dom are ≈ 210 kB and the Radix primitives ≈ 55 kB; the app's own code is ≈ 105 kB.
+Everything else loads on first use, each part a chunk of its own: the job view and viewer (`JobView`, 191 kB, with
+uPlot and `mp4-muxer`), ajv and the scene schema (130 + 10 kB, the first validation in the browser), the example
+gallery with the bundled scenes of `scenes/` (`ExampleGallery` + `references`, 17 kB), the image import and *Open
+from the server* (6 kB). The main chunk was 496 kB at the end of Phase 4, 501 kB after Phase 5 and 507 kB after the
+edge presets (#23), before the dialogs were split out. To see what a chunk holds, build with `npx vite build
+--sourcemap` and add up each source's bytes in the `.map` files. If the warning comes back, the next candidates are
+the property panels or a vendor chunk for React (better caching across releases, the same bytes at start-up).
+
 ## Server
 
 - `cfd-server` opens every engine once at start-up (CUDA, a hardware wgpu adapter, the CPU) and logs what it
