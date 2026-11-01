@@ -79,6 +79,18 @@ On a log-log plot (error vs. resolution) the points should form a line with slop
 - **Setup:** water column of width `a` resting against a wall, released at time 0.
 - **Measure:** water front position `x(t)` in dimensionless time `t·sqrt(2g/a)`, compared with the experimental points. Also liquid **mass conservation** (must stay < 0.1%).
 - **Target:** curve within the experimental scatter (experimental data, not exact — looser tolerance, ~5%).
+- **As decided for Phase 6a** ([ADR-032](07-decisions-and-questions.md), design proposal §10):
+  - The front `x_f` is where φ crosses ½ in the first fluid row, scanning from the wall over the liquid connected to it
+    (detached drops ignored), interpolated linearly between cell centres; `Z = x_f / a`, `T = t·√(2g/a)` (the n² = 2
+    column).
+  - Tolerances fixed before the results: 5 % at every reference point with T ≥ 1 at a = 40 cells (the example's
+    resolution), 10 % at a = 20 cells (`--quick` and the quick example). Earlier points are reported, not judged (the
+    experiment's time origin is uncertain); no time shift is fitted. The slope dZ/dT must stay below Ritter's 2.
+  - Mass: the liquid mass Σ(m + massex), not the volume Σφ, which changes by the compressibility (≈ 0.4 %).
+  - Reference points digitised from the paper into `validation/references/`, with the source and the method.
+  - Two simpler cases come first: **still water** (max |u| < 1e-3 √(g h), bottom pressure within 1 % of ρ₀ g h, the
+    surface within ±0.5 cell, mass drift < 1e-6) and a **free-falling block** (centroid within 1 % of the fall
+    distance of `y₀ − ½ g t²`, internal velocity spread < 1 % of g t, mass drift < 1e-6).
 
 ## 5. Checks that need no reference
 

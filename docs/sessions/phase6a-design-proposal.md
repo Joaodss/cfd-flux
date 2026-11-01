@@ -1,9 +1,10 @@
 # Phase 6a — free-surface liquids (the last part of the MVP): design proposal (2026-10-30)
 
-**Status: proposed, awaiting the author's review** ([#42](https://github.com/Joaodss/cfd-flux/issues/42); tracking
-issue [#41](https://github.com/Joaodss/cfd-flux/issues/41)). No solver code is written yet. Once the questions of §17
-are answered, the accepted parts move into [04 §3/§5](../04-numerical-methods.md), [03](../03-data-model.md) and a new
-ADR, and the 6a issues (#43–#48) and the plan's 6a tasks follow §16.
+**Status: approved by the author on 2026-11-01, as proposed** (every recommendation of §17 accepted;
+[#42](https://github.com/Joaodss/cfd-flux/issues/42), tracking issue [#41](https://github.com/Joaodss/cfd-flux/issues/41)).
+The decisions are recorded as [ADR-032](../07-decisions-and-questions.md) and in
+[04 §5](../04-numerical-methods.md#5-liquids-and-multiphase-phase-6). The accepted parts move into
+[03](../03-data-model.md) as they are implemented, and the 6a issues (#43–#48) and the plan's 6a tasks follow §16.
 
 Goal of Phase 6a ([plan](../05-implementation-plan.md#6a--free-surface-mvp-adr-008), ADR-008): liquids with a free
 surface (water in "empty" gas), on all three engines, validated. **Proposed acceptance (§15):** open the *Dam break*
@@ -505,9 +506,9 @@ runs in CI.
 6. **#47 viewer:** gas mask, contour, *Liquid* display mode, gallery and the quick variant.
 7. **#48 acceptance:** the `@full` run, docs (02, 03, 04 §5, 08), the plan, the final check.
 
-## 17. Open questions
+## 17. Open questions — answered (2026-11-01): every recommendation accepted
 
-| # | Question | Recommendation |
+| # | Question | Recommendation (accepted) |
 |---|----------|----------------|
 | Q1 | Base algorithm: FluidX3D's four-pass structure (with `surface_0` folded into our pull), the conversion rules of §2.4 without the κ offset, a CPU that runs the same passes (no sequential lists)? (§1, §2.4, §4) | Yes. κ as an internal constant, 0 by default, raised only if the hydrostatic test shows flipping |
 | Q2 | Gas reconstruction: only links from gas cells (FluidX3D), or also the links with `n·c_ī > 0` (Körner/Thürey, needs the normal)? (§2.3) | Gas links only; the normal-based rule as the fallback if #43 shows surface noise |

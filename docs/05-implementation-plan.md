@@ -181,12 +181,14 @@ Suggested order: wgpu first (2a), CUDA right after (2b), comparison at the end (
 ## Phase 6 — Liquids (free surface — **part of the MVP**) and multiphase
 
 ### 6a — Free surface (MVP, [ADR-008](07-decisions-and-questions.md))
-Design: [phase6a-design-proposal.md](sessions/phase6a-design-proposal.md) (proposed 2026-10-30, awaiting the author's answers to its §17).
-- [ ] L — Free-surface LBM on the CPU (mass per cell, fill fraction, interface cells, `f_i` reconstruction at the interface, cell-type conversion).
-- [ ] L — Port to wgpu and CUDA (cell conversion in separate race-free passes); parity with the CPU via `cfd-cli compare`.
-- [ ] M — Editor: "initial liquid region" tool, fill level, choice of liquid.
-- [ ] M — Interface visualisation (marching-squares contour, volume fraction, water colouring).
-- [ ] S — Validation: dam break (Martin & Moyce 1952), liquid mass conservation error < 0.1%.
+Design: [phase6a-design-proposal.md](sessions/phase6a-design-proposal.md) (approved 2026-11-01, [ADR-032](07-decisions-and-questions.md)).
+- [x] S — Design proposal and decisions (#42).
+- [ ] L — Free-surface LBM on the CPU (#43): scope errors, the free-fall time step, gravity as a body force, the hydrostatic start and the φ = 1 interface layer in `Scene → Domain`; the four passes over the `surf` planes (mass exchange, gas-link reconstruction, conversion, equal-split excess); Smagorinsky LES (`physics.turbulence`), measured against an effective viscosity on the dam break; fill-fraction output, liquid-mass diagnostics, probe `fill`.
+- [ ] L — Port to wgpu and CUDA (#44): the same four passes (`surf` bound in place of `g_src` on wgpu, the four kernels in the CUDA graph); parity cases; CUDA bit-identical, wgpu by the free-surface `--statistics` metric of `cfd-cli compare`.
+- [ ] M — Editor (#46): *Liquid* label in free-surface scenes, *Fill to level* (flood fill, one undo entry), liquid presets with τ shown.
+- [ ] M — Interface visualisation (#47): gas mask from φ, marching-squares contour at φ = ½, *Liquid* display mode; the dam break and its quick variant (dx = 5 mm, 0.5 s) in the gallery.
+- [ ] S — Validation (#45): still water, free-falling block, dam break (Martin & Moyce 1952; 5 % for T ≥ 1), liquid mass conservation error < 0.1%.
+- [ ] S — MVP acceptance (#48): the dam break from the gallery on CUDA and wgpu.
 
 ### 6b — Post-MVP
 - [ ] M — Surface tension (curvature via PLIC/height functions) and per-wall contact angle.
