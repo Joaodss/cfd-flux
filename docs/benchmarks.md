@@ -26,6 +26,37 @@ cargo run --release -p cfd-cli -- bench --backends cuda,wgpu     # interleaved, 
   (`skip_macro`, ADR-029); `--no-skip-macro` measures the previous behaviour.
 - Add a new section per machine/backend; keep old ones for comparison.
 
+## Free surface on the CPU — AMD Ryzen 7 3700X (8 cores / 16 threads), 2026-11-01
+
+Phase 6a's CPU reference (#43, ADR-032): the four free-surface passes and the Smagorinsky model, against the
+isothermal cavity in the same run. `--model free-surface` is a dam break in an N² tank (a water column of N/4 × N/2,
+the rest gas), so 1/8 of the cells are liquid at the start; MLUPS count all N² cells, gas included, which pass 1
+skips but passes 2–4 visit. A run times only the first few hundred to few thousand steps, while the column is still
+collapsing.
+
+```bash
+cargo run --release -p cfd-cli -- bench --backend cpu --model iso,free-surface --sizes 256,512,1024
+```
+
+| Model | Grid | Steps per run | MLUPS (median) | min | max |
+|-------|------|---------------|----------------|-----|-----|
+| isothermal (D2Q9) | 256² | 5072 | 174.6 | 172.6 | 178.2 |
+| isothermal (D2Q9) | 512² | 1509 | 212.1 | 204.8 | 212.7 |
+| isothermal (D2Q9) | 1024² | 318 | 171.4 | 169.6 | 174.0 |
+| free surface + LES (D2Q9) | 256² | 4007 | 117.8 | 109.6 | 131.5 |
+| free surface + LES (D2Q9) | 512² | 1204 | 169.7 | 169.6 | 173.1 |
+| free surface + LES (D2Q9) | 1024² | 367 | 189.6 | 188.6 | 190.3 |
+
+- The first version ran at 40 / 47 / 50 MLUPS: passes 2–4 computed every neighbour index with `rem_euclid` (two
+  integer divisions per link) and counted the receivers of every cell. Wrapping by comparison, as the stream-collide
+  kernel does, and counting receivers only for cells with an excess (a zero excess shares nothing; the results are
+  bit-identical) made them 3.4–3.8× faster.
+- The `dam-break` example (202 × 101 cells, 15,845 steps to 1 s): **6.0 s, 53 MLUPS**, liquid-mass drift
+  −1.8 × 10⁻⁸ (`cfd-cli run scenes/dam-break.json --backend cpu`). At 20 k cells the run is dominated by the
+  per-step thread synchronisation of the four passes, as the 256² row shows.
+- A liquid-dominated grid (a tank mostly full) costs more per cell: every cell then runs the collision and the
+  mass exchange. The GPU ports (#44) are measured against the single-phase numbers there.
+
 ## Viewer in the browser on the real GPU — NVIDIA GeForce RTX 4060 (8 GB), 2026-10-27
 
 Issue #21: the Phase 5 viewer had only run on SwiftShader (software WebGL) in Playwright. Here it runs in

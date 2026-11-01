@@ -88,8 +88,9 @@ Given `dx` (= `cellSize`), a characteristic physical velocity `U` and viscosity 
 **Phase 6a, as decided** ([design proposal](sessions/phase6a-design-proposal.md), [ADR-032](07-decisions-and-questions.md)):
 - Gas, interface and liquid cells, a mass `m` and fill fraction `φ = m/ρ` per cell. Four passes per step, each a
   per-cell gather from buffers it does not write (the cell states are ping-pong, like `f`): stream-collide with the
-  mass exchange `Δmᵢ = w (fᵢ^in − f*_ī)` (w = 1 to liquid, ½(φ + φⱼ) to interface neighbours, from the stored φ) and the
-  gas-link reconstruction `fᵢ = fᵢ^eq(1, u) + f_ī^eq(1, u) − f*_ī`; new interface cells next to filled ones; their
+  mass exchange `Δmᵢ = w (fᵢ^in − f*_ī)` (w = 1 when either cell is liquid, ½(φ + φⱼ) between interface cells, from
+  the stored φ) and the gas-link reconstruction `fᵢ = fᵢ^eq(1, u) + f_ī^eq(1, u) − f*_ī`; new interface cells next
+  to filled ones; their
   initialisation from the neighbours' mean ρ, u; the excess mass split equally over liquid and interface neighbours.
 - Gravity as a Guo body force on the liquid (no hydrostatic split, [ADR-016](07-decisions-and-questions.md) amended);
   the free-fall velocity √(2 g H) joins the characteristic velocities of §3.3; the hydrostatic density variation is
