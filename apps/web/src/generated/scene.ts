@@ -93,6 +93,10 @@ export type EdgeKind = 'wall' | 'periodic'
 export type LayerDtype = 'u8' | 'u16'
 export type LayerEncoding = 'raw+base64' | 'zstd+base64' | 'deflate+base64'
 export type Buoyancy = 'none' | 'boussinesq'
+export type Turbulence = {
+  constant: number
+  model: 'smagorinsky'
+}
 export type BackendPreference = ('cpu' | 'wgpu' | 'cuda') | 'auto'
 export type Method = 'lbm'
 export type OutputField =
@@ -250,6 +254,11 @@ export interface Physics {
    * Solve the temperature field.
    */
   thermal: boolean
+  /**
+   * Subgrid turbulence model. It changes the results, so it travels with the scene; needed
+   * for low-viscosity liquids such as water at millimetre cells (relaxation time close to ½).
+   */
+  turbulence?: Turbulence | null
 }
 export interface Probe {
   name: string

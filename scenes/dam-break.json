@@ -64,7 +64,11 @@
     ],
     "thermal": false,
     "buoyancy": "none",
-    "freeSurface": true
+    "freeSurface": true,
+    "turbulence": {
+      "model": "smagorinsky",
+      "constant": 0.1
+    }
   },
   "run": {
     "method": "lbm",

@@ -357,6 +357,30 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   reconstruction back into a pass before streaming, as FluidX3D does, with the same arithmetic. The formulas taken
   from Körner and Thürey, whose papers were not reachable during the design, are checked against them in #43 before
   coding.
+- **Implementation notes (2026-11-01, CPU, #43):**
+  - The four passes are `cfd_lbm::kernel::update_block::<_, true>` (pass 1, a `FREE_SURFACE` const generic like
+    `THERMAL`) and `cfd_lbm::surface::{fill, init_states, init_value, finish}`; the planes are
+    `cfd_lbm::shared::SurfacePlanes`, the state bits `cfd_lbm::surface::state` (phase bits 0–1 =
+    `cfd_core::domain::phase`, marks 2–3, receiver count 4–7, stored only for a cell with a non-zero excess, which the
+    GPU kernels must reproduce). On the CPU the GI cells' equilibrium is gathered for
+    all of them before any is written, which is the GPU's gather in two steps.
+  - **Exchange weight:** 1 when *either* cell is liquid, ½(φ + φ_j) between two interface cells, 0 to gas (FluidX3D's
+    rule). The proposal's table (½(φ + φ_j) for a liquid cell's interface neighbour) is not antisymmetric, since the
+    interface side uses 1 for its liquid neighbour.
+  - **Mass without receivers** stays in the cell's `m`, even in a gas cell (FluidX3D), and is handed on when a
+    neighbour becomes wet again; the liquid mass is therefore Σ(m + m_ex) over *all* fluid cells.
+  - **Measured:** the `dam-break` example runs to 1 s on the CPU (15,845 steps, 6.0 s, 53 MLUPS on 16 threads) with a
+    liquid-mass drift of −1.8 × 10⁻⁸. Front Z = x_f/a at T = t√(2g/a) = 1, 2, 3: **1.455, 2.476, 3.775** with the LES
+    model (option A) and 1.400, 2.359, 3.602 with an effective viscosity at τ = 0.51 (option B, −4.6 % at T = 3);
+    the slope dZ/dT ≈ 1.3 stays below Ritter's 2. The comparison with Martin & Moyce needs their digitised points
+    (#45); A stays the example's setting until then.
+  - **Free fall:** a slab across a periodic channel falls within 0.6 % of ½ g t², and the liquid moves at 0.997 g t;
+    a square block's mass centroid trails by ≈ 2 %, because its side faces slide along the gas and interface cells
+    carry mass at the weight ½(φ + φ_j) < 1. The validation case (#45, 1 %) decides whether the normal-based
+    reconstruction (the Q2 fallback) is needed. κ stays 0: the still tank shows no flipping.
+  - The wgpu and CUDA engines refuse free-surface and turbulence-model domains with a clear error until #44, so
+    such scenes run with `--backend cpu` (an `auto` choice on a GPU machine fails).
+  - The Körner and Thürey papers were still not reachable; the arithmetic follows FluidX3D's source.
 
 ## Open questions
 

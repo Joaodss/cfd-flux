@@ -26,6 +26,10 @@ pub enum Model {
     Iso,
     /// Heated cavity, Ra = 1e5, Pr = 0.71.
     Thermal,
+    /// Dam break with a free surface and the Smagorinsky model (N² tank; MLUPS count the gas
+    /// cells too, which the solver skips).
+    #[serde(rename = "free-surface")]
+    FreeSurface,
 }
 
 impl Model {
@@ -33,6 +37,7 @@ impl Model {
         match self {
             Model::Iso => "isothermal (D2Q9)",
             Model::Thermal => "thermal (D2Q9 + D2Q5)",
+            Model::FreeSurface => "free surface + LES (D2Q9)",
         }
     }
 }
@@ -189,6 +194,7 @@ fn scene(model: Model, n: u32) -> Scene {
     match model {
         Model::Iso => scenes::lid_driven_cavity(n, 100.0),
         Model::Thermal => scenes::heated_cavity(n, 1e5, 0.71),
+        Model::FreeSurface => scenes::dam_break(n),
     }
 }
 

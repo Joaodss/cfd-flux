@@ -68,14 +68,21 @@ const MESSAGES: Record<string, Format> = {
       ? `Lattice Mach number ${num(p.mach)} is too high (limit ${num(p.limit)})`
       : `Lattice Mach number ${num(p.mach)} is above ${num(p.limit)}: compressibility errors grow`,
   'stability.tau': (p) =>
-    Number(p.limit) <= 0.51 // below the lower limits, not above the upper one
-      ? `Viscous relaxation time τ = ${num(p.tau)} is too close to 0.5: refine the grid or slow the flow down`
-      : `Viscous relaxation time τ = ${num(p.tau)} is large: accuracy drops; coarsen the grid`,
+    p.subgrid // accepted because the scene has a turbulence model
+      ? `Viscous relaxation time τ = ${num(p.tau)} is close to 0.5: the turbulence model has to keep the run stable`
+      : Number(p.limit) <= 0.51 // below the lower limits, not above the upper one
+        ? `Viscous relaxation time τ = ${num(p.tau)} is too close to 0.5: refine the grid, slow the flow down or turn on a turbulence model`
+        : `Viscous relaxation time τ = ${num(p.tau)} is large: accuracy drops; coarsen the grid`,
   'stability.tauThermal': (p) =>
     `Thermal relaxation time τ = ${num(p.tau)} is outside the comfortable range (limit ${num(p.limit)})`,
   'stability.gridRe': (p) =>
     `The grid Reynolds number U·Δx/ν = ${num(p.gridRe)} is high (above ${num(p.limit)}): refine the grid`,
-  'support.freeSurface': () => 'Free-surface flows are not supported by the solver yet',
+  'support.freeSurfaceOpen': () =>
+    'A free surface needs a closed container: inlets and outlets are not supported with it yet',
+  'support.freeSurfaceThermal': () => 'A free surface cannot be combined with temperature yet',
+  'support.freeSurfaceMovingWall': (p, c) =>
+    `${element(p, c)}: moving walls with a free surface are not validated`,
+  'physics.turbulence': () => 'The Smagorinsky constant must be a positive number',
   'support.multiFluid': () => 'Only one fluid per simulation is supported yet',
   'support.precision': () => 'The solver runs in f32 (f64 is not supported yet)',
   'physics.buoyancy': () => 'Boussinesq buoyancy needs temperature: it is ignored',

@@ -122,19 +122,35 @@ pub struct StabilityInput {
     pub alpha: Option<f64>,
     /// Largest velocity expected from the boundary/initial conditions.
     pub u_max: f64,
+    /// A subgrid turbulence model raises the viscous relaxation time where the flow is sheared,
+    /// so a molecular τ below [`TAU_MIN`] is only a warning (it must still exceed ½).
+    pub subgrid: bool,
 }
 
 /// Checks relaxation times, Mach number and grid Reynolds number; adds issues to `report`.
 pub fn check_stability(input: &StabilityInput, report: &mut Report) {
     const HINT: &str =
         "increase the resolution (smaller cellSize) or lower the lattice velocity (more steps)";
-    check_tau(
-        relaxation_time(input.nu),
-        "stability.tau",
-        "viscous",
-        HINT,
-        report,
-    );
+    const HINT_LES: &str =
+        "increase the resolution (smaller cellSize), lower the lattice velocity \
+         (more steps) or enable a turbulence model (physics.turbulence)";
+    let tau = relaxation_time(input.nu);
+    if input.subgrid && tau > 0.5 && tau < TAU_MIN {
+        report
+            .warning(
+                "stability.tau",
+                format!(
+                    "viscous relaxation time τ = {tau:.5} is close to 0.5: the turbulence model \
+                     must keep the run stable"
+                ),
+            )
+            .param("tau", tau)
+            .param("limit", TAU_MIN)
+            .param("subgrid", true);
+    } else {
+        let hint = if input.subgrid { HINT } else { HINT_LES };
+        check_tau(tau, "stability.tau", "viscous", hint, report);
+    }
     if let Some(alpha) = input.alpha {
         check_tau(
             relaxation_time(alpha),
@@ -278,6 +294,7 @@ mod tests {
     #[test]
     fn stable_parameters_give_no_issues() {
         let ok = StabilityInput {
+            subgrid: false,
             nu: 0.02,
             alpha: Some(0.03),
             u_max: 0.05,
@@ -288,6 +305,7 @@ mod tests {
     #[test]
     fn unstable_parameters_are_reported() {
         let low_tau = StabilityInput {
+            subgrid: false,
             nu: 1e-4,
             alpha: None,
             u_max: 0.001,
@@ -295,6 +313,7 @@ mod tests {
         assert_eq!(codes(low_tau), vec![(Severity::Error, "stability.tau")]);
 
         let near_half = StabilityInput {
+            subgrid: false,
             nu: 0.002,
             alpha: Some(1e-5),
             u_max: 0.05,
@@ -308,6 +327,7 @@ mod tests {
         );
 
         let fast = StabilityInput {
+            subgrid: false,
             nu: 0.1,
             alpha: None,
             u_max: 0.2,
@@ -316,6 +336,7 @@ mod tests {
 
         // With Ma < 0.17, a high grid Reynolds number implies τ close to 0.5.
         let coarse = StabilityInput {
+            subgrid: false,
             nu: 0.002,
             alpha: None,
             u_max: 0.08,

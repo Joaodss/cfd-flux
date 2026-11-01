@@ -1,17 +1,18 @@
 //! CPU backend: the numerical reference, parallelised over blocks of rows with `rayon`.
 
-use cfd_core::domain::{flags, Domain};
+use cfd_core::domain::{flags, phase, Domain};
 use cfd_core::solver::{
-    BackendKind, Diagnostics, ElementForce, LatticeFields, Solver, SolverError,
+    BackendKind, Diagnostics, ElementForce, LatticeFields, LiquidDiagnostics, Solver, SolverError,
 };
 use rayon::prelude::*;
 
 use crate::config::LbmConfig;
-use crate::kernel::{update_block, Block, Source, StepParams};
+use crate::kernel::{update_block, Block, Source, StepParams, SurfaceBlock, SurfaceSource};
 use crate::shared::{
-    equilibrium_populations, initial_fields, outgoing_index, relaxation_rates, wall_forces,
-    wall_links, WallLink,
+    equilibrium_populations, initial_fields, les_params, outgoing_index, relaxation_rates,
+    surface_planes, wall_forces, wall_links, SurfacePlanes, WallLink,
 };
+use crate::surface::{self, state, FinishBlock};
 
 pub struct CpuLbm {
     domain: Domain,
@@ -27,6 +28,8 @@ pub struct CpuLbm {
     ux: Vec<f32>,
     uy: Vec<f32>,
     theta: Vec<f32>,
+    /// Free-surface planes (`state` is `state_a`, the input and output of a step).
+    surf: Option<SurfacePlanes>,
     steps: u64,
     /// Bounce-back links, for momentum-exchange forces.
     links: Vec<WallLink>,
@@ -47,6 +50,7 @@ impl CpuLbm {
             omega_g,
             body_force: domain.physics.body_force.map(|v| v as f32),
             buoyancy: domain.physics.buoyancy.map(|v| v as f32),
+            les: les_params(&domain, config),
         };
         let links = wall_links(&domain);
         let g_len = if thermal { 5 * n } else { 0 };
@@ -61,6 +65,7 @@ impl CpuLbm {
             ux: vec![0.0; n],
             uy: vec![0.0; n],
             theta: vec![0.0; n],
+            surf: None,
             steps: 0,
             links,
             domain,
@@ -82,19 +87,49 @@ impl CpuLbm {
         self.params.body_force = force.map(|v| v as f32);
     }
 
+    /// The free-surface planes after the last step (`None` without a free surface), for tests.
+    pub fn surface(&self) -> Option<&SurfacePlanes> {
+        self.surf.as_ref()
+    }
+
+    /// Rows per parallel block: ~4 blocks per thread balances the load without much overhead.
+    fn block_rows(&self) -> usize {
+        (self.params.h / (4 * rayon::current_num_threads())).max(1)
+    }
+
     fn step_once(&mut self, write_macro: bool) {
         let (w, n) = (self.params.w, self.params.n);
         let thermal = !self.g.is_empty();
-        // ~4 blocks per thread balances the load without much overhead.
-        let rows = (self.params.h / (4 * rayon::current_num_threads())).max(1);
+        let rows = self.block_rows();
         let block = rows * w;
 
+        // Disjoint fields of `self.surf`, borrowed separately (the borrow checker accepts it
+        // because no plane is both read and written).
+        let (surf_src, surf_blocks): (_, Vec<SurfaceBlock>) = match &mut self.surf {
+            Some(SurfacePlanes {
+                state,
+                state_b,
+                mass,
+                massex,
+                phi,
+            }) => (
+                Some(SurfaceSource { state, massex, phi }),
+                state_b
+                    .chunks_mut(block)
+                    .zip(mass.chunks_mut(block))
+                    .map(|(state, mass)| SurfaceBlock { state, mass })
+                    .collect(),
+            ),
+            None => (None, Vec::new()),
+        };
+        let free_surface = surf_src.is_some();
         let src = Source {
             f: &self.f,
             g: &self.g,
             flags: &self.domain.flags,
             slot: &self.domain.bc_slot,
             bc: &self.domain.bc_params,
+            surf: surf_src,
         };
         let f_blocks = plane_blocks::<9>(&mut self.f_next, n, block);
         let mut g_blocks = if thermal {
@@ -106,6 +141,7 @@ impl CpuLbm {
             Vec::new()
         }
         .into_iter();
+        let mut surf_blocks = surf_blocks.into_iter();
         let blocks: Vec<Block> = f_blocks
             .into_iter()
             .zip(self.rho.chunks_mut(block))
@@ -121,21 +157,93 @@ impl CpuLbm {
                 ux,
                 uy,
                 theta,
+                surf: surf_blocks.next(),
             })
             .collect();
 
         let params = &self.params;
-        if thermal {
-            blocks
+        match (thermal, free_surface) {
+            (true, _) => blocks
                 .into_par_iter()
-                .for_each(|b| update_block::<true>(params, &src, b, write_macro));
-        } else {
-            blocks
+                .for_each(|b| update_block::<true, false>(params, &src, b, write_macro)),
+            (false, true) => blocks
                 .into_par_iter()
-                .for_each(|b| update_block::<false>(params, &src, b, write_macro));
+                .for_each(|b| update_block::<false, true>(params, &src, b, write_macro)),
+            (false, false) => blocks
+                .into_par_iter()
+                .for_each(|b| update_block::<false, false>(params, &src, b, write_macro)),
+        }
+        if free_surface {
+            self.surface_passes();
         }
         std::mem::swap(&mut self.f, &mut self.f_next);
         std::mem::swap(&mut self.g, &mut self.g_next);
+    }
+
+    /// Passes 2–4 of a free-surface step (see [`crate::surface`]); `f_next` holds pass 1's output.
+    fn surface_passes(&mut self) {
+        let (w, n) = (self.params.w, self.params.n);
+        let rows = self.block_rows();
+        let block = rows * w;
+        let p = &self.params;
+        let fl = &self.domain.flags;
+        let s = self.surf.as_mut().expect("free surface");
+
+        // 2: state_b → state_a.
+        s.state
+            .par_chunks_mut(block)
+            .enumerate()
+            .for_each(|(b, out)| surface::fill(p, fl, &s.state_b, b * rows, out));
+        // 3: state_a → state_b; then the new interface cells' populations, from values gathered
+        // before any is written.
+        s.state_b
+            .par_chunks_mut(block)
+            .enumerate()
+            .for_each(|(b, out)| surface::init_states(p, fl, &s.state, b * rows, out));
+        let (state_a, rho, ux, uy) = (&s.state, &self.rho, &self.ux, &self.uy);
+        let new: Vec<_> = (0..n)
+            .into_par_iter()
+            .with_min_len(4096)
+            .filter(|&k| {
+                state::mark(state_a[k]) == state::TO_INTERFACE && flags::flow(fl[k]) == flags::FLUID
+            })
+            .map(|k| surface::init_value(p, fl, state_a, rho, ux, uy, k))
+            .collect();
+        for c in &new {
+            surface::init_populations(
+                n,
+                c,
+                &mut self.f_next,
+                &mut self.rho,
+                &mut self.ux,
+                &mut self.uy,
+            );
+        }
+        // 4: state_b → state_a, mass, massex, φ.
+        let rho = &self.rho;
+        let SurfacePlanes {
+            state,
+            state_b,
+            mass,
+            massex,
+            phi,
+        } = s;
+        state
+            .par_chunks_mut(block)
+            .zip(mass.par_chunks_mut(block))
+            .zip(massex.par_chunks_mut(block))
+            .zip(phi.par_chunks_mut(block))
+            .enumerate()
+            .for_each(|(b, (((state, mass), massex), phi))| {
+                let out = FinishBlock {
+                    y0: b * rows,
+                    state,
+                    mass,
+                    massex,
+                    phi,
+                };
+                surface::finish(p, fl, state_b, rho, out)
+            });
     }
 }
 
@@ -189,16 +297,31 @@ impl Solver for CpuLbm {
         self.rho.copy_from_slice(&fields.density);
         self.ux.copy_from_slice(&fields.ux);
         self.uy.copy_from_slice(&fields.uy);
+        self.surf = surface_planes(&self.domain, fields);
         Ok(())
     }
 
     fn lattice_fields(&mut self) -> LatticeFields {
-        LatticeFields {
+        let mut lf = LatticeFields {
             density: self.rho.clone(),
             ux: self.ux.clone(),
             uy: self.uy.clone(),
             theta: (!self.g.is_empty()).then(|| self.theta.clone()),
+            fill: None,
+            phase: None,
+        };
+        if let Some(s) = &self.surf {
+            let phases: Vec<u8> = s.state.iter().map(|&st| state::phase(st)).collect();
+            // Gas cells keep whatever their last update stored: report the gas state instead.
+            for (k, &p) in phases.iter().enumerate() {
+                if !phase::wet(p) {
+                    (lf.density[k], lf.ux[k], lf.uy[k]) = (1.0, 0.0, 0.0);
+                }
+            }
+            lf.fill = Some(s.phi.clone());
+            lf.phase = Some(phases);
         }
+        lf
     }
 
     fn diagnostics(&mut self) -> Diagnostics {
@@ -209,6 +332,8 @@ impl Solver for CpuLbm {
             energy: f64,
             umax: f64,
             heat: f64,
+            volume: f64,
+            interface: usize,
             finite: bool,
         }
         let zero = Acc {
@@ -217,10 +342,13 @@ impl Solver for CpuLbm {
             energy: 0.0,
             umax: 0.0,
             heat: 0.0,
+            volume: 0.0,
+            interface: 0,
             finite: true,
         };
         let flags = &self.domain.flags;
         let (rho, ux, uy, theta) = (&self.rho, &self.ux, &self.uy, &self.theta);
+        let surf = self.surf.as_ref();
         let acc = (0..self.params.n)
             .into_par_iter()
             .with_min_len(4096)
@@ -228,10 +356,23 @@ impl Solver for CpuLbm {
             .fold(
                 || zero,
                 |mut a, i| {
+                    if let Some(s) = surf {
+                        // Liquid mass: every cell's m + m_ex (gas cells may hold the mass of a
+                        // cell that emptied with no neighbour to give it to).
+                        a.mass += s.mass[i] as f64 + s.massex[i] as f64;
+                        a.volume += s.phi[i] as f64;
+                        let p = state::phase(s.state[i]);
+                        a.interface += (p == phase::INTERFACE) as usize;
+                        if !phase::wet(p) {
+                            return a;
+                        }
+                    }
                     let (r, x, y, t) = (rho[i] as f64, ux[i] as f64, uy[i] as f64, theta[i]);
                     let usq = x * x + y * y;
                     a.cells += 1;
-                    a.mass += r;
+                    if surf.is_none() {
+                        a.mass += r;
+                    }
                     a.energy += 0.5 * r * usq;
                     a.umax = a.umax.max(usq.sqrt());
                     a.heat += t as f64;
@@ -247,6 +388,8 @@ impl Solver for CpuLbm {
                     energy: a.energy + b.energy,
                     umax: a.umax.max(b.umax),
                     heat: a.heat + b.heat,
+                    volume: a.volume + b.volume,
+                    interface: a.interface + b.interface,
                     finite: a.finite && b.finite,
                 },
             );
@@ -257,17 +400,27 @@ impl Solver for CpuLbm {
             kinetic_energy: acc.energy,
             max_velocity: acc.umax,
             thermal_energy: (!self.g.is_empty()).then_some(acc.heat),
-            finite: acc.finite,
+            finite: acc.finite && acc.mass.is_finite(),
+            liquid: surf.map(|_| LiquidDiagnostics {
+                volume: acc.volume,
+                interface_cells: acc.interface,
+            }),
         }
     }
 
     fn forces(&mut self) -> Vec<ElementForce> {
         let n = self.params.n;
-        let outgoing: Vec<f32> = self
-            .links
-            .iter()
-            .map(|l| self.f[outgoing_index(l, n)])
-            .collect();
-        wall_forces(&self.domain, &self.links, &outgoing)
+        // Gas cells hold stale populations and exert no force.
+        let links: Vec<WallLink> = match &self.surf {
+            Some(s) => self
+                .links
+                .iter()
+                .copied()
+                .filter(|l| phase::wet(state::phase(s.state[l.cell as usize])))
+                .collect(),
+            None => self.links.clone(),
+        };
+        let outgoing: Vec<f32> = links.iter().map(|l| self.f[outgoing_index(l, n)]).collect();
+        wall_forces(&self.domain, &links, &outgoing)
     }
 }

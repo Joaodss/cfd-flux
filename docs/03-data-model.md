@@ -36,7 +36,8 @@
   ],
   "probes": [ { "name": "Probe A", "position": [600, 150] } ],   // cell coordinates
   "initial": { "fluid": 1, "velocity": [0, 0], "temperature": 293.15, "pressure": 0 },
-  "physics": { "gravity": [0, -9.81], "thermal": true, "buoyancy": "boussinesq", "freeSurface": false },
+  "physics": { "gravity": [0, -9.81], "thermal": true, "buoyancy": "boussinesq", "freeSurface": false,
+               "turbulence": { "model": "smagorinsky", "constant": 0.1 } },   // turbulence optional
   "reference": { "length": 0.1, "velocity": 1.0 },   // optional: scales of reported Re, Ra, C_D, C_L, St, Nu
   "run": {
     "method": "lbm",                 // more methods added in later phases
@@ -49,6 +50,8 @@
   "layers": { "...": "see section 3" }
 }
 ```
+
+**Free surface** (`physics.freeSurface`): *fluid* cells are the initial liquid and *empty* cells the gas; the domain must be closed (no inlets or outlets) and isothermal. Gravity then acts on the liquid as a body force and the pressure is gauge relative to the gas (ADR-032). **Turbulence** (`physics.turbulence`, optional): `{ "model": "smagorinsky", "constant": C_s }`, a subgrid model that raises the relaxation time where the flow is sheared; with it, a relaxation time below 0.505 (water at millimetre cells) is a warning instead of an error. It changes the results, so it is part of the scene.
 
 **Reference scales** (`reference`, optional; `length` m, `velocity` m/s, `temperatureDifference` K, each optional): the scales of the dimensionless numbers *reported* for the scene — Re and Ra in the estimate, the force coefficients, St and Nu in the viewer — e.g. a cylinder's diameter and the mean inlet velocity. They never change the simulation: the time step still follows the fastest prescribed velocity. A missing value is the solver's characteristic scale (the shorter side of the fluid's bounding box, the largest prescribed or buoyancy velocity, the spread of the prescribed temperatures).
 

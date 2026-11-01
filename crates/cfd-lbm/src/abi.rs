@@ -274,7 +274,8 @@ pub struct SampleLayout {
 impl SampleLayout {
     pub fn new(d: &Domain, spec: &SampleSpec) -> Self {
         let c = OutputCoefficients::new(d);
-        let fields = spec.resolved(d.physics.thermal());
+        // The GPU backends refuse free-surface domains until they sample the fill fraction (#44).
+        let fields = spec.resolved(d.physics.thermal(), false);
         let (out_w, out_h) = spec.out_size(d.width, d.height);
         let f16 = spec.precision == Precision::F16;
         let mut p = SampleParams {

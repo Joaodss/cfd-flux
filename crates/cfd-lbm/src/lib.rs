@@ -7,6 +7,7 @@
 //! - [`abi`]: the parameter block and constants the GPU kernels see, and their generators.
 //! - [`shared`]: initial state, equilibrium populations, relaxation rates and momentum-exchange
 //!   bookkeeping, used unchanged by the GPU backends.
+//! - [`surface`]: the free surface (ADR-032): cell states and the conversion passes.
 //!
 //! This backend is the numerical reference that the GPU backends are tested against; the
 //! memory layout is documented in `kernel.rs` and must stay identical in WGSL and CUDA.
@@ -17,6 +18,7 @@ mod cpu;
 mod kernel;
 pub mod lattice;
 pub mod shared;
+pub mod surface;
 
 pub use config::{Collision, LbmConfig};
 pub use cpu::CpuLbm;

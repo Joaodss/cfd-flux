@@ -1159,6 +1159,8 @@ mod tests {
             ux: vec![0.1, 0.05 + v, 0.0],
             uy: vec![0.0, 0.01, -0.02],
             theta: None,
+            fill: None,
+            phase: None,
         }
     }
 

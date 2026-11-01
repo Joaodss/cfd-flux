@@ -92,6 +92,7 @@ fn scene(
             thermal: false,
             buoyancy: Buoyancy::None,
             free_surface: false,
+            turbulence: None,
         },
         reference: None,
         run: RunConfig {
@@ -228,6 +229,40 @@ pub fn heated_cavity(n: u32, ra: f64, pr: f64) -> Scene {
         thermal: true,
         buoyancy: Buoyancy::Boussinesq,
         free_surface: false,
+        turbulence: None,
+    };
+    s
+}
+
+/// Dam break in a square tank of `n²` cells (side 0.4 m; the domain edges are the walls): a
+/// water column of a × 2a, a = 0.1 m, at the left wall, gas elsewhere, gravity, the Smagorinsky
+/// model with C_s = 0.1 (water's τ is close to ½). Martin & Moyce's n² = 2 column, as in the
+/// `dam-break` example, for benchmarks at any resolution.
+pub fn dam_break(n: u32) -> Scene {
+    let mut c = Canvas::new(n, n, CellType::Empty);
+    c.rect(0, 0, n / 4, n / 2, CellType::Fluid, 0);
+    let mut water = fluid(1.004e-6);
+    water.name = "Water".into();
+    water.density = 998.2;
+    let mut s = scene(
+        format!("Dam break ({n}²)"),
+        &c,
+        0.4 / n as f64,
+        DomainEdges::default(),
+        water,
+        vec![],
+        (
+            1.0,
+            0.01,
+            vec![OutputField::Velocity, OutputField::FillFraction],
+        ),
+    );
+    s.physics = Physics {
+        gravity: [0.0, -STANDARD_GRAVITY],
+        thermal: false,
+        buoyancy: Buoyancy::None,
+        free_surface: true,
+        turbulence: Some(Turbulence::Smagorinsky { constant: 0.1 }),
     };
     s
 }

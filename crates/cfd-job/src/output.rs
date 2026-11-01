@@ -45,6 +45,7 @@ fn sampling_domain(d: &Domain) -> Domain {
         slot_element: Vec::new(),
         probes: Vec::new(),
         issues: Vec::new(),
+        free_surface: d.free_surface.clone(),
         // The remaining fields are `Copy`: they are copied out of `*d`.
         ..*d
     }

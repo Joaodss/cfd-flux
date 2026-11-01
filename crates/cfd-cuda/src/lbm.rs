@@ -136,6 +136,12 @@ impl CudaLbm {
         config: LbmConfig,
         options: CudaLbmOptions,
     ) -> Result<Self, CudaError> {
+        if domain.free_surface.is_some() || domain.physics.smagorinsky.is_some() {
+            return Err(CudaError::Driver(
+                "free-surface and turbulence-model runs are not on the CUDA engine yet (#44): use the CPU engine"
+                    .into(),
+            ));
+        }
         if !options.graph_steps.is_multiple_of(2) {
             return Err(CudaError::Driver(format!(
                 "graph_steps must be even (got {})",
