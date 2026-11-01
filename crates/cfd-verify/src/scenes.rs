@@ -400,46 +400,6 @@ pub fn schafer_turek(cells_per_diameter: u32, u_max: f64) -> Scene {
     s
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cfd_core::{Domain, DomainOptions};
-
-    fn domain(s: &Scene) -> Domain {
-        Domain::from_scene(s, &DomainOptions::default())
-            .unwrap_or_else(|r| panic!("{:#?}", r.issues))
-    }
-
-    #[test]
-    fn builders_give_the_intended_dimensionless_numbers() {
-        let d = domain(&lid_driven_cavity(64, 400.0));
-        assert!((d.numbers.reynolds / 400.0 - 1.0).abs() < 1e-12);
-        assert!((d.numbers.length - 1.0).abs() < 1e-12);
-
-        let d = domain(&heated_cavity(64, 1e5, 0.71));
-        assert!((d.numbers.rayleigh.unwrap() / 1e5 - 1.0).abs() < 1e-9);
-        assert!((d.numbers.prandtl.unwrap() / 0.71 - 1.0).abs() < 1e-9);
-        assert!((d.numbers.velocity - 1.0).abs() < 1e-9);
-
-        let s = schafer_turek(20, 0.3);
-        assert_eq!((s.grid.width, s.grid.height), (442, 84));
-        let d = domain(&s);
-        assert!(d.issues.is_empty(), "{:?}", d.issues);
-        assert_eq!(d.probes[0].y, d.probes[1].y);
-        assert!(d.probes[0].x < 41 && d.probes[1].x > 41);
-
-        let d = domain(&rayleigh_benard(16, 1700.0, 0.71));
-        assert_eq!((d.width, d.height), (32, 18));
-        assert_eq!(d.periodic, [true, false]);
-        assert!(d.physics.alpha.is_some());
-
-        let d = domain(&plane_channel(16, 0.1, 0.0));
-        assert_eq!(d.periodic, [true, false]);
-        let d = domain(&periodic_box(16, 0.1));
-        assert_eq!(d.periodic, [true, true]);
-    }
-}
-
 /// A box of `w × h` cells of `cell_size` m (the domain edges are walls, or periodic along x)
 /// with liquid where `liquid(x, y)` holds and gas elsewhere, gravity downwards. The liquid is
 /// water (density 998.2 kg/m³) with kinematic viscosity `nu`; `les` adds the Smagorinsky model
@@ -494,4 +454,44 @@ pub fn liquid_box(
         turbulence: les.then_some(Turbulence::Smagorinsky { constant: 0.1 }),
     };
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cfd_core::{Domain, DomainOptions};
+
+    fn domain(s: &Scene) -> Domain {
+        Domain::from_scene(s, &DomainOptions::default())
+            .unwrap_or_else(|r| panic!("{:#?}", r.issues))
+    }
+
+    #[test]
+    fn builders_give_the_intended_dimensionless_numbers() {
+        let d = domain(&lid_driven_cavity(64, 400.0));
+        assert!((d.numbers.reynolds / 400.0 - 1.0).abs() < 1e-12);
+        assert!((d.numbers.length - 1.0).abs() < 1e-12);
+
+        let d = domain(&heated_cavity(64, 1e5, 0.71));
+        assert!((d.numbers.rayleigh.unwrap() / 1e5 - 1.0).abs() < 1e-9);
+        assert!((d.numbers.prandtl.unwrap() / 0.71 - 1.0).abs() < 1e-9);
+        assert!((d.numbers.velocity - 1.0).abs() < 1e-9);
+
+        let s = schafer_turek(20, 0.3);
+        assert_eq!((s.grid.width, s.grid.height), (442, 84));
+        let d = domain(&s);
+        assert!(d.issues.is_empty(), "{:?}", d.issues);
+        assert_eq!(d.probes[0].y, d.probes[1].y);
+        assert!(d.probes[0].x < 41 && d.probes[1].x > 41);
+
+        let d = domain(&rayleigh_benard(16, 1700.0, 0.71));
+        assert_eq!((d.width, d.height), (32, 18));
+        assert_eq!(d.periodic, [true, false]);
+        assert!(d.physics.alpha.is_some());
+
+        let d = domain(&plane_channel(16, 0.1, 0.0));
+        assert_eq!(d.periodic, [true, false]);
+        let d = domain(&periodic_box(16, 0.1));
+        assert_eq!(d.periodic, [true, true]);
+    }
 }

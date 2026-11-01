@@ -739,17 +739,6 @@ pub fn skipping_macro_stores_changes_nothing(make: &Factory) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The CPU reference follows the same rule (no GPU needed).
-    #[test]
-    fn cpu_skip_macro_changes_nothing() {
-        skipping_macro_stores_changes_nothing(&|d, c| Box::new(CpuLbm::new(d, c)));
-    }
-}
-
 // ---- Free surface (ADR-032) ----
 
 /// Liquid mass, relative: the CPU sums Σ(m + m_ex) in f64; the GPUs sum f32 partials of
@@ -897,4 +886,15 @@ pub fn smagorinsky_cavity(make: &Factory) {
         2,
         LbmConfig::default(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The CPU reference follows the same rule (no GPU needed).
+    #[test]
+    fn cpu_skip_macro_changes_nothing() {
+        skipping_macro_stores_changes_nothing(&|d, c| Box::new(CpuLbm::new(d, c)));
+    }
 }
