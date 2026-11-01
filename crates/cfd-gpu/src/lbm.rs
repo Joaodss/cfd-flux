@@ -141,6 +141,12 @@ impl WgpuLbm {
         config: LbmConfig,
         workgroup: u32,
     ) -> Result<Self, GpuError> {
+        if domain.free_surface.is_some() || domain.physics.smagorinsky.is_some() {
+            return Err(GpuError::Validation(
+                "free-surface and turbulence-model runs are not on the wgpu engine yet (#44): use the CPU engine"
+                    .into(),
+            ));
+        }
         let limits = ctx.limits().clone();
         if workgroup == 0
             || workgroup > limits.max_compute_invocations_per_workgroup

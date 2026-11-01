@@ -41,6 +41,8 @@ fn taylor_green_fields(n: usize, u0: f64, nu: f64, t: f64) -> LatticeFields {
         ux: vec![0.0; n * n],
         uy: vec![0.0; n * n],
         theta: None,
+        fill: None,
+        phase: None,
     };
     for y in 0..n {
         for x in 0..n {

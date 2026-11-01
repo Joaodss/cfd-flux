@@ -175,6 +175,14 @@ pub fn validate(scene: &Scene) -> Report {
             }
         }
     }
+    if let Some(crate::scene::Turbulence::Smagorinsky { constant }) = scene.physics.turbulence {
+        if !(constant.is_finite() && constant > 0.0) {
+            r.error(
+                "physics.turbulence",
+                "the Smagorinsky constant must be a positive number",
+            );
+        }
+    }
     if !fluid_ids.contains(&(scene.initial.fluid as u32)) {
         r.error(
             "initial.fluid",

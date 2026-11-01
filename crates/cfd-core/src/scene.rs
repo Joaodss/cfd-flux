@@ -276,6 +276,22 @@ pub struct Physics {
     /// Liquid with a free surface; `empty` cells are gas/void.
     #[serde(default)]
     pub free_surface: bool,
+    /// Subgrid turbulence model. It changes the results, so it travels with the scene; needed
+    /// for low-viscosity liquids such as water at millimetre cells (relaxation time close to ½).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turbulence: Option<Turbulence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(
+    tag = "model",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum Turbulence {
+    /// Smagorinsky LES: eddy viscosity `(C_s Δx)² |S|`, with the strain rate from the
+    /// non-equilibrium populations (Hou et al. 1996). `constant` is C_s (typically 0.1–0.17).
+    Smagorinsky { constant: f64 },
 }
 
 /// Reference scales of the dimensionless numbers reported for a scene, e.g. a cylinder's

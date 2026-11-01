@@ -220,6 +220,8 @@ pub fn taylor_green(n: u32, u0: f32) -> LatticeFields {
         ux: vec![0.0; n_us * n_us],
         uy: vec![0.0; n_us * n_us],
         theta: None,
+        fill: None,
+        phase: None,
     };
     let k = 2.0 * PI / n as f64;
     for y in 0..n_us {

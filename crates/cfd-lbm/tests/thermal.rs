@@ -92,6 +92,8 @@ fn advected_sine_error(n: usize, config: LbmConfig) -> f64 {
         ux: vec![u0 as f32; 4 * n],
         uy: vec![0.0; 4 * n],
         theta: Some(field(0.0).iter().map(|&v| v as f32).collect()),
+        fill: None,
+        phase: None,
     })
     .unwrap();
     s.step(steps).unwrap();
@@ -147,6 +149,8 @@ fn adiabatic_walls_conserve_heat() {
         ux: vec![0.0; cells],
         uy: vec![0.0; cells],
         theta: Some(theta),
+        fill: None,
+        phase: None,
     })
     .unwrap();
     let h0 = s.diagnostics().thermal_energy.unwrap();

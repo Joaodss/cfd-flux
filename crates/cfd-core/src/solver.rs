@@ -3,7 +3,7 @@
 //! Backends only expose raw lattice fields ([`LatticeFields`]); the conversion to physical
 //! output fields ([`FieldSet::from_lattice`]) is shared, so every backend reports identical units.
 
-use crate::domain::{flags, Domain};
+use crate::domain::{flags, phase, Domain};
 use crate::sample::{LatticeSamples, PendingSamples, SampleSpec};
 use crate::scene::OutputField;
 use crate::units::UnitSystem;
@@ -26,7 +26,7 @@ pub enum SolverError {
 }
 
 /// Macroscopic fields in lattice units, one value per cell (`cell = y * width + x`).
-/// Non-fluid cells hold `ρ = 1`, `u = 0`.
+/// Non-fluid cells hold `ρ = 1`, `u = 0`; so do gas cells, as far as anything reads them.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LatticeFields {
     pub density: Vec<f32>,
@@ -34,6 +34,10 @@ pub struct LatticeFields {
     pub uy: Vec<f32>,
     /// Dimensionless temperature θ; `None` without the thermal lattice.
     pub theta: Option<Vec<f32>>,
+    /// Free surface: fill fraction φ (1 liquid, `m/ρ` interface, 0 gas and solid).
+    pub fill: Option<Vec<f32>>,
+    /// Free surface: the phase of each cell ([`phase`]).
+    pub phase: Option<Vec<u8>>,
 }
 
 impl LatticeFields {
@@ -46,13 +50,34 @@ impl LatticeFields {
             ux: vec![s.velocity[0] as f32; n],
             uy: vec![s.velocity[1] as f32; n],
             theta: domain.physics.thermal().then(|| vec![s.theta as f32; n]),
+            fill: domain.free_surface.as_ref().map(|fs| {
+                fs.phase
+                    .iter()
+                    .map(|&p| if phase::wet(p) { 1.0 } else { 0.0 })
+                    .collect()
+            }),
+            phase: domain.free_surface.as_ref().map(|fs| fs.phase.clone()),
         }
+    }
+
+    /// Whether cell `i` holds liquid (liquid or interface), for fields with a free surface;
+    /// always `true` without one.
+    pub fn wet(&self, i: usize) -> bool {
+        self.phase.as_ref().is_none_or(|p| phase::wet(p[i]))
     }
 
     pub fn check_len(&self, cells: usize) -> Result<(), SolverError> {
         let lens = [self.density.len(), self.ux.len(), self.uy.len()];
         let theta = self.theta.as_ref().map(Vec::len);
-        match lens.into_iter().chain(theta).find(|&l| l != cells) {
+        let fill = self.fill.as_ref().map(Vec::len);
+        let phase = self.phase.as_ref().map(Vec::len);
+        match lens
+            .into_iter()
+            .chain(theta)
+            .chain(fill)
+            .chain(phase)
+            .find(|&l| l != cells)
+        {
             Some(found) => Err(SolverError::FieldLength {
                 expected: cells,
                 found,
@@ -62,12 +87,14 @@ impl LatticeFields {
     }
 }
 
-/// Global quantities, in lattice units, over the fluid cells.
+/// Global quantities, in lattice units, over the fluid cells (with a free surface: over the
+/// liquid and interface cells).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Diagnostics {
     pub step: u64,
     pub fluid_cells: usize,
-    /// `Σ ρ`.
+    /// `Σ ρ`; with a free surface the liquid mass `Σ (m + m_ex)`, which the scheme conserves
+    /// to rounding (ADR-032).
     pub mass: f64,
     /// `½ Σ ρ |u|²`.
     pub kinetic_energy: f64,
@@ -77,6 +104,16 @@ pub struct Diagnostics {
     pub thermal_energy: Option<f64>,
     /// `false` if any NaN/Inf was found.
     pub finite: bool,
+    /// Free surface only.
+    pub liquid: Option<LiquidDiagnostics>,
+}
+
+/// Free-surface quantities (lattice units).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LiquidDiagnostics {
+    /// `Σ φ`: changes with the liquid's compressibility (≈ 1.5 u_lb²) while the mass does not.
+    pub volume: f64,
+    pub interface_cells: usize,
 }
 
 impl Diagnostics {
@@ -111,6 +148,9 @@ pub struct ProbeSample {
     pub pressure: f64,
     /// K, with the thermal lattice.
     pub temperature: Option<f64>,
+    /// Fill fraction φ, with a free surface. In gas the probe reads u = 0 and p = 0 (the gas
+    /// is the pressure reference).
+    pub fill: Option<f64>,
 }
 
 impl ProbeSample {
@@ -123,15 +163,25 @@ impl ProbeSample {
             .map(|p| {
                 let (x, y) = (p.x as usize, p.y as usize);
                 let i = y * domain.width as usize + x;
+                let wet = lf.wet(i);
                 ProbeSample {
                     name: p.name.clone(),
-                    velocity: [lf.ux[i], lf.uy[i]].map(|v| u.velocity_to_physical(v as f64)),
-                    pressure: u.density_to_gauge_pressure(lf.density[i] as f64)
-                        + domain.hydrostatic.pressure(u.rho0, u.dx, x, y),
+                    velocity: if wet {
+                        [lf.ux[i], lf.uy[i]].map(|v| u.velocity_to_physical(v as f64))
+                    } else {
+                        [0.0; 2]
+                    },
+                    pressure: if wet {
+                        u.density_to_gauge_pressure(lf.density[i] as f64)
+                            + domain.hydrostatic.pressure(u.rho0, u.dx, x, y)
+                    } else {
+                        0.0
+                    },
                     temperature: lf
                         .theta
                         .as_ref()
                         .map(|t| u.temperature_to_physical(t[i] as f64)),
+                    fill: lf.fill.as_ref().map(|f| f[i] as f64),
                 }
             })
             .collect()
@@ -175,7 +225,9 @@ impl FieldSet {
     ) -> FieldSet {
         let (w, h) = (domain.width as usize, domain.height as usize);
         let u = &domain.units;
-        let fluid = |i: usize| flags::flow(domain.flags[i]) == flags::FLUID;
+        // Gas cells are masked like solids (velocity and gauge pressure 0: the gas is the
+        // pressure reference).
+        let fluid = |i: usize| flags::flow(domain.flags[i]) == flags::FLUID && lf.wet(i);
         let vel = |v: f32| u.velocity_to_physical(v as f64) as f32;
         let mut fields = Vec::new();
         for &field in &req.fields {
@@ -230,7 +282,10 @@ impl FieldSet {
                     )
                 }
                 OutputField::Vorticity => (1, vorticity(domain, lf)),
-                OutputField::FillFraction => continue,
+                OutputField::FillFraction => {
+                    let Some(fill) = &lf.fill else { continue };
+                    (1, fill.clone())
+                }
             };
             fields.push(SampledField {
                 field,
@@ -248,10 +303,13 @@ impl FieldSet {
     }
 }
 
-/// `ω = ∂v/∂x − ∂u/∂y` in 1/s on fluid cells (0 elsewhere).
+/// `ω = ∂v/∂x − ∂u/∂y` in 1/s on fluid cells (0 elsewhere); gas cells count as walls.
 fn vorticity(domain: &Domain, lf: &LatticeFields) -> Vec<f32> {
     let (w, h) = (domain.width as usize, domain.height as usize);
-    let fluid = |x: usize, y: usize| flags::flow(domain.flags[y * w + x]) == flags::FLUID;
+    let fluid = |x: usize, y: usize| {
+        let i = y * w + x;
+        flags::flow(domain.flags[i]) == flags::FLUID && lf.wet(i)
+    };
     // Derivative of `f` along one axis at (x, y), using fluid neighbours only.
     let deriv = |f: &[f32], x: usize, y: usize, along_x: bool| -> f64 {
         let (n, p, periodic) = if along_x {

@@ -182,9 +182,14 @@ pub fn prepare(scene_json: String, opts: RunOptions) -> Result<Prepared, Prepare
             frame_fields.push(*f);
         }
     }
+    let free_surface = domain.free_surface.is_some();
+    // A free-surface frame always carries the fill fraction: the viewer masks the gas with it.
+    if free_surface && !frame_fields.contains(&OutputField::FillFraction) {
+        frame_fields.push(OutputField::FillFraction);
+    }
     frame_fields.retain(|f| match f {
         OutputField::Temperature => thermal,
-        OutputField::FillFraction => false,
+        OutputField::FillFraction => free_surface,
         _ => true,
     });
     Ok(Prepared {

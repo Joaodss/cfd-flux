@@ -76,6 +76,8 @@ pub(crate) fn split_fields(raw: &[f32], n: usize, thermal: bool) -> LatticeField
         ux: raw[n..2 * n].to_vec(),
         uy: raw[2 * n..3 * n].to_vec(),
         theta: thermal.then(|| raw[3 * n..4 * n].to_vec()),
+        fill: None,
+        phase: None,
     }
 }
 

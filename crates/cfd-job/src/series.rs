@@ -53,6 +53,9 @@ pub(crate) struct Series {
     /// Element id → column name, in column order.
     force_columns: Vec<(u16, String)>,
     thermal: bool,
+    free_surface: bool,
+    /// The liquid mass of the first sample (free surface), for `mass_drift`.
+    mass0: Option<f64>,
     columns: SeriesColumns,
     heat: Option<HeatSeries>,
 }
@@ -132,6 +135,7 @@ impl Series {
     /// [`take_heat`](Self::take_heat).
     pub fn create(dir: &ResultDir, scene: &Scene, domain: &Domain, heat: bool) -> Result<Self> {
         let thermal = domain.physics.thermal();
+        let free_surface = domain.free_surface.is_some();
         let start = || vec!["step".to_string(), "time_s".to_string()];
         let mut probe_columns = start();
         for p in &domain.probes {
@@ -141,6 +145,9 @@ impl Series {
             }
             if thermal {
                 probe_columns.push(format!("{n}.T_K"));
+            }
+            if free_surface {
+                probe_columns.push(format!("{n}.fill"));
             }
         }
 
@@ -169,6 +176,12 @@ impl Series {
         if thermal {
             diagnostics_columns.push("thermal_energy_lu".into());
         }
+        if free_surface {
+            // `mass_lu` is then the liquid mass Σ(m + m_ex).
+            for c in ["liquid_volume_lu", "interface_cells", "mass_drift"] {
+                diagnostics_columns.push(c.into());
+            }
+        }
         let (heat, heat_columns) = match heat {
             true => HeatSeries::create(dir, scene)?.unzip(),
             false => (None, None),
@@ -192,6 +205,8 @@ impl Series {
             diagnostics,
             force_columns,
             thermal,
+            free_surface,
+            mass0: None,
             columns,
             heat,
         };
@@ -224,6 +239,10 @@ impl Series {
             diag.max_mach(),
         ];
         diagnostics.extend(diag.thermal_energy);
+        if let Some(l) = diag.liquid {
+            let m0 = *self.mass0.get_or_insert(diag.mass);
+            diagnostics.extend([l.volume, l.interface_cells as f64, (diag.mass - m0) / m0]);
+        }
 
         let all = solver.forces();
         let mut forces = vec![step, time];
@@ -240,6 +259,9 @@ impl Series {
             probes.extend([p.velocity[0], p.velocity[1], p.pressure]);
             if self.thermal {
                 probes.push(p.temperature.unwrap_or(f64::NAN));
+            }
+            if self.free_surface {
+                probes.push(p.fill.unwrap_or(f64::NAN));
             }
         }
 

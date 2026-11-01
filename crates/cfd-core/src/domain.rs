@@ -15,7 +15,7 @@
 
 use crate::scene::{
     Buoyancy, CellType, EdgeKind, ElementKind, InletVelocity, OutletBc, Precision, Scene,
-    ThermalBc, WallVelocity,
+    ThermalBc, Turbulence, WallVelocity,
 };
 use crate::units::{
     check_stability, relaxation_time, StabilityInput, UnitSystem, CS2, DEFAULT_LATTICE_VELOCITY,
@@ -93,6 +93,31 @@ pub mod flags {
     }
 }
 
+/// Phases of the cells of a free-surface run (bits 0–1 of the solvers' state word, ADR-032).
+/// The static `flags` stay geometry only: gas, interface and liquid cells are all `FLUID` there.
+pub mod phase {
+    /// Gas ("empty"): constant pressure, no inertia, never updated.
+    pub const GAS: u8 = 0;
+    /// Interface: a liquid cell with its own mass `m` and fill fraction `φ = m/ρ`.
+    pub const INTERFACE: u8 = 1;
+    pub const LIQUID: u8 = 2;
+    /// Every non-fluid cell (walls, inlets, …); never changes.
+    pub const SOLID: u8 = 3;
+
+    /// Liquid or interface: the cells the solver updates.
+    pub const fn wet(p: u8) -> bool {
+        p == INTERFACE || p == LIQUID
+    }
+}
+
+/// The free-surface state at `t = 0` (ADR-032).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FreeSurface {
+    /// Phase of each cell ([`phase`]). Painted liquid cells with a gas neighbour (any of the 8)
+    /// are interface cells, full (`φ = 1`), so the liquid volume is exactly the painted one.
+    pub phase: Vec<u8>,
+}
+
 /// Boundary values of one slot, in lattice units. `#[repr(C)]` with explicit padding to 32 bytes
 /// so the same struct can be uploaded to WGSL/CUDA buffers.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -132,6 +157,8 @@ pub struct LatticePhysics {
     pub body_force: [f64; 2],
     /// Boussinesq buoyancy per unit θ: the force density is `buoyancy · θ` (`ρ₀ = 1`).
     pub buoyancy: [f64; 2],
+    /// Smagorinsky constant C_s of the LES model; `None` without a turbulence model.
+    pub smagorinsky: Option<f64>,
 }
 
 impl LatticePhysics {
@@ -192,6 +219,8 @@ pub struct Reference {
 
 /// Hydrostatic pressure added to the output pressure field: the solver only resolves the
 /// dynamic part, since a uniform gravity in a single-phase flow is balanced by `∇p = ρ₀ g`.
+/// Free-surface runs apply gravity as a body force instead, so their `gravity` is zero and the
+/// pressure is gauge relative to the gas (ADR-016 as amended by ADR-032).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hydrostatic {
     /// Gravity (m/s²).
@@ -263,6 +292,8 @@ pub struct Domain {
     pub probes: Vec<ProbeCell>,
     /// Warnings from validation, support and stability checks.
     pub issues: Vec<Issue>,
+    /// `Some` for a liquid with a free surface (`physics.freeSurface`).
+    pub free_surface: Option<FreeSurface>,
 }
 
 impl Domain {
@@ -324,7 +355,11 @@ impl Domain {
                 (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
             }
         }
-        let length = (x1 - x0).min(y1 - y0) as f64 * dx;
+        let length = x1.saturating_sub(x0).min(y1.saturating_sub(y0)) as f64 * dx;
+        let free_surface = scene.physics.free_surface;
+        // Cells the solver updates: fluid, and with a free surface also the gas ("empty") cells,
+        // whose dynamic phase lives in the solver's state, not in the static flags.
+        let wet = |ct: CellType| ct == CellType::Fluid || (free_surface && ct == CellType::Empty);
 
         // Temperature scale: spread of the prescribed temperatures (and of flux-driven ΔT).
         let t_ref = scene.initial.temperature;
@@ -369,6 +404,12 @@ impl Domain {
             0.0
         };
         velocities.push(u_buoyancy);
+        // Free fall over the initial liquid's extent along g: the scale of gravity-driven
+        // liquid flows (ADR-032; the dam break's front approaches √2 of it).
+        if free_surface && g_mag > 0.0 && x1 > x0 {
+            let extent = (g[0].abs() * (x1 - x0) as f64 + g[1].abs() * (y1 - y0) as f64) / g_mag;
+            velocities.push((2.0 * g_mag * extent * dx).sqrt());
+        }
         let u_scene = velocities.iter().copied().fold(0.0, f64::max);
         let u_char = opts.characteristic_velocity.unwrap_or(u_scene);
 
@@ -394,6 +435,7 @@ impl Domain {
                 nu,
                 alpha: alpha_lb,
                 u_max: units.velocity_to_lattice(u_scene.max(u_char)),
+                subgrid: scene.physics.turbulence.is_some(),
             },
             &mut report,
         );
@@ -410,8 +452,12 @@ impl Domain {
         let physics = LatticePhysics {
             nu,
             alpha: alpha_lb,
-            body_force: [0.0; 2],
+            // With a free surface, gravity acts on the liquid (Guo forcing, F = ρ g).
+            body_force: if free_surface { g_lb } else { [0.0; 2] },
             buoyancy,
+            smagorinsky: scene.physics.turbulence.map(|t| match t {
+                Turbulence::Smagorinsky { constant } => constant,
+            }),
         };
 
         // Boundary slots and flags.
@@ -462,14 +508,14 @@ impl Domain {
         for y in 0..h {
             for x in 0..w {
                 let i = y * w + x;
-                if cell_type[i] != CellType::Fluid {
+                if !wet(cell_type[i]) {
                     continue;
                 }
                 for (dir, c) in LINKS.iter().enumerate().skip(1) {
                     let source = neighbour(x, y, -c[0], -c[1], w, h, periodic);
                     let boundary = match source {
                         None => true,
-                        Some(j) => cell_type[j] != CellType::Fluid,
+                        Some(j) => !wet(cell_type[j]),
                     };
                     if boundary {
                         flags[i] |= 1 << (flags::LINK_SHIFT as usize + dir - 1);
@@ -542,6 +588,28 @@ impl Domain {
             },
         };
 
+        let free_surface = free_surface.then(|| {
+            let gas = |c: Option<usize>| c.is_some_and(|j| cell_type[j] == CellType::Empty);
+            let phase = (0..cells)
+                .map(|i| match cell_type[i] {
+                    CellType::Empty => phase::GAS,
+                    CellType::Fluid => {
+                        let (x, y) = (i % w, i / w);
+                        let interface = LINKS[1..]
+                            .iter()
+                            .any(|c| gas(neighbour(x, y, c[0], c[1], w, h, periodic)));
+                        if interface {
+                            phase::INTERFACE
+                        } else {
+                            phase::LIQUID
+                        }
+                    }
+                    _ => phase::SOLID,
+                })
+                .collect();
+            FreeSurface { phase }
+        });
+
         let initial = InitialState {
             density: units.gauge_pressure_to_density(scene.initial.pressure),
             velocity: scene.initial.velocity.map(|c| units.velocity_to_lattice(c)),
@@ -561,7 +629,7 @@ impl Domain {
             units,
             numbers,
             hydrostatic: Hydrostatic {
-                gravity: g,
+                gravity: if free_surface.is_some() { [0.0; 2] } else { g },
                 reference,
             },
             run: RunSteps {
@@ -578,6 +646,7 @@ impl Domain {
                 })
                 .collect(),
             issues: report.issues,
+            free_surface,
         })
     }
 }
@@ -734,11 +803,36 @@ fn check_support(scene: &Scene, cell_type: &[CellType], r: &mut Report) {
              mass may drift; use a pressure outlet",
         );
     }
-    if scene.physics.free_surface || cell_type.contains(&CellType::Empty) {
-        r.error(
-            "support.freeSurface",
-            "free-surface flows are not supported yet (planned for Phase 6a)",
-        );
+    // Free surface: the MVP scope of ADR-032 (a closed liquid in "empty" gas).
+    if scene.physics.free_surface {
+        if cell_type.contains(&CellType::Inlet) || cell_type.contains(&CellType::Outlet) {
+            r.error(
+                "support.freeSurfaceOpen",
+                "free-surface runs do not support inlets or outlets yet: use a closed container",
+            );
+        }
+        if scene.physics.thermal {
+            r.error(
+                "support.freeSurfaceThermal",
+                "free-surface runs do not support the thermal solver yet",
+            );
+        }
+        for el in &scene.elements {
+            if let ElementKind::Wall {
+                velocity: WallVelocity::Moving { .. },
+                ..
+            } = el.kind
+            {
+                r.warning(
+                    "support.freeSurfaceMovingWall",
+                    format!(
+                        "element {}: moving walls with a free surface are not validated",
+                        el.id
+                    ),
+                )
+                .param("element", el.id);
+            }
+        }
     }
     if let Some(layer) = &scene.layers.fluid_id {
         let v = layer.decode_u8(scene.grid.cell_count()).unwrap_or_default();
@@ -1002,9 +1096,14 @@ mod tests {
 
     #[test]
     fn unsupported_features_are_rejected() {
+        let mut open = examples::channel();
+        open.physics.free_surface = true;
+        open.physics.thermal = true;
+        open.fluids[0].thermal_conductivity = Some(0.026);
+        open.fluids[0].specific_heat = Some(1005.0);
         assert_eq!(
-            error_codes(&examples::dam_break()),
-            vec!["support.freeSurface"]
+            error_codes(&open),
+            vec!["support.freeSurfaceOpen", "support.freeSurfaceThermal"]
         );
         let mut scene = examples::channel();
         scene.elements[0] = Element {
@@ -1017,6 +1116,45 @@ mod tests {
             },
         };
         assert_eq!(error_codes(&scene), vec!["support.slip"]);
+    }
+
+    #[test]
+    fn dam_break_free_surface_units_gravity_and_interface_layer() {
+        let scene = examples::dam_break();
+        let d = domain(&scene);
+        // Free fall over the 0.2 m column, U_g = √(2 g H) ↦ 0.05: g_lb = u_lb² / (2 H_lb).
+        let u_g = (2.0 * crate::units::STANDARD_GRAVITY * 0.2f64).sqrt();
+        assert!((d.numbers.velocity - u_g).abs() < 1e-12);
+        assert!(
+            (d.units.dt - 0.05 * 0.0025 / u_g).abs() < 1e-15,
+            "{}",
+            d.units.dt
+        );
+        assert_eq!(d.physics.body_force[0], 0.0);
+        assert!((d.physics.body_force[1] + 0.05f64.powi(2) / 160.0).abs() < 1e-15);
+        assert_eq!(d.hydrostatic.gravity, [0.0; 2]);
+        assert_eq!(d.physics.smagorinsky, Some(0.1));
+        // τ = 0.50003 is only a warning with the LES model.
+        assert!(d.physics.tau() > 0.5 && d.physics.tau() < 0.5001);
+        let codes: Vec<_> = d.issues.iter().map(|i| i.code).collect();
+        assert!(codes.contains(&"stability.tau"), "{codes:?}");
+        let mut plain = scene.clone();
+        plain.physics.turbulence = None;
+        assert_eq!(error_codes(&plain), vec!["stability.tau"]);
+
+        // Gas cells are static fluid cells; links to walls only.
+        let w = scene.grid.width as usize;
+        assert_eq!(d.fluid_cell_count(), 200 * 100);
+        assert_eq!(d.flags[50 * w + 100], flags::FLUID);
+        let fs = d.free_surface.as_ref().expect("free surface");
+        let count = |p: u8| fs.phase.iter().filter(|&&q| q == p).count();
+        // The column's top row and right column (40 + 80 − 1 cells) are the interface.
+        assert_eq!(count(phase::INTERFACE), 119);
+        assert_eq!(count(phase::LIQUID), 40 * 80 - 119);
+        assert_eq!(count(phase::GAS), 200 * 100 - 40 * 80);
+        assert_eq!(fs.phase[80 * w + 1], phase::INTERFACE);
+        assert_eq!(fs.phase[79 * w + 39], phase::LIQUID);
+        assert_eq!(fs.phase[0], phase::SOLID);
     }
 
     #[test]

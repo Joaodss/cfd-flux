@@ -41,15 +41,15 @@ impl SampleSpec {
         }
     }
 
-    /// The fields actually produced: temperature only with the thermal lattice; no fill fraction
-    /// (free surface, Phase 6) yet.
-    pub fn resolved(&self, thermal: bool) -> Vec<OutputField> {
+    /// The fields actually produced: temperature only with the thermal lattice, the fill fraction
+    /// only with a free surface.
+    pub fn resolved(&self, thermal: bool, free_surface: bool) -> Vec<OutputField> {
         self.fields
             .iter()
             .copied()
             .filter(|f| match f {
                 OutputField::Temperature => thermal,
-                OutputField::FillFraction => false,
+                OutputField::FillFraction => free_surface,
                 _ => true,
             })
             .collect()
@@ -360,8 +360,9 @@ mod tests {
             ],
             Precision::F16,
         );
-        assert_eq!(s.resolved(false), [OutputField::Velocity]);
-        assert_eq!(s.resolved(true).len(), 2);
+        assert_eq!(s.resolved(false, false), [OutputField::Velocity]);
+        assert_eq!(s.resolved(true, false).len(), 2);
+        assert_eq!(s.resolved(false, true).len(), 2);
         let k3 = SampleSpec { factor: 3, ..s };
         assert_eq!(k3.out_size(10, 9), (4, 3));
     }

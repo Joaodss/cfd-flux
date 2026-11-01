@@ -4,22 +4,98 @@
 
 use std::collections::BTreeMap;
 
-use cfd_core::domain::{flags, Domain, LINKS, OPPOSITE};
+use cfd_core::domain::{flags, phase, Domain, LINKS, OPPOSITE};
 use cfd_core::solver::{Diagnostics, ElementForce, LatticeFields};
 
-use crate::config::{flow_rates, thermal_rates, LbmConfig};
-use crate::kernel::{equilibrium, thermal_equilibrium};
+use crate::config::{flow_rates, thermal_rates, Collision, LbmConfig};
+use crate::kernel::{equilibrium, thermal_equilibrium, Les};
 use crate::lattice::W9;
 
-/// The domain's initial state on fluid cells; `ρ = 1`, `u = 0` elsewhere.
+/// The domain's initial state on fluid cells; `ρ = 1`, `u = 0` elsewhere. With a free surface,
+/// gas cells hold `ρ = 1`, `u = 0` too, and the liquid starts hydrostatic (ADR-032):
+/// `ρ = ρ_init + 3 |g| d`, with `d` the depth of the cell centre below the first non-liquid cell
+/// above it along the axis closest to g (line by line, so overhangs are handled).
 pub fn initial_fields(domain: &Domain) -> LatticeFields {
     let mut f = LatticeFields::initial(domain);
     for (i, &fl) in domain.flags.iter().enumerate() {
-        if flags::flow(fl) != flags::FLUID {
+        let gas = f.phase.as_ref().is_some_and(|p| !phase::wet(p[i]));
+        if flags::flow(fl) != flags::FLUID || gas {
             (f.density[i], f.ux[i], f.uy[i]) = (1.0, 0.0, 0.0);
         }
     }
+    if let Some(fs) = &domain.free_surface {
+        let (w, h) = (domain.width as usize, domain.height as usize);
+        let g = domain.physics.body_force;
+        let along_y = g[1].abs() >= g[0].abs();
+        let ga = if along_y { g[1] } else { g[0] };
+        let (lines, len) = if along_y { (w, h) } else { (h, w) };
+        for line in 0..lines {
+            let mut depth = 0usize;
+            for s in 0..len {
+                // The s-th cell from the top (against g).
+                let t = if ga < 0.0 { len - 1 - s } else { s };
+                let k = if along_y { t * w + line } else { line * w + t };
+                if phase::wet(fs.phase[k]) {
+                    depth += 1;
+                    let d = depth as f64 - 0.5;
+                    f.density[k] = (domain.initial.density + 3.0 * ga.abs() * d) as f32;
+                } else {
+                    depth = 0;
+                }
+            }
+        }
+    }
     f
+}
+
+/// The free-surface planes of a free-surface run (ADR-032), `n` values each. `state` is the
+/// input and output of a step (`state_a`), `state_b` the intermediate one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SurfacePlanes {
+    pub state: Vec<u32>,
+    pub state_b: Vec<u32>,
+    /// Mass m (lattice units): ρ on liquid cells, φρ on interface cells, 0 on gas cells.
+    pub mass: Vec<f32>,
+    /// Undivided excess mass, for the cell's receivers on the next step.
+    pub massex: Vec<f32>,
+    /// Fill fraction φ: 1 liquid, `m/ρ` interface, 0 gas and solid.
+    pub phi: Vec<f32>,
+}
+
+/// The free-surface planes for `fields` (their `phase` and `fill`, else the domain's initial
+/// phase with full interface cells), or `None` without a free surface.
+pub fn surface_planes(domain: &Domain, fields: &LatticeFields) -> Option<SurfacePlanes> {
+    let fs = domain.free_surface.as_ref()?;
+    let phases = fields.phase.as_deref().unwrap_or(&fs.phase);
+    let fill = |k: usize| match phases[k] {
+        phase::LIQUID => 1.0,
+        phase::INTERFACE => fields.fill.as_ref().map_or(1.0, |f| f[k]),
+        _ => 0.0,
+    };
+    let n = phases.len();
+    let state: Vec<u32> = phases.iter().map(|&p| p as u32).collect();
+    let phi: Vec<f32> = (0..n).map(fill).collect();
+    let mass = (0..n).map(|k| phi[k] * fields.density[k]).collect();
+    Some(SurfacePlanes {
+        state_b: state.clone(),
+        state,
+        mass,
+        massex: vec![0.0; n],
+        phi,
+    })
+}
+
+/// The Smagorinsky model's constants, when the scene has it.
+pub(crate) fn les_params(d: &Domain, config: LbmConfig) -> Option<Les> {
+    let cs = d.physics.smagorinsky?;
+    Some(Les {
+        tau0: d.physics.tau() as f32,
+        factor: (18.0 * 2f64.sqrt() * cs * cs) as f32,
+        magic: match config.collision {
+            Collision::Trt { magic } => Some(magic as f32),
+            Collision::Bgk => None,
+        },
+    })
 }
 
 /// Equilibrium populations of `fields` in the SoA layout `[i * n + cell]`: shifted D2Q9 `f̃`
@@ -158,5 +234,6 @@ pub fn diagnostics_from_partials(
         max_velocity: umax,
         thermal_energy: thermal.then_some(heat),
         finite: finite && umax.is_finite() && energy.is_finite(),
+        liquid: None,
     }
 }

@@ -170,6 +170,7 @@ fn isothermal() -> Physics {
         thermal: false,
         buoyancy: Buoyancy::None,
         free_surface: false,
+        turbulence: None,
     }
 }
 
@@ -395,6 +396,7 @@ fn heated_cavity_ra1e5_at(res: Resolution) -> Scene {
             thermal: true,
             buoyancy: Buoyancy::Boussinesq,
             free_surface: false,
+            turbulence: None,
         },
         reference: None,
         run: run(
@@ -448,6 +450,8 @@ pub fn dam_break() -> Scene {
             thermal: false,
             buoyancy: Buoyancy::None,
             free_surface: true,
+            // Water at dx = 2.5 mm has τ = 0.50003: LES keeps it stable (ADR-032).
+            turbulence: Some(Turbulence::Smagorinsky { constant: 0.1 }),
         },
         reference: None,
         run: run(
