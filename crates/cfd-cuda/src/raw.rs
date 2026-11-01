@@ -265,7 +265,13 @@ pub(crate) struct Kernels {
     stream_collide_thermal: CudaFunction,
     stream_collide_skip: CudaFunction,
     stream_collide_thermal_skip: CudaFunction,
+    stream_collide_fs: CudaFunction,
+    stream_collide_fs_skip: CudaFunction,
+    surface_fill: CudaFunction,
+    surface_init: CudaFunction,
+    surface_finish: CudaFunction,
     diagnostics: CudaFunction,
+    diagnostics_fs: CudaFunction,
     gather_links: CudaFunction,
     sample: CudaFunction,
 }
@@ -277,7 +283,13 @@ impl Kernels {
             stream_collide_thermal: module.load_function("stream_collide_thermal")?,
             stream_collide_skip: module.load_function("stream_collide_skip")?,
             stream_collide_thermal_skip: module.load_function("stream_collide_thermal_skip")?,
+            stream_collide_fs: module.load_function("stream_collide_fs")?,
+            stream_collide_fs_skip: module.load_function("stream_collide_fs_skip")?,
+            surface_fill: module.load_function("surface_fill")?,
+            surface_init: module.load_function("surface_init")?,
+            surface_finish: module.load_function("surface_finish")?,
             diagnostics: module.load_function("diagnostics")?,
+            diagnostics_fs: module.load_function("diagnostics_fs")?,
             gather_links: module.load_function("gather_links")?,
             sample: module.load_function("sample")?,
         })
@@ -297,8 +309,19 @@ pub(crate) struct LatticeInit<'a> {
     /// `cell << 4 | direction` per bounce-back link.
     pub links: &'a [u32],
     pub thermal: bool,
+    /// Allocate the free-surface planes.
+    pub free_surface: bool,
     /// Blocks of the diagnostics reduction.
     pub blocks: u32,
+}
+
+/// The free-surface planes (ADR-032; `cfd_lbm::shared::SurfacePlanes`), `n` values each.
+pub(crate) struct Surface {
+    /// The step's input and output, and the state between the passes.
+    pub state: [CudaSlice<u32>; 2],
+    pub mass: CudaSlice<f32>,
+    pub massex: CudaSlice<f32>,
+    pub phi: CudaSlice<f32>,
 }
 
 /// A captured sequence of steps, replayed with a single launch.
@@ -344,6 +367,7 @@ pub(crate) struct Lattice {
     link_out: CudaSlice<f32>,
     partials: CudaSlice<f32>,
     blocks: u32,
+    surf: Option<Surface>,
 }
 
 impl Lattice {
@@ -368,6 +392,10 @@ impl Lattice {
             "links name a cell and a moving direction"
         );
         assert!(init.blocks > 0);
+        assert!(
+            !(init.thermal && init.free_surface),
+            "a free surface excludes the thermal lattice"
+        );
         let g_len = if init.thermal { 5 * n } else { 1 };
         let links: &[u32] = if init.links.is_empty() {
             &[0x11]
@@ -389,13 +417,29 @@ impl Lattice {
             link_out: stream.alloc_zeros(init.links.len().max(1))?,
             partials: stream.alloc_zeros(init.blocks as usize * PARTIALS)?,
             blocks: init.blocks,
+            surf: match init.free_surface {
+                true => Some(Surface {
+                    state: [stream.alloc_zeros(n)?, stream.alloc_zeros(n)?],
+                    mass: stream.alloc_zeros(n)?,
+                    massex: stream.alloc_zeros(n)?,
+                    phi: stream.alloc_zeros(n)?,
+                }),
+                false => None,
+            },
         })
     }
 
-    /// Bytes allocated per cell (flags 2, slot 4, f 2 × 36, g 2 × 20, mac 16), for memory
-    /// checks before `new`.
-    pub fn bytes_per_cell(thermal: bool) -> u64 {
-        2 + 4 + 72 + if thermal { 40 } else { 0 } + 16
+    /// Bytes allocated per cell (flags 2, slot 4, f 2 × 36, g 2 × 20, mac 16, free-surface planes
+    /// 5 × 4), for memory checks before `new`.
+    pub fn bytes_per_cell(thermal: bool, free_surface: bool) -> u64 {
+        2 + 4 + 72 + if thermal { 40 } else { 0 } + 16 + if free_surface { 20 } else { 0 }
+    }
+
+    pub fn surface(&self) -> Option<&Surface> {
+        self.surf.as_ref()
+    }
+    pub fn surface_mut(&mut self) -> Option<&mut Surface> {
+        self.surf.as_mut()
     }
 
     pub fn f_mut(&mut self, i: usize) -> CudaViewMut<'_, f32> {
@@ -437,6 +481,9 @@ impl Lattice {
     ) -> Result<(), DriverError> {
         self.check_params(p);
         assert!((1..=1024).contains(&block), "block size");
+        if self.surf.is_some() {
+            return self.free_surface_step(k, stream, block, p, parity, write);
+        }
         let [f0, f1] = &mut self.f;
         let (f_src, f_dst) = if parity == 0 { (&*f0, f1) } else { (&*f1, f0) };
         let [g0, g1] = &mut self.g;
@@ -472,6 +519,104 @@ impl Lattice {
         // indexed by slots, all `< slots` (checked in `new`). (3) `f_src` and `f_dst` are distinct
         // buffers (the borrow checker guarantees it), and the launch is queued on the solver's
         // compute stream after all earlier work on these buffers.
+        unsafe { launch.launch(cfg) }.map(|_| ())
+    }
+
+    /// A free-surface step (ADR-032): pass 1 (`stream_collide_fs`) from `f[parity]` into
+    /// `f[1 − parity]`, then the three conversion passes, all on `stream` in that order.
+    #[allow(clippy::too_many_arguments)]
+    fn free_surface_step(
+        &mut self,
+        k: &Kernels,
+        stream: &CudaStream,
+        block: u32,
+        p: &KernelParams,
+        parity: usize,
+        write: bool,
+    ) -> Result<(), DriverError> {
+        let surf = self.surf.as_mut().expect("free-surface planes");
+        let [f0, f1] = &mut self.f;
+        let (f_src, f_dst) = if parity == 0 { (&*f0, f1) } else { (&*f1, f0) };
+        let [state_a, state_b] = &mut surf.state;
+        let cfg = LaunchConfig {
+            grid_dim: ((self.n as u32).div_ceil(block), 1, 1),
+            block_dim: (block, 1, 1),
+            shared_mem_bytes: 0,
+        };
+        let arg = ParamsArg(*p);
+
+        let pass1 = if write {
+            &k.stream_collide_fs
+        } else {
+            &k.stream_collide_fs_skip
+        };
+        let mut launch = stream.launch_builder(pass1);
+        launch
+            .arg(&arg)
+            .arg(&self.flags)
+            .arg(&self.slot)
+            .arg(&self.bc)
+            .arg(f_src)
+            .arg(&mut *f_dst)
+            .arg(&*state_a)
+            .arg(&mut *state_b)
+            .arg(&mut surf.mass)
+            .arg(&surf.massex)
+            .arg(&surf.phi)
+            .arg(&mut self.mac);
+        // SAFETY: (1) the arguments are, in order, `Params` by value and the eleven pointers of
+        // `stream_collide_fs(_skip)` in `surface.cu`. (2) With `p.n == n == w·h` (checked by the
+        // caller) threads `k ≥ n` return; population indices are `i·n + c` with `i < 9` and `c` a
+        // cell wrapped into `[0, n)`; every free-surface plane holds `n` values and is indexed by
+        // such cells; `mac` indices are `≤ 4n`; `bc` is indexed by slots `< slots` (checked in
+        // `new`). (3) `f_src`/`f_dst` and `state_a`/`state_b` are distinct buffers (disjoint
+        // borrows); each thread writes only its own cell of `f_dst`, `state_b`, `mass` and `mac`
+        // and reads its neighbours only in buffers nobody writes in this launch; queued on the
+        // compute stream after all earlier work.
+        unsafe { launch.launch(cfg) }?;
+
+        let mut launch = stream.launch_builder(&k.surface_fill);
+        launch
+            .arg(&arg)
+            .arg(&self.flags)
+            .arg(&*state_b)
+            .arg(&mut *state_a);
+        // SAFETY: (1) matches `surface_fill(Params, const unsigned short*, const unsigned*,
+        // unsigned*)`. (2) Threads `k ≥ n` return; cells and their wrapped neighbours are `< n`,
+        // the length of both state planes. (3) Reads `state_b`, writes `state_a` (distinct), own
+        // cell only; ordered after pass 1 on the same stream.
+        unsafe { launch.launch(cfg) }?;
+
+        let mut launch = stream.launch_builder(&k.surface_init);
+        launch
+            .arg(&arg)
+            .arg(&self.flags)
+            .arg(&*state_a)
+            .arg(&mut *state_b)
+            .arg(&mut *f_dst)
+            .arg(&mut self.mac);
+        // SAFETY: (1) matches `surface_init(Params, const unsigned short*, const unsigned*,
+        // unsigned*, float*, float*)`. (2) As above; `f_dst` is written at `i·n + k` (`i < 9`),
+        // `mac` at `k`, `n + k`, `2n + k`, and read at neighbours' cells. (3) A thread writes its
+        // own cell; the cells it reads in `mac` (wet, never new interface cells) are written by no
+        // thread of this launch; ordered after pass 2.
+        unsafe { launch.launch(cfg) }?;
+
+        let mut launch = stream.launch_builder(&k.surface_finish);
+        launch
+            .arg(&arg)
+            .arg(&self.flags)
+            .arg(&*state_b)
+            .arg(&self.mac)
+            .arg(&mut *state_a)
+            .arg(&mut surf.mass)
+            .arg(&mut surf.massex)
+            .arg(&mut surf.phi);
+        // SAFETY: (1) matches `surface_finish(Params, const unsigned short*, const unsigned*,
+        // const float*, unsigned*, float*, float*, float*)`. (2) As above, all planes hold `n`
+        // values; `mac` is read at `k < n`. (3) Each thread writes its own cell of `state_a`,
+        // `mass`, `massex`, `phi` and reads neighbours only in `state_b`, which this launch does
+        // not write; ordered after pass 3.
         unsafe { launch.launch(cfg) }.map(|_| ())
     }
 
@@ -552,6 +697,24 @@ impl Lattice {
             shared_mem_bytes: 0,
         };
         let arg = ParamsArg(*p);
+        if let Some(s) = &self.surf {
+            let mut launch = stream.launch_builder(&k.diagnostics_fs);
+            launch
+                .arg(&arg)
+                .arg(&self.flags)
+                .arg(&self.mac)
+                .arg(&s.state[0])
+                .arg(&s.mass)
+                .arg(&s.massex)
+                .arg(&s.phi)
+                .arg(&mut self.partials);
+            // SAFETY: (1) matches `diagnostics_fs(Params, const unsigned short*, const float*,
+            // const unsigned*, const float*, const float*, const float*, float*)` in `surface.cu`.
+            // (2) The grid-stride loop visits cells `< n`, the length of every plane, and reads
+            // `mac` below `3n`; block `b` writes `partials[8b .. 8b + 7]` for exactly `blocks`
+            // blocks of `REDUCE_BLOCK` threads. (3) Queued on the compute stream after the steps.
+            return unsafe { launch.launch(cfg) }.map(|_| ());
+        }
         let mut launch = stream.launch_builder(&k.diagnostics);
         launch
             .arg(&arg)

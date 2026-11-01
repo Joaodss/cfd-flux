@@ -34,8 +34,8 @@ use cfd_core::solver::{
 };
 use cfd_lbm::abi::{bc_words, KernelParams, SampleCoefficients, SampleLayout};
 use cfd_lbm::shared::{
-    diagnostics_from_partials, equilibrium_populations, initial_fields, wall_forces, wall_links,
-    WallLink,
+    diagnostics_from_partials, diagnostics_from_surface_partials, equilibrium_populations,
+    initial_fields, surface_fields, surface_planes, wall_forces, wall_links, wet_links, WallLink,
 };
 use cfd_lbm::LbmConfig;
 use cudarc::driver::sys::CUevent_flags;
@@ -105,6 +105,7 @@ pub struct CudaLbm {
     config: LbmConfig,
     options: CudaLbmOptions,
     thermal: bool,
+    free_surface: bool,
     n: usize,
     steps: u64,
     params: KernelParams,
@@ -136,12 +137,6 @@ impl CudaLbm {
         config: LbmConfig,
         options: CudaLbmOptions,
     ) -> Result<Self, CudaError> {
-        if domain.free_surface.is_some() || domain.physics.smagorinsky.is_some() {
-            return Err(CudaError::Driver(
-                "free-surface and turbulence-model runs are not on the CUDA engine yet (#44): use the CPU engine"
-                    .into(),
-            ));
-        }
         if !options.graph_steps.is_multiple_of(2) {
             return Err(CudaError::Driver(format!(
                 "graph_steps must be even (got {})",
@@ -156,10 +151,11 @@ impl CudaLbm {
         }
         let n = domain.cell_count();
         let thermal = domain.physics.thermal();
+        let free_surface = domain.free_surface.is_some();
         let links = wall_links(&domain);
         dev.check_memory(
             "the lattice buffers",
-            n as u64 * Lattice::bytes_per_cell(thermal) + links.len() as u64 * 8,
+            n as u64 * Lattice::bytes_per_cell(thermal, free_surface) + links.len() as u64 * 8,
         )?;
         let kernels = dev.kernels(options.fmad)?;
         let err = |e: DriverError| CudaError::Driver(e.to_string());
@@ -175,6 +171,7 @@ impl CudaLbm {
                 bc_words: &bc_words(&domain.bc_params),
                 links: &packed,
                 thermal,
+                free_surface,
                 blocks: reduce_blocks,
             },
         )
@@ -195,6 +192,7 @@ impl CudaLbm {
             config,
             options,
             thermal,
+            free_surface,
             n,
             steps: 0,
             params,
@@ -245,7 +243,32 @@ impl CudaLbm {
             _ => mac.resize(4 * n, 0.0),
         }
         mac.resize(4 * n + 4, 0.0);
-        self.stream.memcpy_htod(&mac, &mut self.lattice.mac_mut())
+        self.stream.memcpy_htod(&mac, &mut self.lattice.mac_mut())?;
+        if let (Some(planes), Some(s)) = (
+            surface_planes(&self.domain, fields),
+            self.lattice.surface_mut(),
+        ) {
+            self.stream.memcpy_htod(&planes.state, &mut s.state[0])?;
+            self.stream.memcpy_htod(&planes.state_b, &mut s.state[1])?;
+            self.stream.memcpy_htod(&planes.mass, &mut s.mass)?;
+            self.stream.memcpy_htod(&planes.massex, &mut s.massex)?;
+            self.stream.memcpy_htod(&planes.phi, &mut s.phi)?;
+        }
+        Ok(())
+    }
+
+    /// The fields of a free-surface run, copied synchronously after the queued steps: the
+    /// macroscopic planes, the state and φ (the snapshot path of `start_copy` carries only the
+    /// four planes; free-surface grids are small so far).
+    fn surface_fields_now(&mut self) -> Result<LatticeFields, DriverError> {
+        let n = self.n;
+        let raw = self.stream.clone_dtoh(&self.lattice.mac().slice(..4 * n))?;
+        let s = self.lattice.surface().expect("free-surface planes");
+        let state = self.stream.clone_dtoh(&s.state[0])?;
+        let phi = self.stream.clone_dtoh(&s.phi)?;
+        let mut lf = split_fields(&raw, n, false);
+        surface_fields(&mut lf, &state, phi);
+        Ok(lf)
     }
 
     /// Queues `steps` steps, then a copy of the status word and an event. Whole graphs are
@@ -446,6 +469,17 @@ impl Solver for CudaLbm {
     }
 
     fn request_fields(&mut self) -> Box<dyn PendingFields> {
+        if self.free_surface {
+            let fields = self.surface_fields_now().unwrap_or_else(|_| {
+                let mut lf = split_fields(&vec![f32::NAN; 4 * self.n], self.n, false);
+                surface_fields(&mut lf, &vec![0; self.n], vec![f32::NAN; self.n]);
+                lf
+            });
+            return Box::new(ReadyFields {
+                step: self.steps,
+                fields: Some(fields),
+            });
+        }
         match self.start_copy() {
             Ok(pending) => Box::new(pending),
             // Device error: NaN fields, as a lost device gives on wgpu; `step` reports the error.
@@ -461,9 +495,16 @@ impl Solver for CudaLbm {
     }
 
     fn request_samples(&mut self, specs: &[SampleSpec]) -> Box<dyn PendingSamples> {
-        match self.start_samples(specs) {
+        // Free surface: the sampling kernel has no fill fraction or gas mask yet, so the fields
+        // are copied and converted by the reference code on the caller's output thread.
+        let sampled = if self.free_surface {
+            Err(None)
+        } else {
+            self.start_samples(specs).map_err(Some)
+        };
+        match sampled {
             Ok(pending) => Box::new(pending),
-            // Device error: NaN samples, from NaN lattice fields; `step` reports the error.
+            // Free surface, or a device error (NaN samples from NaN lattice fields; `step` reports it).
             Err(_) => Box::new(cfd_core::sample::LatticeSamples {
                 pending: self.request_fields(),
                 specs: specs.to_vec(),
@@ -477,6 +518,13 @@ impl Solver for CudaLbm {
             .diagnostics(&self.kernels, &self.stream, &self.params)
             .and_then(|_| self.stream.clone_dtoh(self.lattice.partials()))
             .unwrap_or_default();
+        if self.free_surface {
+            return diagnostics_from_surface_partials(
+                self.steps,
+                &partials,
+                self.reduce_blocks as usize,
+            );
+        }
         diagnostics_from_partials(
             self.steps,
             &partials,
@@ -495,6 +543,14 @@ impl Solver for CudaLbm {
             .gather_links(&self.kernels, &self.stream, &self.params, current)
             .and_then(|_| self.stream.clone_dtoh(self.lattice.link_out()))
             .unwrap_or_else(|_| vec![f32::NAN; self.links.len()]);
+        if let Some(s) = self.lattice.surface() {
+            let state = self
+                .stream
+                .clone_dtoh(&s.state[0])
+                .unwrap_or_else(|_| vec![0; self.n]);
+            let (links, outgoing) = wet_links(&self.links, &outgoing, &state);
+            return wall_forces(&self.domain, &links, &outgoing);
+        }
         wall_forces(&self.domain, &self.links, &outgoing)
     }
 }

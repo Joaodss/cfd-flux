@@ -22,3 +22,4 @@ pub mod surface;
 
 pub use config::{Collision, LbmConfig};
 pub use cpu::CpuLbm;
+pub use kernel::Les;

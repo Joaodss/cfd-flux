@@ -21,7 +21,10 @@ struct Params {
     float2 buoyancy;
     // Number of bounce-back links (forces).
     unsigned links;
-    unsigned _pad0, _pad1, _pad2;
+    // Smagorinsky model: τ₀, 18√2 C_s² (0 = no model), TRT's Λ (negative for BGK).
+    float les_tau0;
+    float les_factor;
+    float les_magic;
 };
 
 // `cfd_core::domain::BcParams`, `#[repr(C)]`, 32 bytes.

@@ -439,3 +439,59 @@ mod tests {
         assert_eq!(d.periodic, [true, true]);
     }
 }
+
+/// A box of `w × h` cells of `cell_size` m (the domain edges are walls, or periodic along x)
+/// with liquid where `liquid(x, y)` holds and gas elsewhere, gravity downwards. The liquid is
+/// water (density 998.2 kg/m³) with kinematic viscosity `nu`; `les` adds the Smagorinsky model
+/// (C_s = 0.1), needed for water's own viscosity at millimetre cells.
+pub fn liquid_box(
+    w: u32,
+    h: u32,
+    cell_size: f64,
+    periodic_x: bool,
+    nu: f64,
+    les: bool,
+    liquid: impl Fn(u32, u32) -> bool,
+) -> Scene {
+    let mut c = Canvas::new(w, h, CellType::Empty);
+    for y in 0..h {
+        for x in 0..w {
+            if liquid(x, y) {
+                c.set(x, y, CellType::Fluid, 0);
+            }
+        }
+    }
+    let mut f = fluid(nu);
+    f.name = "Liquid".into();
+    f.density = 998.2;
+    let edges = if periodic_x {
+        DomainEdges {
+            left: EdgeKind::Periodic,
+            right: EdgeKind::Periodic,
+            ..DomainEdges::default()
+        }
+    } else {
+        DomainEdges::default()
+    };
+    let mut s = scene(
+        format!("Liquid box ({w} × {h})"),
+        &c,
+        cell_size,
+        edges,
+        f,
+        vec![],
+        (
+            1.0,
+            0.01,
+            vec![OutputField::Velocity, OutputField::FillFraction],
+        ),
+    );
+    s.physics = Physics {
+        gravity: [0.0, -STANDARD_GRAVITY],
+        thermal: false,
+        buoyancy: Buoyancy::None,
+        free_surface: true,
+        turbulence: les.then_some(Turbulence::Smagorinsky { constant: 0.1 }),
+    };
+    s
+}

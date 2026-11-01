@@ -57,6 +57,11 @@ macro_rules! parity_tests {
             sampling_matches_the_cpu_conversion,
             thermal_sampling_matches_the_cpu_conversion,
             skipping_macro_stores_changes_nothing,
+            free_surface_still_tank,
+            free_surface_falling_block,
+            free_surface_periodic_wave,
+            free_surface_dam_break,
+            smagorinsky_cavity,
         );
     };
     (@cases $factory:path; $($case:ident),* $(,)?) => {
@@ -743,4 +748,153 @@ mod tests {
     fn cpu_skip_macro_changes_nothing() {
         skipping_macro_stores_changes_nothing(&|d, c| Box::new(CpuLbm::new(d, c)));
     }
+}
+
+// ---- Free surface (ADR-032) ----
+
+/// Liquid mass, relative: the CPU sums Σ(m + m_ex) in f64; the GPUs sum f32 partials of
+/// Σ(m + m_ex − φ) and Σφ, finished in f64.
+pub const LIQUID_MASS_TOLERANCE: f64 = 1e-6;
+
+/// Whether the backend under test must match the CPU bit for bit: CUDA without fused
+/// multiply-adds (ADR-021, ADR-032).
+fn exact(backend: BackendKind) -> bool {
+    backend == BackendKind::Cuda && std::env::var_os("CFD_CUDA_FMAD").is_none_or(|v| v != "1")
+}
+
+/// [`check`] for free-surface runs: the phases must agree cell for cell, the fill fraction within
+/// [`TOLERANCE`], and the macroscopic fields as in [`check`]; on an exact backend every value
+/// (fields, fill, phase) must be identical. Diagnostics: the liquid mass within
+/// [`LIQUID_MASS_TOLERANCE`], the interface count exactly, the energy within [`TOLERANCE`].
+pub fn check_free_surface(name: &str, make: &Factory, d: Domain, steps: u32, chunks: u32) {
+    let config = LbmConfig::default();
+    let mut cpu = CpuLbm::new(d.clone(), config);
+    let mut gpu = make(d, config);
+    assert_eq!(
+        gpu.lattice_fields(),
+        cpu.lattice_fields(),
+        "{name}: initial state"
+    );
+    for _ in 0..chunks {
+        cpu.step(steps / chunks).unwrap();
+        gpu.step(steps / chunks).unwrap();
+    }
+    gpu.finish().unwrap();
+    let (fc, fg) = (cpu.lattice_fields(), gpu.lattice_fields());
+    let e = differences(&fg, &fc);
+    let (pc, pg) = (fc.phase.as_ref().unwrap(), fg.phase.as_ref().unwrap());
+    let phase_diff = pc.iter().zip(pg).filter(|(a, b)| a != b).count();
+    let fill = max_diff(fg.fill.as_ref().unwrap(), fc.fill.as_ref().unwrap());
+    let interface = pc
+        .iter()
+        .filter(|&&p| p == cfd_core::domain::phase::INTERFACE)
+        .count();
+    let identical = fc == fg;
+    eprintln!(
+        "{name} ({:?}): {} steps, {interface} interface cells, max |u| {:.2e}, max diff ρ {:.2e}, \
+         u {:.2e}, φ {fill:.2e}, {phase_diff} phases differ{}",
+        gpu.backend(),
+        cpu.steps_done(),
+        max_abs(&fc.ux).max(max_abs(&fc.uy)),
+        e.rho,
+        e.u,
+        if identical { " (bit-identical)" } else { "" },
+    );
+    if exact(gpu.backend()) {
+        assert!(identical, "{name}: not bit-identical to the CPU");
+    }
+    assert_eq!(phase_diff, 0, "{name}: phases differ");
+    assert!(e.rho < TOLERANCE, "{name}: density differs by {:e}", e.rho);
+    assert!(e.u < TOLERANCE, "{name}: velocity differs by {:e}", e.u);
+    assert!(
+        fill < TOLERANCE,
+        "{name}: fill fraction differs by {fill:e}"
+    );
+
+    let (dc, dg) = (cpu.diagnostics(), gpu.diagnostics());
+    let (lc, lg) = (dc.liquid.unwrap(), dg.liquid.expect("liquid diagnostics"));
+    let rel = |a: f64, b: f64| (a - b).abs() / b.abs().max(1e-30);
+    assert!(dg.finite && dc.finite);
+    assert_eq!(dg.fluid_cells, dc.fluid_cells, "{name}: wet cells");
+    assert_eq!(
+        lg.interface_cells, lc.interface_cells,
+        "{name}: interface cells"
+    );
+    assert!(
+        rel(dg.mass, dc.mass) < LIQUID_MASS_TOLERANCE,
+        "{name}: liquid mass {} vs {}",
+        dg.mass,
+        dc.mass
+    );
+    assert!(
+        rel(lg.volume, lc.volume) < LIQUID_MASS_TOLERANCE,
+        "{name}: volume"
+    );
+    assert!(
+        rel(dg.kinetic_energy, dc.kinetic_energy) < TOLERANCE,
+        "{name}: energy {} vs {}",
+        dg.kinetic_energy,
+        dc.kinetic_energy
+    );
+
+    let (fc, fg) = (cpu.forces(), gpu.forces());
+    assert_eq!(fc.len(), fg.len(), "{name}: elements with forces");
+    let scale = fc
+        .iter()
+        .flat_map(|f| f.lattice)
+        .map(f64::abs)
+        .fold(1e-30, f64::max);
+    for (a, b) in fg.iter().zip(&fc) {
+        for c in 0..2 {
+            let diff = (a.lattice[c] - b.lattice[c]).abs() / scale;
+            assert!(diff < FORCE_TOLERANCE, "{name}: force differs by {diff:e}");
+        }
+    }
+}
+
+/// A tank half full of a viscous liquid at rest (τ ≈ 0.52): the hydrostatic start, interface
+/// cells at rest.
+pub fn free_surface_still_tank(make: &Factory) {
+    let s = scenes::liquid_box(24, 24, 0.005, false, 1e-3, false, |_, y| y < 12);
+    check_free_surface("still tank", make, domain(&s, 0.05), 300, 3);
+}
+
+/// A block falling through gas onto the floor: conversions at the leading and trailing faces,
+/// then the impact.
+pub fn free_surface_falling_block(make: &Factory) {
+    let s = scenes::liquid_box(32, 48, 0.005, false, 1e-3, false, |x, y| {
+        (10..22).contains(&x) && (28..40).contains(&y)
+    });
+    check_free_surface("falling block", make, domain(&s, 0.05), 600, 2);
+}
+
+/// A standing wave in a channel periodic along x: the passes' wrapped neighbours.
+pub fn free_surface_periodic_wave(make: &Factory) {
+    let s = scenes::liquid_box(48, 24, 0.005, true, 1e-3, false, |x, y| {
+        (y as f64) < 8.0 + 3.0 * (2.0 * PI * x as f64 / 48.0).sin()
+    });
+    check_free_surface("periodic wave", make, domain(&s, 0.05), 400, 2);
+}
+
+/// A small dam break with water's viscosity and the Smagorinsky model.
+pub fn free_surface_dam_break(make: &Factory) {
+    let d = domain(&scenes::dam_break(64), 0.05);
+    assert!(d.physics.smagorinsky.is_some());
+    check_free_surface("dam break", make, d, 500, 2);
+}
+
+/// The Smagorinsky model on the single-phase kernel (a cavity at Re 400 with C_s = 0.17).
+pub fn smagorinsky_cavity(make: &Factory) {
+    let mut s = scenes::lid_driven_cavity(48, 400.0);
+    s.physics.turbulence = Some(cfd_core::scene::Turbulence::Smagorinsky { constant: 0.17 });
+    let d = domain(&s, 0.1);
+    check(
+        "smagorinsky cavity",
+        make,
+        d,
+        None,
+        1500,
+        2,
+        LbmConfig::default(),
+    );
 }

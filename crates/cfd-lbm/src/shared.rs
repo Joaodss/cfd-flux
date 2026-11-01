@@ -86,7 +86,7 @@ pub fn surface_planes(domain: &Domain, fields: &LatticeFields) -> Option<Surface
 }
 
 /// The Smagorinsky model's constants, when the scene has it.
-pub(crate) fn les_params(d: &Domain, config: LbmConfig) -> Option<Les> {
+pub fn les_params(d: &Domain, config: LbmConfig) -> Option<Les> {
     let cs = d.physics.smagorinsky?;
     Some(Les {
         tau0: d.physics.tau() as f32,
@@ -235,5 +235,69 @@ pub fn diagnostics_from_partials(
         thermal_energy: thermal.then_some(heat),
         finite: finite && umax.is_finite() && energy.is_finite(),
         liquid: None,
+    }
+}
+
+/// Completes read-back fields of a free-surface run: the phase from the state plane, the fill
+/// fraction, and gas cells reported in the gas state (`ρ = 1`, `u = 0`; their planes hold whatever
+/// their last update stored). Every backend's `lattice_fields` ends here.
+pub fn surface_fields(lf: &mut LatticeFields, state: &[u32], phi: Vec<f32>) {
+    let phases: Vec<u8> = state
+        .iter()
+        .map(|&s| crate::surface::state::phase(s))
+        .collect();
+    for (k, &p) in phases.iter().enumerate() {
+        if !phase::wet(p) {
+            (lf.density[k], lf.ux[k], lf.uy[k]) = (1.0, 0.0, 0.0);
+        }
+    }
+    lf.fill = Some(phi);
+    lf.phase = Some(phases);
+}
+
+/// The bounce-back links of liquid and interface cells, with their outgoing populations (gas
+/// cells hold stale populations and exert no force).
+pub fn wet_links(links: &[WallLink], outgoing: &[f32], state: &[u32]) -> (Vec<WallLink>, Vec<f32>) {
+    links
+        .iter()
+        .zip(outgoing)
+        .filter(|(l, _)| phase::wet(crate::surface::state::phase(state[l.cell as usize])))
+        .map(|(l, &o)| (*l, o))
+        .unzip()
+}
+
+/// Finishes the GPU partials of a free-surface run (`diagnostics_fs`): wet cells, Σ(m + m_ex − φ),
+/// ½Σρ|u|², max |u|, Σφ, non-finite flag, interface cells, padding. The liquid mass is
+/// Σ(m + m_ex − φ) + Σφ.
+pub fn diagnostics_from_surface_partials(
+    step: u64,
+    partials: &[f32],
+    groups: usize,
+) -> Diagnostics {
+    let (mut cells, mut excess, mut energy, mut umax, mut volume, mut interface) =
+        (0.0, 0.0, 0.0, 0.0f64, 0.0, 0.0);
+    let mut finite = partials.len() >= groups * DIAGNOSTIC_PARTIALS;
+    for w in partials.chunks_exact(DIAGNOSTIC_PARTIALS).take(groups) {
+        cells += w[0] as f64;
+        excess += w[1] as f64;
+        energy += w[2] as f64;
+        umax = umax.max(w[3] as f64);
+        volume += w[4] as f64;
+        finite &= w[5] == 0.0;
+        interface += w[6] as f64;
+    }
+    let mass = excess + volume;
+    Diagnostics {
+        step,
+        fluid_cells: cells as usize,
+        mass,
+        kinetic_energy: energy,
+        max_velocity: umax,
+        thermal_energy: None,
+        finite: finite && umax.is_finite() && energy.is_finite() && mass.is_finite(),
+        liquid: Some(cfd_core::solver::LiquidDiagnostics {
+            volume,
+            interface_cells: interface as usize,
+        }),
     }
 }
