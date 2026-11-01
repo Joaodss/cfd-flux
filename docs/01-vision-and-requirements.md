@@ -53,11 +53,11 @@ In the long run the project should become a **testbed for numerical methods**: s
 - FR-15 (Future) Interactive mode: change parameters/geometry while the simulation is running.
 
 ### 5.3 Visualisation
-- FR-20 Colour maps of fields: velocity (magnitude and components), pressure, temperature, density, phase fraction, vorticity.
+- FR-20 Colour maps of fields: velocity (magnitude and components), pressure, temperature, density, phase fraction, vorticity. *(Phase 5: all but the phase fraction, which comes with the free surface in Phase 6a.)*
 - FR-21 Streamlines, vector glyphs, tracer particles, smoke/dye.
 - FR-22 Time playback (play/pause/scrub), adjustable colour scale, legends.
 - FR-23 Probe plots over time; statistics (drag/lift forces, Strouhal number, Nusselt number).
-- FR-24 Export: PNG/MP4/GIF, probe CSV, fields in binary/VTK format.
+- FR-24 Export: PNG/MP4/GIF, probe CSV, fields in binary/VTK format. *(MVP, Phase 5: PNG, MP4/WebM video, CSV — the run's series, the statistics and the shown frame's fields — and the binary frames through the API, `GET …/frames/{n}`. Later, Phase 5c: GIF and VTK `.vti`; decided in the [Phase 5 design proposal](sessions/phase5-design-proposal.md), §16 Q10.)*
 
 ## 6. Non-functional requirements
 
