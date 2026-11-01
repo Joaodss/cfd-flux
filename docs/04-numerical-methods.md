@@ -85,6 +85,18 @@ Given `dx` (= `cellSize`), a characteristic physical velocity `U` and viscosity 
 
 **Recommendation:** start with free-surface LBM (water in air), then phase-field for two real fluids.
 
+**Phase 6a, as decided** ([design proposal](sessions/phase6a-design-proposal.md), [ADR-032](07-decisions-and-questions.md)):
+- Gas, interface and liquid cells, a mass `m` and fill fraction `φ = m/ρ` per cell. Four passes per step, each a
+  per-cell gather from buffers it does not write (the cell states are ping-pong, like `f`): stream-collide with the
+  mass exchange `Δmᵢ = w (fᵢ^in − f*_ī)` (w = 1 to liquid, ½(φ + φⱼ) to interface neighbours, from the stored φ) and the
+  gas-link reconstruction `fᵢ = fᵢ^eq(1, u) + f_ī^eq(1, u) − f*_ī`; new interface cells next to filled ones; their
+  initialisation from the neighbours' mean ρ, u; the excess mass split equally over liquid and interface neighbours.
+- Gravity as a Guo body force on the liquid (no hydrostatic split, [ADR-016](07-decisions-and-questions.md) amended);
+  the free-fall velocity √(2 g H) joins the characteristic velocities of §3.3; the hydrostatic density variation is
+  then `1.5 u_lb²` at any resolution (0.375 % at the default 0.05).
+- Water at dx = 2.5 mm has τ = 0.50003: the Smagorinsky model of §3.2 (`physics.turbulence`) is part of 6a,
+  `τ_eff = ½(τ₀ + √(τ₀² + 18√2 C_s² ‖Π^neq‖/ρ))`, C_s = 0.1 by default.
+
 ## 6. Other methods (Phase 7+)
 
 - **Projection (Chorin/Stam) on a MAC grid:** semi-Lagrangian/BFECC or MacCormack advection, Poisson via PCG with a multigrid preconditioner; the basis for FLIP and for comparisons with LBM.
@@ -105,7 +117,7 @@ How each case is measured, step by step: see [08 — Validation guide](08-valida
 | Cylinder in a channel Re 20 / Re 100 | Schäfer & Turek (1996) | Re 20: C_D ≈ 5.58; Re 100: St ≈ 0.30, C_D,max ≈ 3.23 |
 | Differentially heated cavity Ra 10³–10⁶ | de Vahl Davis (1983) | Mean Nu ≈ 1.118 / 2.243 / 4.519 / 8.800 |
 | Rayleigh-Bénard | Linear theory | Onset of convection at Ra_c ≈ 1708 |
-| Dam break | Martin & Moyce (1952) | Front position vs time |
+| Dam break | Martin & Moyce (1952) | Front position vs time (5 % for T ≥ 1), liquid mass drift < 0.1 % |
 | Sod shock tube | Exact solution | ρ, u, p profiles (compressible only) |
 
 **Parity between backends (CPU, wgpu, CUDA):** same scene, N steps, maximum relative difference < 1e-5 (f32) in the macroscopic fields; the CPU backend is the reference. For long/chaotic runs (e.g. the von Kármán street) statistics are compared (St, mean C_D) instead of instantaneous fields, because tiny rounding differences diverge over time. Tool: `cfd-cli compare` (ADR-023): the verdict is this field metric (and the mass of closed domains); `--statistics` judges the force statistics (frequency, mean/min/max) and the mean kinetic energy over a window instead (relative limit 1e-3); kinetic energy, max |u| and forces are reported for information, since they amplify field differences in their own ways (energy is quadratic in u; forces on pressure-loaded walls measure ρ − 1 relatively). `cfd-cli compare --validation` writes [`validation/compare/`](../validation/compare/README.md): CUDA bit-identical to the CPU on all 13 validation geometries (the Re = 100 cylinder over 75,000 steps included), wgpu ≤ 7.9e-6 on the field cases; on the cylinder wgpu's fields drift by 1.6e-4 after 20 s while St and the force statistics agree within 5.2e-6.

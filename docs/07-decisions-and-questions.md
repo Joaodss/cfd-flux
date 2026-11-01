@@ -84,6 +84,8 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
 - **Context:** in a single-phase flow without a free surface, uniform gravity is balanced by a hydrostatic pressure gradient and does not change the velocity; applying it in a weakly compressible LBM only adds a density stratification (compressibility error).
 - **Decision:** gravity stays a scene property (`physics.gravity`, with `units::STANDARD_GRAVITY` as the Earth default). The solver applies only the Boussinesq force `−ρ₀β(T − T_ref)g`; the hydrostatic pressure `ρ₀ g·(x − x_ref)` is added to the output pressure (reference: centroid of the pressure outlets, else of the fluid). The free surface (Phase 6a) will apply full gravity.
 - **Consequences:** sampled pressure is the physical gauge pressure; the solver field is the dynamic part.
+  *Amended 2026-11-01 (ADR-032):* free-surface runs apply gravity as a body force on the liquid and turn the
+  hydrostatic split off; their pressure is gauge relative to the gas.
 
 ### ADR-017 — Each backend implements `Solver` directly · *Accepted (2026-10-10)*
 - **Context:** the architecture listed both a `Solver` and a `Backend` trait.
@@ -305,6 +307,56 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
   main JavaScript chunk had passed Vite's 500 kB warning (507 kB). Its dialogs now load on first use: the example
   gallery with the bundled scenes, the image import and *Open from the server*. The start-up JavaScript is 481 kB
   ([development](development.md), "Bundle size").
+
+### ADR-032 — Free-surface LBM: FluidX3D's passes as race-free gathers, gravity as a body force, Smagorinsky LES for water · *Accepted (2026-11-01)*
+- **Context:** Phase 6a adds liquids with a free surface (ADR-008) to the three backends. Before it, validation
+  rejected such scenes (`support.freeSurface`); the dam break's characteristic velocity was 0, so dt fell back to
+  1.04 s; gravity was a hydrostatic split (ADR-016); and water at dx = 2.5 mm gives τ = 0.50003, below `TAU_MIN`.
+  The Körner (2005)/Thürey (2007) model has several published variants, and FluidX3D's GPU implementation updates its
+  cell flags in place, which is a data race in WGSL, CUDA and safe Rust
+  ([design proposal](sessions/phase6a-design-proposal.md), every recommendation of its §17 accepted on 2026-11-01).
+- **Decision:**
+  - **Algorithm:** gas (not updated), interface (mass m, φ = m/ρ) and liquid cells. Each step is **four passes**,
+    FluidX3D's structure: (1) `stream_collide` with the mass exchange (weight 1 to liquid, ½(φ + φ_j) to interface
+    neighbours, using the *stored* φ on both sides so each link's exchange is exactly antisymmetric) and the
+    reconstruction of populations from **gas links only**, `f_i = f_i^eq(1, u) + f_ī^eq(1, u) − f*_ī`, with u from the
+    cell's own post-collision populations (FluidX3D's `surface_0` folds into our pull, since the ping-pong source
+    still holds them); interface cells marked IF (`m > ρ` or no gas neighbour) or IG (`m < 0` or no liquid neighbour),
+    strict comparisons; (2) gas next to IF → new interface, IG next to IF cancelled; (3) new interface cells start at
+    the equilibrium of their liquid/interface neighbours' mean ρ, u, liquid next to IG → interface; (4) conversions
+    finished, the **excess mass split equally** over liquid and interface neighbours (stored undivided with a receiver
+    count, so the liquid mass is exactly Σ(m + massex)), φ written. No interface normal before surface tension (6b).
+    The CPU runs the same passes (no sequential lists).
+  - **Layout:** the static `u16` flags stay geometry only (*Empty* cells are static fluid); one `surf` buffer of five
+    planes, `state` ×2 (`u32`, ping-pong: G/I/L, pending marks, receiver count), `mass`, `massex`, `phi`: 114 B/cell
+    isothermal (1.91 GB at 4096²). On wgpu `surf` takes the thermal `g_src` binding (free surface excludes thermal), so
+    the kernel keeps 8 storage buffers. ρ is stored every step on liquid and interface cells, u on interface cells.
+  - **Units and gravity:** the free-fall velocity √(2 g H_l) (H_l: the initial liquid's extent along g) joins the
+    characteristic velocities, mapped to the default u_lb = 0.05 (dam break: dt = 6.31e-5 s, front at Ma 0.12;
+    hydrostatic compressibility 1.5 u_lb²). Gravity is a Guo body force on the liquid; **ADR-016's hydrostatic split
+    is off for free-surface runs**, so the output pressure is gauge relative to the gas (p = 0 in gas cells). The
+    liquid starts with a hydrostatic density; the outermost painted liquid cells are interface cells with φ = 1.
+  - **Viscosity:** an optional scene field `physics.turbulence` (Smagorinsky, `constant` C_s = 0.1 by default; τ_eff
+    from ‖Π^neq‖, Hou et al. 1996; TRT's ω⁻ from Λ per cell). Without a model τ < 0.505 stays an error; with one it is
+    a warning. An effective viscosity is measured alongside on the dam break in the CPU implementation.
+  - **Parity:** CUDA bit-identical to the CPU (`compare --tolerance 0`); wgpu at 1e-5 on short cases and, on long
+    runs, a free-surface `--statistics` metric (front within one cell, liquid mass 1e-6, mean kinetic energy 1e-3).
+  - **Outputs:** `fillFraction` always produced (added to a free-surface scene's outputs if missing); gas cells write
+    u = p = 0; diagnostics report the liquid mass, volume Σφ and interface count; probes gain `fill`.
+  - **Validation:** still water and a free-falling block, then the dam break (front = the φ = ½ crossing in the first
+    fluid row, 5 % for T = t√(2g/a) ≥ 1 at a = 40 cells, 10 % for the quick variant at a = 20; liquid-mass drift
+    < 0.1 %), with Martin & Moyce's points digitised from the paper (or a cited secondary source).
+  - **Scope:** free surface with inlets/outlets (`support.freeSurfaceOpen`) or thermal (`support.freeSurfaceThermal`)
+    are errors; moving walls a warning; periodic edges allowed; one liquid.
+  - **Editor and viewer:** *Fluid* is labelled *Liquid* in free-surface scenes, a flood-fill *Fill to level* tool,
+    liquids from the library with τ shown; gas masked by φ < ½, a φ = ½ marching-squares contour, a *Liquid* display
+    mode; a dam-break quick variant (dx = 5 mm, 0.5 s). Acceptance: the dam break from the gallery on CUDA and wgpu.
+- **Consequences:** a free-surface step moves about twice the bytes of a single-phase one (four passes, ≈ 150 B per
+  cell); every pass is a pure function of the previous one, so the CPU reference and CUDA can stay exact, while wgpu's
+  FMA rounding flips conversions and needs the statistics metric. Phase 8a (Esoteric Pull) will move the
+  reconstruction back into a pass before streaming, as FluidX3D does, with the same arithmetic. The formulas taken
+  from Körner and Thürey, whose papers were not reachable during the design, are checked against them in #43 before
+  coding.
 
 ## Open questions
 
