@@ -234,6 +234,19 @@ pub fn heated_cavity(n: u32, ra: f64, pr: f64) -> Scene {
     s
 }
 
+/// A square tank of `n²` cells (side 0.4 m) half full of water whose surface starts tilted by
+/// `n/8` cells across the tank, released at rest: a sloshing wave with conversions all along the
+/// surface but no breaking, so it runs for as long as a benchmark needs (a dam break at this
+/// resolution splashes until its jets exceed the lattice's Mach limit). Smagorinsky model.
+pub fn sloshing_tank(n: u32) -> Scene {
+    let tilt = n as f64 / 8.0;
+    let mut s = liquid_box(n, n, 0.4 / n as f64, false, 1.004e-6, true, |x, y| {
+        (y as f64) < n as f64 / 2.0 + tilt * (0.5 - (x as f64 + 0.5) / n as f64)
+    });
+    s.name = format!("Sloshing tank ({n}²)");
+    s
+}
+
 /// Dam break in a square tank of `n²` cells (side 0.4 m; the domain edges are the walls): a
 /// water column of a × 2a, a = 0.1 m, at the left wall, gas elsewhere, gravity, the Smagorinsky
 /// model with C_s = 0.1 (water's τ is close to ½). Martin & Moyce's n² = 2 column, as in the
@@ -397,6 +410,62 @@ pub fn schafer_turek(cells_per_diameter: u32, u_max: f64) -> Scene {
             position: back,
         },
     ];
+    s
+}
+
+/// A box of `w × h` cells of `cell_size` m (the domain edges are walls, or periodic along x)
+/// with liquid where `liquid(x, y)` holds and gas elsewhere, gravity downwards. The liquid is
+/// water (density 998.2 kg/m³) with kinematic viscosity `nu`; `les` adds the Smagorinsky model
+/// (C_s = 0.1), needed for water's own viscosity at millimetre cells.
+pub fn liquid_box(
+    w: u32,
+    h: u32,
+    cell_size: f64,
+    periodic_x: bool,
+    nu: f64,
+    les: bool,
+    liquid: impl Fn(u32, u32) -> bool,
+) -> Scene {
+    let mut c = Canvas::new(w, h, CellType::Empty);
+    for y in 0..h {
+        for x in 0..w {
+            if liquid(x, y) {
+                c.set(x, y, CellType::Fluid, 0);
+            }
+        }
+    }
+    let mut f = fluid(nu);
+    f.name = "Liquid".into();
+    f.density = 998.2;
+    let edges = if periodic_x {
+        DomainEdges {
+            left: EdgeKind::Periodic,
+            right: EdgeKind::Periodic,
+            ..DomainEdges::default()
+        }
+    } else {
+        DomainEdges::default()
+    };
+    let mut s = scene(
+        format!("Liquid box ({w} × {h})"),
+        &c,
+        cell_size,
+        edges,
+        f,
+        vec![],
+        (
+            1.0,
+            0.01,
+            vec![OutputField::Velocity, OutputField::FillFraction],
+        ),
+    );
+    s.physics = Physics {
+        gravity: [0.0, -STANDARD_GRAVITY],
+        thermal: false,
+        buoyancy: Buoyancy::None,
+        free_surface: true,
+        turbulence: les.then_some(Turbulence::Smagorinsky { constant: 0.1 }),
+    };
     s
 }
 

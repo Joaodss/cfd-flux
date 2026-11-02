@@ -21,19 +21,22 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use cfd_core::domain::Domain;
-use cfd_core::sample::{PendingSamples, SampleSpec};
+use cfd_core::sample::{LatticeSamples, PendingSamples, SampleSpec};
 use cfd_core::solver::{
-    BackendKind, Diagnostics, ElementForce, LatticeFields, PendingFields, Solver, SolverError,
+    BackendKind, Diagnostics, ElementForce, LatticeFields, PendingFields, ReadyFields, Solver,
+    SolverError,
 };
 use cfd_lbm::abi::{bc_words, KernelParams, SampleLayout};
 use cfd_lbm::shared::{
-    diagnostics_from_partials, equilibrium_populations, initial_fields, wall_forces, wall_links,
-    WallLink, DIAGNOSTIC_PARTIALS,
+    diagnostics_from_partials, diagnostics_from_surface_partials, equilibrium_populations,
+    initial_fields, surface_fields, surface_planes, wall_forces, wall_links, wet_links, WallLink,
+    DIAGNOSTIC_PARTIALS,
 };
+use cfd_lbm::surface::plane;
 use cfd_lbm::LbmConfig;
 use wgpu::util::DeviceExt;
 
-use crate::prelude::{source, LBM_WGSL, REDUCE_WGSL, SAMPLE_WGSL};
+use crate::prelude::{lbm_source, source, surface_source, REDUCE_WGSL, SAMPLE_WGSL};
 use crate::readback::{GpuFields, GpuSamples, Mapping, Pool, SampleCopy};
 use crate::{GpuContext, GpuError};
 
@@ -48,6 +51,20 @@ const REDUCE_WG: u32 = 256;
 const MAX_REDUCE_GROUPS: u32 = 1024;
 /// Values per workgroup in the diagnostics partials (see `reduce.wgsl`).
 const PARTIALS: usize = DIAGNOSTIC_PARTIALS;
+/// Planes of the free-surface buffer `surf`.
+const SURF_PLANES: usize = plane::COUNT as usize;
+
+/// The free-surface pipelines (`surface.wgsl`): pass 1 in its `[skip_macro, write_macro]`
+/// variants and the three conversion passes, all on one layout, with one bind group per step
+/// parity (A = f0 → f1, B = f1 → f0, each with `surf` and `mac`).
+struct SurfacePipelines {
+    surf: wgpu::Buffer,
+    step: [wgpu::ComputePipeline; 2],
+    fill: wgpu::ComputePipeline,
+    init: wgpu::ComputePipeline,
+    finish: wgpu::ComputePipeline,
+    groups: [wgpu::BindGroup; 2],
+}
 
 /// The uniform `Params` of the kernels (`shaders/common.wgsl`): the words of
 /// [`KernelParams`]. Layout checked against the WGSL struct by a test.
@@ -106,6 +123,9 @@ pub struct WgpuLbm {
     step_pipelines: [wgpu::ComputePipeline; 2],
     static_group: wgpu::BindGroup,
     step_groups: [wgpu::BindGroup; 2],
+    /// `Some` with a free surface.
+    surface: Option<SurfacePipelines>,
+    surf_pool: Pool,
 
     diag_pipeline: wgpu::ComputePipeline,
     diag_group: wgpu::BindGroup,
@@ -141,12 +161,6 @@ impl WgpuLbm {
         config: LbmConfig,
         workgroup: u32,
     ) -> Result<Self, GpuError> {
-        if domain.free_surface.is_some() || domain.physics.smagorinsky.is_some() {
-            return Err(GpuError::Validation(
-                "free-surface and turbulence-model runs are not on the wgpu engine yet (#44): use the CPU engine"
-                    .into(),
-            ));
-        }
         let limits = ctx.limits().clone();
         if workgroup == 0
             || workgroup > limits.max_compute_invocations_per_workgroup
@@ -165,6 +179,9 @@ impl WgpuLbm {
             ctx.check_storage_size("the D2Q5 populations", bytes(5 * n))?;
         }
         ctx.check_storage_size("the macroscopic fields", bytes(4 * n + 4))?;
+        if domain.free_surface.is_some() {
+            ctx.check_storage_size("the free-surface planes", bytes(SURF_PLANES * n))?;
+        }
 
         let groups = n.div_ceil(workgroup as usize) as u64;
         let max_dim = limits.max_compute_workgroups_per_dimension as u64;
@@ -279,7 +296,7 @@ impl WgpuLbm {
         });
         let lbm_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("lbm.wgsl"),
-            source: wgpu::ShaderSource::Wgsl(source(LBM_WGSL).into()),
+            source: wgpu::ShaderSource::Wgsl(lbm_source().into()),
         });
         let step_pipelines = [false, true].map(|write| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -323,6 +340,63 @@ impl WgpuLbm {
             bind(&step_layout, "step B", &[&f[1], &f[0], &g[1], &g[0], &mac]),
         ];
 
+        // ---- Free surface: `surf` where the thermal lattice binds `g_src`, no `g_dst` ----
+        let surface = domain.free_surface.as_ref().map(|_| {
+            let surf = empty("surf", (SURF_PLANES * n * 4) as u64, pop);
+            let surf_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("free surface step"),
+                entries: &[entry(0, ro), entry(1, rw), entry(2, rw), entry(4, rw)],
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("free surface"),
+                bind_group_layouts: &[Some(&static_layout), Some(&surf_layout)],
+                immediate_size: 0,
+            });
+            let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("surface.wgsl"),
+                source: wgpu::ShaderSource::Wgsl(surface_source().into()),
+            });
+            let pipeline = |entry: &str, write: bool| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some(entry),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[
+                            ("WG", workgroup as f64),
+                            ("WRITE_MACRO", if write { 1.0 } else { 0.0 }),
+                        ],
+                        ..Default::default()
+                    },
+                    cache: None,
+                })
+            };
+            let group = |label: &str, src: &wgpu::Buffer, dst: &wgpu::Buffer| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(label),
+                    layout: &surf_layout,
+                    entries: &[(0, src), (1, dst), (2, &surf), (4, &mac)].map(|(binding, b)| {
+                        wgpu::BindGroupEntry {
+                            binding,
+                            resource: b.as_entire_binding(),
+                        }
+                    }),
+                })
+            };
+            SurfacePipelines {
+                step: [false, true].map(|write| pipeline("stream_collide_fs", write)),
+                fill: pipeline("surface_fill", true),
+                init: pipeline("surface_init", true),
+                finish: pipeline("surface_finish", true),
+                groups: [
+                    group("free surface A", &f[0], &f[1]),
+                    group("free surface B", &f[1], &f[0]),
+                ],
+                surf,
+            }
+        });
+
         // ---- Reductions: layouts derived from each entry point's bindings ----
         let reduce_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("reduce.wgsl"),
@@ -355,11 +429,25 @@ impl WgpuLbm {
         let diag_groups = (n.div_ceil(REDUCE_WG as usize) as u32).clamp(1, MAX_REDUCE_GROUPS);
         let partial_bytes = (diag_groups as usize * PARTIALS * 4) as u64;
         let partials = empty("partials", partial_bytes, U::STORAGE | U::COPY_SRC);
-        let diag_pipeline = reduce_pipeline("diagnostics");
-        let diag_group = bind_at(
-            &diag_pipeline,
-            &[(0, &params), (1, &flags), (2, &mac), (3, &partials)],
-        );
+        let (diag_pipeline, diag_group) = match &surface {
+            Some(s) => {
+                let p = reduce_pipeline("diagnostics_fs");
+                let entries = [
+                    (0, &params),
+                    (1, &flags),
+                    (2, &mac),
+                    (3, &partials),
+                    (7, &s.surf),
+                ];
+                let g = bind_at(&p, &entries);
+                (p, g)
+            }
+            None => {
+                let p = reduce_pipeline("diagnostics");
+                let g = bind_at(&p, &[(0, &params), (1, &flags), (2, &mac), (3, &partials)]);
+                (p, g)
+            }
+        };
         let link_gather = if links.is_empty() {
             None
         } else {
@@ -397,6 +485,7 @@ impl WgpuLbm {
         let mut solver = Self {
             status_pool: Pool::new(16),
             field_pool: Pool::new((16 * n) as u64),
+            surf_pool: Pool::new((SURF_PLANES * n * 4) as u64),
             small_pool: Pool::new(small),
             ctx,
             domain,
@@ -414,6 +503,7 @@ impl WgpuLbm {
             step_pipelines,
             static_group,
             step_groups,
+            surface,
             diag_pipeline,
             diag_group,
             diag_groups,
@@ -474,6 +564,23 @@ impl WgpuLbm {
         }
         mac.resize(4 * n + 4, 0.0);
         q.write_buffer(&self.mac, 0, bytemuck::cast_slice(&mac));
+        if let (Some(p), Some(s)) = (surface_planes(&self.domain, fields), &self.surface) {
+            let mut words: Vec<u32> = Vec::with_capacity(SURF_PLANES * n);
+            words.extend(&p.state);
+            words.extend(&p.state_b);
+            for plane in [&p.mass, &p.massex, &p.phi] {
+                words.extend(plane.iter().map(|v| v.to_bits()));
+            }
+            q.write_buffer(&s.surf, 0, bytemuck::cast_slice(&words));
+        }
+    }
+
+    /// The `surf` planes (as words), copied now: for the fields and forces of a free-surface run.
+    fn read_surface(&self) -> Option<Vec<u32>> {
+        let s = self.surface.as_ref()?;
+        let size = (SURF_PLANES * self.n * 4) as u64;
+        let words = self.read_now(&self.surf_pool, &s.surf, size, self.encoder());
+        Some(words.into_iter().map(f32::to_bits).collect())
     }
 
     fn device_error(&self) -> Result<(), SolverError> {
@@ -529,16 +636,29 @@ impl WgpuLbm {
                 label: Some("stream_collide"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(&self.step_pipelines[!skip as usize]);
             pass.set_bind_group(0, &self.static_group, &[]);
-            for s in 0..steps as u64 {
-                if skip && write_last && s + 1 == steps as u64 {
-                    // Both pipelines share one layout, so the bind groups stay bound.
-                    pass.set_pipeline(&self.step_pipelines[1]);
+            if let Some(fs) = &self.surface {
+                // Four dispatches per step (ADR-032); wgpu orders them with barriers.
+                for s in 0..steps as u64 {
+                    let write = !skip || (write_last && s + 1 == steps as u64);
+                    let parity = ((self.steps + s) % 2) as usize;
+                    pass.set_bind_group(1, &fs.groups[parity], &[]);
+                    for pipeline in [&fs.step[write as usize], &fs.fill, &fs.init, &fs.finish] {
+                        pass.set_pipeline(pipeline);
+                        pass.dispatch_workgroups(self.dispatch[0], self.dispatch[1], 1);
+                    }
                 }
-                let parity = ((self.steps + s) % 2) as usize;
-                pass.set_bind_group(1, &self.step_groups[parity], &[]);
-                pass.dispatch_workgroups(self.dispatch[0], self.dispatch[1], 1);
+            } else {
+                pass.set_pipeline(&self.step_pipelines[!skip as usize]);
+                for s in 0..steps as u64 {
+                    if skip && write_last && s + 1 == steps as u64 {
+                        // Both pipelines share one layout, so the bind groups stay bound.
+                        pass.set_pipeline(&self.step_pipelines[1]);
+                    }
+                    let parity = ((self.steps + s) % 2) as usize;
+                    pass.set_bind_group(1, &self.step_groups[parity], &[]);
+                    pass.dispatch_workgroups(self.dispatch[0], self.dispatch[1], 1);
+                }
             }
         }
         let staging = self.status_pool.take(&self.ctx);
@@ -738,6 +858,21 @@ impl Solver for WgpuLbm {
     }
 
     fn request_fields(&mut self) -> Box<dyn PendingFields> {
+        if let Some(surf) = self.read_surface() {
+            // Free surface: copied now, with the state and φ planes (small grids so far).
+            let n = self.n;
+            let mac = self.read_now(&self.field_pool, &self.mac, (16 * n) as u64, self.encoder());
+            let mut lf = crate::readback::split_fields(&mac, n, false);
+            let phi = surf[plane::PHI as usize * n..][..n]
+                .iter()
+                .map(|&w| f32::from_bits(w))
+                .collect();
+            surface_fields(&mut lf, &surf[..n], phi);
+            return Box::new(ReadyFields {
+                step: self.steps,
+                fields: Some(lf),
+            });
+        }
         let staging = self.field_pool.take(&self.ctx);
         let mut enc = self.encoder();
         enc.copy_buffer_to_buffer(&self.mac, 0, &staging, 0, (16 * self.n) as u64);
@@ -753,6 +888,14 @@ impl Solver for WgpuLbm {
     }
 
     fn request_samples(&mut self, specs: &[SampleSpec]) -> Box<dyn PendingSamples> {
+        if self.surface.is_some() {
+            // The sampling kernel has no fill fraction or gas mask yet: the fields are copied
+            // and converted by the reference code on the caller's output thread.
+            return Box::new(LatticeSamples {
+                pending: self.request_fields(),
+                specs: specs.to_vec(),
+            });
+        }
         Box::new(self.start_samples(specs))
     }
 
@@ -769,6 +912,9 @@ impl Solver for WgpuLbm {
         }
         let size = (self.diag_groups as usize * PARTIALS * 4) as u64;
         let p = self.read_now(&self.small_pool, &self.partials, size, enc);
+        if self.surface.is_some() {
+            return diagnostics_from_surface_partials(self.steps, &p, self.diag_groups as usize);
+        }
         diagnostics_from_partials(self.steps, &p, self.diag_groups as usize, self.thermal)
     }
 
@@ -787,6 +933,10 @@ impl Solver for WgpuLbm {
             pass.dispatch_workgroups((self.links.len() as u32).div_ceil(REDUCE_WG), 1, 1);
         }
         let outgoing = self.read_now(&self.small_pool, out, (self.links.len() * 4) as u64, enc);
+        if let Some(surf) = self.read_surface() {
+            let (links, outgoing) = wet_links(&self.links, &outgoing, &surf[..self.n]);
+            return wall_forces(&self.domain, &links, &outgoing);
+        }
         wall_forces(&self.domain, &self.links, &outgoing)
     }
 }

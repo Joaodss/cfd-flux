@@ -42,15 +42,33 @@ __device__ __forceinline__ unsigned inward_cell(const Params& P, unsigned sx, un
     return y * P.w + x;
 }
 
-// TRT collision with Guo forcing of the pair (i, ī); writes both populations and returns their sum.
+// Local relaxation rates (ω⁺, ω⁻) of the Smagorinsky model from the non-equilibrium momentum flux of
+// the pulled populations (`cfd_lbm::kernel::les_rates`).
+__device__ __forceinline__ float2 les_rates(const Params& P, const float* f, float drho, float rho, float2 u) {
+    // Σ cₓ² f̃^eq = Δρ/3 + ρuₓ², Σ cₓc_y f̃^eq = ρuₓu_y.
+    const float pxx = f[1] + f[3] + f[5] + f[6] + f[7] + f[8] - (drho / 3.0f + rho * u.x * u.x);
+    const float pyy = f[2] + f[4] + f[5] + f[6] + f[7] + f[8] - (drho / 3.0f + rho * u.y * u.y);
+    const float pxy = f[5] - f[6] + f[7] - f[8] - rho * u.x * u.y;
+    const float q = sqrtf(pxx * pxx + pyy * pyy + 2.0f * pxy * pxy);
+    const float tau = 0.5f * (P.les_tau0 + sqrtf(P.les_tau0 * P.les_tau0 + P.les_factor * q / rho));
+    const float wp = 1.0f / tau;
+    const float wm = P.les_magic < 0.0f ? wp : 1.0f / (0.5f + P.les_magic / (tau - 0.5f));
+    return make_float2(wp, wm);
+}
+
+// The rates of a cell: the run's, or the LES model's when it is on.
+__device__ __forceinline__ float2 relaxation(const Params& P, const float* f, float drho, float rho, float2 u) {
+    return P.les_factor > 0.0f ? les_rates(P, f, drho, rho, u) : P.omega;
+}
+
+// TRT collision with Guo forcing of the pair (i, ī) with rates (wp, wm); writes both populations and
+// returns their sum.
 __device__ __forceinline__ float collide_pair(
     const Params& P, float* __restrict__ f_dst, unsigned i, unsigned k, float fi, float fo,
-    float drho, float rho, float2 u, float usq, float2 force, float uf
+    float drho, float rho, float2 u, float usq, float2 force, float uf, float wp, float wm
 ) {
     const unsigned o = OPPOSITE[i];
     const float wi = W9[i];
-    const float wp = P.omega.x;
-    const float wm = P.omega.y;
     const float sp = 1.0f - 0.5f * wp;
     const float sm = 1.0f - 0.5f * wm;
     const float cu = dot_c(i, u);
@@ -214,13 +232,14 @@ __device__ __forceinline__ void step(
     const float2 u = make_float2((jx + 0.5f * force.x) / rho, (jy + 0.5f * force.y) / rho);
     const float usq = u.x * u.x + u.y * u.y;
     const float uf = u.x * force.x + u.y * force.y;
+    const float2 om = relaxation(P, f, drho, rho, u);
 
     // ---- TRT collision with Guo forcing ----
     float moving = 0.0f;
-    moving += collide_pair(P, f_dst, 1u, k, f[1], f[3], drho, rho, u, usq, force, uf);
-    moving += collide_pair(P, f_dst, 2u, k, f[2], f[4], drho, rho, u, usq, force, uf);
-    moving += collide_pair(P, f_dst, 5u, k, f[5], f[7], drho, rho, u, usq, force, uf);
-    moving += collide_pair(P, f_dst, 6u, k, f[6], f[8], drho, rho, u, usq, force, uf);
+    moving += collide_pair(P, f_dst, 1u, k, f[1], f[3], drho, rho, u, usq, force, uf, om.x, om.y);
+    moving += collide_pair(P, f_dst, 2u, k, f[2], f[4], drho, rho, u, usq, force, uf, om.x, om.y);
+    moving += collide_pair(P, f_dst, 5u, k, f[5], f[7], drho, rho, u, usq, force, uf, om.x, om.y);
+    moving += collide_pair(P, f_dst, 6u, k, f[6], f[8], drho, rho, u, usq, force, uf, om.x, om.y);
     // Rest population by difference: Σ f̃* = Δρ exactly (the Guo source sums to zero).
     f_dst[k] = drho - moving;
     if (WRITE_MACRO) {

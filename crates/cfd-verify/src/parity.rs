@@ -57,6 +57,11 @@ macro_rules! parity_tests {
             sampling_matches_the_cpu_conversion,
             thermal_sampling_matches_the_cpu_conversion,
             skipping_macro_stores_changes_nothing,
+            free_surface_still_tank,
+            free_surface_falling_block,
+            free_surface_periodic_wave,
+            free_surface_dam_break,
+            smagorinsky_cavity,
         );
     };
     (@cases $factory:path; $($case:ident),* $(,)?) => {
@@ -732,6 +737,225 @@ pub fn skipping_macro_stores_changes_nothing(make: &Factory) {
             skip.steps_done()
         );
     }
+}
+
+// ---- Free surface (ADR-032) ----
+
+/// Liquid mass, relative: the CPU sums Σ(m + m_ex) in f64; the GPUs sum f32 partials of
+/// Σ(m + m_ex − φ) and Σφ, finished in f64.
+pub const LIQUID_MASS_TOLERANCE: f64 = 1e-6;
+
+/// Whether the backend under test must match the CPU bit for bit: CUDA without fused
+/// multiply-adds (ADR-021, ADR-032).
+fn exact(backend: BackendKind) -> bool {
+    backend == BackendKind::Cuda && std::env::var_os("CFD_CUDA_FMAD").is_none_or(|v| v != "1")
+}
+
+/// Steps after which the free-surface fields are compared cell by cell on every backend. Beyond
+/// it, a backend that rounds differently (wgpu: FMA contraction, approximate division and square
+/// root) may convert an interface cell one step earlier or later than the CPU, after which the two
+/// runs follow slightly different interfaces (ADR-032; measured: the periodic wave flips a pair of
+/// cells at step ≈ 105).
+pub const FREE_SURFACE_SHORT: u32 = 100;
+
+/// Mean kinetic energy on long free-surface runs, relative (ADR-032 §8's statistics metric).
+pub const ENERGY_TOLERANCE: f64 = 1e-3;
+
+/// Fill-weighted centroid of the liquid on long runs, in cells (the front within one cell).
+pub const CENTROID_TOLERANCE: f64 = 1.0;
+
+/// Fill-weighted centroid `(x, y)` in cells.
+pub fn fill_centroid(lf: &LatticeFields, w: usize) -> [f64; 2] {
+    let fill = lf.fill.as_ref().expect("fill fraction");
+    let (mut sx, mut sy, mut s) = (0.0, 0.0, 0.0);
+    for (k, &f) in fill.iter().enumerate() {
+        let f = f as f64;
+        sx += f * ((k % w) as f64 + 0.5);
+        sy += f * ((k / w) as f64 + 0.5);
+        s += f;
+    }
+    [sx / s, sy / s]
+}
+
+/// [`check`] for free-surface runs, in two stages:
+///
+/// - after [`FREE_SURFACE_SHORT`] steps, every backend: the phases agree cell for cell, ρ, u and
+///   the fill fraction within [`TOLERANCE`] (u relative to the larger of max |u| and the
+///   characteristic lattice velocity, so a liquid at rest is not judged on round-off);
+/// - after `steps`, an exact backend (CUDA without FMA) is still bit-identical in every field,
+///   phase and fill; the others are judged by statistics: the liquid mass within
+///   [`LIQUID_MASS_TOLERANCE`], the mean kinetic energy over the stage within
+///   [`ENERGY_TOLERANCE`] and the liquid's centroid within [`CENTROID_TOLERANCE`] cells.
+///
+/// The liquid mass is compared at both stages on every backend, the forces at the short one.
+pub fn check_free_surface(name: &str, make: &Factory, d: Domain, steps: u32) {
+    assert!(steps >= FREE_SURFACE_SHORT);
+    let config = LbmConfig::default();
+    let w = d.width as usize;
+    let u_char = d.units.velocity_to_lattice(d.numbers.velocity);
+    let mut cpu = CpuLbm::new(d.clone(), config);
+    let mut gpu = make(d, config);
+    let exact = exact(gpu.backend());
+    assert_eq!(
+        gpu.lattice_fields(),
+        cpu.lattice_fields(),
+        "{name}: initial state"
+    );
+    let rel = |a: f64, b: f64| (a - b).abs() / b.abs().max(1e-30);
+    let mass = |cpu: &mut CpuLbm, gpu: &mut Box<dyn Solver>, at: &str| {
+        let (dc, dg) = (cpu.diagnostics(), gpu.diagnostics());
+        assert!(dg.finite && dc.finite, "{name}: not finite at {at}");
+        assert!(
+            rel(dg.mass, dc.mass) < LIQUID_MASS_TOLERANCE,
+            "{name} ({at}): liquid mass {} vs {}",
+            dg.mass,
+            dc.mass
+        );
+        (dc, dg)
+    };
+
+    // ---- Short horizon: cell by cell ----
+    cpu.step(FREE_SURFACE_SHORT).unwrap();
+    gpu.step(FREE_SURFACE_SHORT).unwrap();
+    gpu.finish().unwrap();
+    let (fc, fg) = (cpu.lattice_fields(), gpu.lattice_fields());
+    let speed = max_abs(&fc.ux).max(max_abs(&fc.uy)).max(u_char);
+    let du = max_diff(&fg.ux, &fc.ux).max(max_diff(&fg.uy, &fc.uy)) / speed;
+    let drho = max_diff(&fg.density, &fc.density);
+    let (pc, pg) = (fc.phase.as_ref().unwrap(), fg.phase.as_ref().unwrap());
+    let phase_diff = pc.iter().zip(pg).filter(|(a, b)| a != b).count();
+    let fill = max_diff(fg.fill.as_ref().unwrap(), fc.fill.as_ref().unwrap());
+    eprintln!(
+        "{name} ({:?}): {FREE_SURFACE_SHORT} steps, max diff ρ {drho:.2e}, u {du:.2e}, φ {fill:.2e}, \
+         {phase_diff} phases differ{}",
+        gpu.backend(),
+        if fc == fg { " (bit-identical)" } else { "" },
+    );
+    if exact {
+        assert!(fc == fg, "{name}: not bit-identical to the CPU");
+    }
+    assert_eq!(phase_diff, 0, "{name}: phases differ");
+    assert!(drho < TOLERANCE, "{name}: density differs by {drho:e}");
+    assert!(du < TOLERANCE, "{name}: velocity differs by {du:e}");
+    assert!(
+        fill < TOLERANCE,
+        "{name}: fill fraction differs by {fill:e}"
+    );
+    let (dc, dg) = mass(&mut cpu, &mut gpu, "short");
+    assert_eq!(
+        dg.liquid.unwrap().interface_cells,
+        dc.liquid.unwrap().interface_cells,
+        "{name}: interface cells"
+    );
+    let (fc_, fg_) = (cpu.forces(), gpu.forces());
+    assert_eq!(fc_.len(), fg_.len(), "{name}: elements with forces");
+    let scale = fc_
+        .iter()
+        .flat_map(|f| f.lattice)
+        .map(f64::abs)
+        .fold(1e-30, f64::max);
+    for (a, b) in fg_.iter().zip(&fc_) {
+        for c in 0..2 {
+            let diff = (a.lattice[c] - b.lattice[c]).abs() / scale;
+            assert!(diff < FORCE_TOLERANCE, "{name}: force differs by {diff:e}");
+        }
+    }
+
+    // ---- Long horizon ----
+    let rest = steps - FREE_SURFACE_SHORT;
+    if rest == 0 {
+        return;
+    }
+    // The kinetic energy is compared as a mean over this stage (sampled every 10 steps): in a
+    // sloshing flow a timing shift of a step moves the instantaneous value far more.
+    let (mut ec, mut eg, mut left) = (0.0, 0.0, rest);
+    while left > 0 {
+        let chunk = left.min(10);
+        cpu.step(chunk).unwrap();
+        gpu.step(chunk).unwrap();
+        ec += cpu.diagnostics().kinetic_energy;
+        eg += gpu.diagnostics().kinetic_energy;
+        left -= chunk;
+    }
+    gpu.finish().unwrap();
+    let (fc, fg) = (cpu.lattice_fields(), gpu.lattice_fields());
+    let (dc, dg) = mass(&mut cpu, &mut gpu, "long");
+    let energy = rel(eg, ec);
+    let [cx, cy] = fill_centroid(&fc, w);
+    let [gx, gy] = fill_centroid(&fg, w);
+    let centroid = (gx - cx).hypot(gy - cy);
+    eprintln!(
+        "{name} ({:?}): {steps} steps, liquid mass {:.2e}, kinetic energy {energy:.2e}, centroid \
+         {centroid:.2e} cells{}",
+        gpu.backend(),
+        rel(dg.mass, dc.mass),
+        if fc == fg { " (bit-identical)" } else { "" },
+    );
+    if exact {
+        assert!(
+            fc == fg,
+            "{name}: not bit-identical to the CPU after {steps} steps"
+        );
+        assert_eq!(
+            dg.liquid.unwrap().interface_cells,
+            dc.liquid.unwrap().interface_cells
+        );
+    }
+    assert!(
+        energy < ENERGY_TOLERANCE,
+        "{name}: kinetic energy differs by {energy:e}"
+    );
+    assert!(
+        centroid < CENTROID_TOLERANCE,
+        "{name}: centroid differs by {centroid} cells"
+    );
+}
+
+/// A tank half full of a viscous liquid at rest (τ ≈ 0.52): the hydrostatic start, interface
+/// cells at rest.
+pub fn free_surface_still_tank(make: &Factory) {
+    let s = scenes::liquid_box(24, 24, 0.005, false, 1e-3, false, |_, y| y < 12);
+    check_free_surface("still tank", make, domain(&s, 0.05), 300);
+}
+
+/// A block falling through gas onto the floor: conversions at the leading and trailing faces,
+/// then the impact.
+pub fn free_surface_falling_block(make: &Factory) {
+    let s = scenes::liquid_box(32, 48, 0.005, false, 1e-3, false, |x, y| {
+        (10..22).contains(&x) && (28..40).contains(&y)
+    });
+    check_free_surface("falling block", make, domain(&s, 0.05), 600);
+}
+
+/// A standing wave in a channel periodic along x: the passes' wrapped neighbours.
+pub fn free_surface_periodic_wave(make: &Factory) {
+    let s = scenes::liquid_box(48, 24, 0.005, true, 1e-3, false, |x, y| {
+        (y as f64) < 8.0 + 3.0 * (2.0 * PI * x as f64 / 48.0).sin()
+    });
+    check_free_surface("periodic wave", make, domain(&s, 0.05), 400);
+}
+
+/// A small dam break with water's viscosity and the Smagorinsky model.
+pub fn free_surface_dam_break(make: &Factory) {
+    let d = domain(&scenes::dam_break(64), 0.05);
+    assert!(d.physics.smagorinsky.is_some());
+    check_free_surface("dam break", make, d, 500);
+}
+
+/// The Smagorinsky model on the single-phase kernel (a cavity at Re 400 with C_s = 0.17).
+pub fn smagorinsky_cavity(make: &Factory) {
+    let mut s = scenes::lid_driven_cavity(48, 400.0);
+    s.physics.turbulence = Some(cfd_core::scene::Turbulence::Smagorinsky { constant: 0.17 });
+    let d = domain(&s, 0.1);
+    check(
+        "smagorinsky cavity",
+        make,
+        d,
+        None,
+        1500,
+        2,
+        LbmConfig::default(),
+    );
 }
 
 #[cfg(test)]

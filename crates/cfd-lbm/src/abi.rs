@@ -12,7 +12,7 @@
 use std::fmt::Write as _;
 use std::mem::{offset_of, size_of};
 
-use cfd_core::domain::{flags, BcParams, Domain, LINKS, OPPOSITE};
+use cfd_core::domain::{flags, phase, BcParams, Domain, LINKS, OPPOSITE};
 use cfd_core::sample::{
     components, OutputCoefficients, Precision, Sample, SampleData, SampleField, SampleSpec,
 };
@@ -20,7 +20,8 @@ use cfd_core::scene::OutputField;
 
 use crate::config::LbmConfig;
 use crate::lattice::{W5, W9};
-use crate::shared::relaxation_rates;
+use crate::shared::{les_params, relaxation_rates};
+use crate::surface::{plane, state, KAPPA};
 
 /// The constants of a run, as the kernels read them.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -42,12 +43,17 @@ pub struct KernelParams {
     pub buoyancy: [f32; 2],
     /// Number of bounce-back links (forces).
     pub links: u32,
-    pub _pad: [u32; 3],
+    /// Smagorinsky model (`cfd_lbm::kernel::Les`): τ₀, `18 √2 C_s²` (0 = no model) and TRT's Λ
+    /// (negative for BGK).
+    pub les_tau0: f32,
+    pub les_factor: f32,
+    pub les_magic: f32,
 }
 
 impl KernelParams {
     pub fn new(d: &Domain, config: LbmConfig, body_force: [f32; 2], links: usize) -> Self {
         let (omega, omega_g) = relaxation_rates(d, config);
+        let les = les_params(d, config);
         Self {
             w: d.width,
             h: d.height,
@@ -58,7 +64,9 @@ impl KernelParams {
             body_force,
             buoyancy: d.physics.buoyancy.map(|v| v as f32),
             links: links as u32,
-            _pad: [0; 3],
+            les_tau0: les.map_or(0.0, |l| l.tau0),
+            les_factor: les.map_or(0.0, |l| l.factor),
+            les_magic: les.map_or(0.0, |l| l.magic.unwrap_or(-1.0)),
         }
     }
 
@@ -79,15 +87,15 @@ impl KernelParams {
             b(self.buoyancy[0]),
             b(self.buoyancy[1]),
             self.links,
-            self._pad[0],
-            self._pad[1],
-            self._pad[2],
+            b(self.les_tau0),
+            b(self.les_factor),
+            b(self.les_magic),
         ]
     }
 }
 
 /// Byte offset of every named member of `KernelParams` (the names of the GPU structs).
-pub fn params_fields() -> [(&'static str, usize); 9] {
+pub fn params_fields() -> [(&'static str, usize); 12] {
     [
         ("w", offset_of!(KernelParams, w)),
         ("h", offset_of!(KernelParams, h)),
@@ -98,6 +106,9 @@ pub fn params_fields() -> [(&'static str, usize); 9] {
         ("body_force", offset_of!(KernelParams, body_force)),
         ("buoyancy", offset_of!(KernelParams, buoyancy)),
         ("links", offset_of!(KernelParams, links)),
+        ("les_tau0", offset_of!(KernelParams, les_tau0)),
+        ("les_factor", offset_of!(KernelParams, les_factor)),
+        ("les_magic", offset_of!(KernelParams, les_magic)),
     ]
 }
 
@@ -426,6 +437,29 @@ const FLAG_CONSTANTS: [(&str, u16); 14] = [
     ("LINK_SHIFT", flags::LINK_SHIFT),
 ];
 
+/// Free-surface state bits and phases (`cfd_lbm::surface::state`, `cfd_core::domain::phase`).
+const SURFACE_CONSTANTS: [(&str, u32); 19] = [
+    ("PHASE_GAS", phase::GAS as u32),
+    ("PHASE_INTERFACE", phase::INTERFACE as u32),
+    ("PHASE_LIQUID", phase::LIQUID as u32),
+    ("PHASE_SOLID", phase::SOLID as u32),
+    ("PHASE_MASK", state::PHASE_MASK),
+    ("MARK_SHIFT", state::MARK_SHIFT),
+    ("MARK_MASK", state::MARK_MASK),
+    ("MARK_NONE", state::MARK_NONE),
+    ("TO_LIQUID", state::TO_LIQUID),
+    ("TO_GAS", state::TO_GAS),
+    ("TO_INTERFACE", state::TO_INTERFACE),
+    ("COUNT_SHIFT", state::COUNT_SHIFT),
+    ("COUNT_MASK", state::COUNT_MASK),
+    ("SURF_STATE_A", plane::STATE_A),
+    ("SURF_STATE_B", plane::STATE_B),
+    ("SURF_MASS", plane::MASS),
+    ("SURF_MASSEX", plane::MASSEX),
+    ("SURF_PHI", plane::PHI),
+    ("SURF_PLANES", plane::COUNT),
+];
+
 /// `f32` as a source literal (without suffix). Rust prints the shortest decimal that
 /// round-trips, so the value on the GPU is bit-identical to the CPU constant.
 pub fn float_literal(v: f32) -> String {
@@ -488,6 +522,10 @@ pub fn wgsl_prelude() -> String {
     for (name, v) in FLAG_CONSTANTS {
         let _ = writeln!(s, "const {name}: u32 = {v}u;");
     }
+    for (name, v) in SURFACE_CONSTANTS {
+        let _ = writeln!(s, "const {name}: u32 = {v}u;");
+    }
+    let _ = writeln!(s, "const KAPPA: f32 = {};", float_literal(KAPPA));
     for (name, f) in SAMPLE_KINDS {
         let _ = writeln!(
             s,
@@ -520,6 +558,10 @@ pub fn cuda_prelude() -> String {
     for (name, v) in FLAG_CONSTANTS {
         let _ = writeln!(s, "constexpr unsigned {name} = {v}u;");
     }
+    for (name, v) in SURFACE_CONSTANTS {
+        let _ = writeln!(s, "constexpr unsigned {name} = {v}u;");
+    }
+    let _ = writeln!(s, "constexpr float KAPPA = {}f;", float_literal(KAPPA));
     for (name, f) in SAMPLE_KINDS {
         let _ = writeln!(
             s,

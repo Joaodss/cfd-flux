@@ -13,6 +13,8 @@
 @group(0) @binding(5) var<storage, read> f_cur: array<f32>;
 // Per link: the population f̃*_ī leaving the fluid cell towards the wall.
 @group(0) @binding(6) var<storage, read_write> link_out: array<f32>;
+// Free surface: the five planes of `surf` (see `surface.wgsl`).
+@group(0) @binding(7) var<storage, read> surf: array<u32>;
 
 const RWG: u32 = 256u;
 const PARTIALS: u32 = 8u;
@@ -23,6 +25,7 @@ var<workgroup> sh_energy: array<f32, RWG>;
 var<workgroup> sh_umax: array<f32, RWG>;
 var<workgroup> sh_heat: array<f32, RWG>;
 var<workgroup> sh_bad: array<f32, RWG>;
+var<workgroup> sh_iface: array<f32, RWG>;
 
 // Each invocation accumulates a strided subset of the cells in f32, then the workgroup combines
 // its 256 values with a tree in shared memory; the CPU adds the per-workgroup partials in f64.
@@ -94,4 +97,82 @@ fn gather_links(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let l = links[gid.x];
     link_out[gid.x] = f_cur[OPPOSITE[l & 15u] * P.n + (l >> 4u)];
+}
+
+// Diagnostics of a free-surface run, per workgroup: wet cells, Σ(m + m_ex − φ), ½Σρ|u|² and
+// max |u| over wet cells, Σφ, non-finite flag, interface cells, padding. The liquid mass is
+// Σ(m + m_ex − φ) + Σφ, each finished in f64 on the CPU (`diagnostics_from_surface_partials`).
+@compute @workgroup_size(RWG)
+fn diagnostics_fs(
+    @builtin(local_invocation_index) li: u32,
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) groups: vec3<u32>,
+) {
+    let n = P.n;
+    var cells = 0.0;
+    var excess = 0.0;
+    var energy = 0.0;
+    var umax = 0.0;
+    var volume = 0.0;
+    var bad = 0.0;
+    var iface = 0.0;
+    for (var c = wid.x * RWG + li; c < n; c += groups.x * RWG) {
+        if ((unpack_flags(cell_flags[c >> 1u], c) & FLOW_MASK) != FLUID) {
+            continue;
+        }
+        let m = bitcast<f32>(surf[SURF_MASS * n + c]);
+        let e = bitcast<f32>(surf[SURF_MASSEX * n + c]);
+        let f = bitcast<f32>(surf[SURF_PHI * n + c]);
+        excess += m + e - f;
+        volume += f;
+        let p = surf[SURF_STATE_A * n + c] & PHASE_MASK;
+        if (p == PHASE_INTERFACE) {
+            iface += 1.0;
+        }
+        if (!(is_finite(m) && is_finite(e))) {
+            bad = 1.0;
+        }
+        if (p != PHASE_INTERFACE && p != PHASE_LIQUID) {
+            continue;
+        }
+        let r = mac[c];
+        let x = mac[n + c];
+        let y = mac[2u * n + c];
+        let usq = x * x + y * y;
+        cells += 1.0;
+        energy += 0.5 * r * usq;
+        umax = max(umax, sqrt(usq));
+        if (!(is_finite(r) && is_finite(x) && is_finite(y))) {
+            bad = 1.0;
+        }
+    }
+    sh_cells[li] = cells;
+    sh_mass[li] = excess;
+    sh_energy[li] = energy;
+    sh_umax[li] = umax;
+    sh_heat[li] = volume;
+    sh_bad[li] = bad;
+    sh_iface[li] = iface;
+    for (var s = RWG / 2u; s > 0u; s >>= 1u) {
+        workgroupBarrier();
+        if (li < s) {
+            sh_cells[li] += sh_cells[li + s];
+            sh_mass[li] += sh_mass[li + s];
+            sh_energy[li] += sh_energy[li + s];
+            sh_umax[li] = max(sh_umax[li], sh_umax[li + s]);
+            sh_heat[li] += sh_heat[li + s];
+            sh_bad[li] = max(sh_bad[li], sh_bad[li + s]);
+            sh_iface[li] += sh_iface[li + s];
+        }
+    }
+    if (li == 0u) {
+        let o = wid.x * PARTIALS;
+        partials[o] = sh_cells[0];
+        partials[o + 1u] = sh_mass[0];
+        partials[o + 2u] = sh_energy[0];
+        partials[o + 3u] = sh_umax[0];
+        partials[o + 4u] = sh_heat[0];
+        partials[o + 5u] = sh_bad[0];
+        partials[o + 6u] = sh_iface[0];
+    }
 }

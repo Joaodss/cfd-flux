@@ -23,7 +23,7 @@ use crate::surface::{self, state};
 
 /// Smagorinsky LES constants (Hou et al. 1996).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Les {
+pub struct Les {
     /// Molecular relaxation time τ₀.
     pub tau0: f32,
     /// `18 √2 C_s²`: `τ = ½ (τ₀ + √(τ₀² + factor · ‖Π^neq‖ / ρ))`.

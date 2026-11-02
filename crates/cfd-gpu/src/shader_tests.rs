@@ -8,10 +8,9 @@ use cfd_lbm::LbmConfig;
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 
 use crate::lbm::{flag_bytes, params_words};
-use crate::prelude::{source, LBM_WGSL, REDUCE_WGSL, SAMPLE_WGSL};
+use crate::prelude::{lbm_source, source, surface_source, REDUCE_WGSL, SAMPLE_WGSL};
 
-fn module(kernel: &str) -> naga::Module {
-    let src = source(kernel);
+fn module(src: String) -> naga::Module {
     let module =
         naga::front::wgsl::parse_str(&src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
     Validator::new(ValidationFlags::all(), Capabilities::all())
@@ -41,14 +40,15 @@ fn layout(m: &naga::Module, name: &str) -> (u32, Vec<(String, u32)>) {
 
 #[test]
 fn every_shader_module_validates() {
-    module(LBM_WGSL);
-    module(REDUCE_WGSL);
-    module(SAMPLE_WGSL);
+    module(lbm_source());
+    module(surface_source());
+    module(source(REDUCE_WGSL));
+    module(source(SAMPLE_WGSL));
 }
 
 #[test]
 fn bc_params_layout_matches_the_rust_struct() {
-    let m = module(LBM_WGSL);
+    let m = module(lbm_source());
     let (size, members) = layout(&m, "BcParams");
     assert_eq!(size as usize, std::mem::size_of::<BcParams>());
     for (name, offset) in bc_fields() {
@@ -59,7 +59,7 @@ fn bc_params_layout_matches_the_rust_struct() {
 
 #[test]
 fn params_layout_matches_kernel_params() {
-    let m = module(LBM_WGSL);
+    let m = module(lbm_source());
     let (size, members) = layout(&m, "Params");
     assert_eq!(size as usize, std::mem::size_of::<KernelParams>());
     for (name, offset) in params_fields() {
@@ -88,7 +88,7 @@ fn flags_are_packed_little_endian() {
 
 #[test]
 fn sample_params_layout_matches_the_rust_struct() {
-    let m = module(SAMPLE_WGSL);
+    let m = module(source(SAMPLE_WGSL));
     let (size, members) = layout(&m, "SampleParams");
     assert_eq!(size as usize, std::mem::size_of::<SampleParams>());
     for (name, offset) in sample_params_fields() {

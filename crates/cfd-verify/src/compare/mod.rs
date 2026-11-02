@@ -27,7 +27,7 @@ use cfd_io::image::{self, Colormap, ColourScale};
 use serde::Serialize;
 
 use crate::harness::upward_crossings;
-use crate::parity::{self, MASS_TOLERANCE, TOLERANCE};
+use crate::parity::{self, CENTROID_TOLERANCE, LIQUID_MASS_TOLERANCE, MASS_TOLERANCE, TOLERANCE};
 use crate::{Metric, Plot, Series, Snapshot, SolverFactory};
 
 pub use report::{verdict, write, ReportInfo};
@@ -147,6 +147,12 @@ pub struct Sample {
     /// m/s
     pub max_velocity: f64,
     pub forces: Vec<[f64; 2]>,
+    /// Free surface: the liquid mass Σ(m + m_ex) (lattice units).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub liquid_mass: Option<f64>,
+    /// Free surface: the liquid's fill-weighted centroid (cells).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub centroid: Option<[f64; 2]>,
 }
 
 /// Global quantities after the last step.
@@ -470,6 +476,19 @@ fn sample(solver: &mut dyn Solver, ids: &[u16]) -> (Sample, Diagnostics) {
         kinetic_energy: diag.kinetic_energy,
         max_velocity: units.velocity_to_physical(diag.max_velocity),
         forces: forces_by_element(solver, ids),
+        liquid_mass: diag.liquid.map(|_| diag.mass),
+        centroid: None,
+    };
+    // Free surface: where the liquid is (the fields are copied anyway on these runs).
+    let s = match diag.liquid {
+        Some(_) => {
+            let w = solver.domain().width as usize;
+            Sample {
+                centroid: Some(parity::fill_centroid(&solver.lattice_fields(), w)),
+                ..s
+            }
+        }
+        None => s,
     };
     (s, diag)
 }
@@ -780,7 +799,16 @@ fn compare_runs(
         .iter()
         .any(|&f| matches!(flags::flow(f), flags::PRESSURE | flags::ZERO_GRADIENT));
     let mass_error = rel(td.mass, rd.mass);
-    if !open {
+    if setup.domain.free_surface.is_some() {
+        // GPUs sum Σ(m + m_ex − φ) and Σφ in f32 partials, the CPU every cell in f64.
+        c.checks.push(Metric::check(
+            "liquid mass Σ(m + m_ex) (relative)",
+            td.mass,
+            crate::fmt_num(rd.mass),
+            mass_error,
+            LIQUID_MASS_TOLERANCE,
+        ));
+    } else if !open {
         c.checks.push(Metric::check(
             "mass Σρ (relative; closed domain)",
             td.mass,
@@ -835,7 +863,15 @@ fn compare_runs(
             });
         }
     } else {
-        statistics_checks(&mut c, case, reference, test, plan.stats_tolerance);
+        let free_surface = setup.domain.free_surface.is_some();
+        statistics_checks(
+            &mut c,
+            case,
+            reference,
+            test,
+            plan.stats_tolerance,
+            free_surface,
+        );
     }
     c.passed = c.initial_identical
         && c.failure.is_none()
@@ -844,25 +880,37 @@ fn compare_runs(
 }
 
 /// Mean, extremes and frequency of every element's force: frequencies relative to the
-/// reference frequency, forces relative to the largest reference force in the window.
+/// reference frequency, forces relative to the largest reference force in the window. With a
+/// free surface the verdict is the liquid mass and its position ([`free_surface_checks`];
+/// decided with the author on 2026-11-02, ADR-032): the wall forces of a sloshing liquid are
+/// spikes at impacts and conversions, not a periodic signal, and the mean kinetic energy, quadratic
+/// in u and carried by the front tip and the films, misses 1e-3 even on a backend whose kernels are
+/// exact (CUDA with FMA), so both are shown for information.
 fn statistics_checks(
     c: &mut Comparison,
     case: &CaseComparison,
     reference: &BackendRun,
     test: &BackendRun,
     limit: f64,
+    free_surface: bool,
 ) {
     let (Some(ka), Some(kb)) = (test.mean_kinetic_energy, reference.mean_kinetic_energy) else {
         c.failure = Some("the statistics window has fewer than two samples".into());
         return;
     };
-    c.checks.push(Metric::check(
+    let energy = Metric::check(
         "mean kinetic energy over the window (relative)",
         ka,
         crate::fmt_num(kb),
         rel(ka, kb),
         limit,
-    ));
+    );
+    c.checks.push(Metric {
+        limit: energy.limit.filter(|_| !free_surface),
+        ..energy
+    });
+    free_surface_checks(c, reference, test);
+    let forces = c.checks.len();
     let scale = reference
         .statistics
         .iter()
@@ -912,6 +960,51 @@ fn statistics_checks(
             }
         }
     }
+    if free_surface {
+        for m in &mut c.checks[forces..] {
+            m.limit = None;
+        }
+    }
+}
+
+/// Free-surface runs in [`Mode::Statistics`] (ADR-032 §8): at every sample, the liquid mass
+/// within [`LIQUID_MASS_TOLERANCE`] and the liquid's centroid within [`CENTROID_TOLERANCE`] cells
+/// (where the instantaneous fields of a backend that rounds differently part from the
+/// reference's once an interface cell converts a step apart).
+fn free_surface_checks(c: &mut Comparison, reference: &BackendRun, test: &BackendRun) {
+    let pairs: Vec<(&Sample, &Sample)> = test
+        .series
+        .iter()
+        .zip(&reference.series)
+        .filter(|(t, r)| t.step == r.step && t.liquid_mass.is_some() && r.liquid_mass.is_some())
+        .collect();
+    let Some((last, _)) = pairs.last() else {
+        return;
+    };
+    let (mut mass, mut centroid) = (0.0f64, 0.0f64);
+    for (t, r) in &pairs {
+        mass = mass.max(rel(
+            t.liquid_mass.unwrap_or(0.0),
+            r.liquid_mass.unwrap_or(0.0),
+        ));
+        if let (Some([tx, ty]), Some([rx, ry])) = (t.centroid, r.centroid) {
+            centroid = centroid.max((tx - rx).hypot(ty - ry));
+        }
+    }
+    c.checks.push(Metric::check(
+        "liquid mass at every sample (largest relative difference)",
+        last.liquid_mass.unwrap_or(f64::NAN),
+        format!("{} samples", pairs.len()),
+        mass,
+        LIQUID_MASS_TOLERANCE,
+    ));
+    c.checks.push(Metric::check(
+        "liquid centroid at every sample (largest distance, cells)",
+        centroid,
+        format!("{} samples", pairs.len()),
+        centroid,
+        CENTROID_TOLERANCE,
+    ));
 }
 
 // ---- images -----------------------------------------------------------------------------
@@ -1205,6 +1298,8 @@ mod tests {
                     kinetic_energy: 0.0,
                     max_velocity: 0.0,
                     forces: vec![[3.0 + 0.1 * s, 0.5 * s]],
+                    liquid_mass: None,
+                    centroid: None,
                 }
             })
             .collect();

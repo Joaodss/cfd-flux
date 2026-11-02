@@ -8,6 +8,7 @@ pub const COMMON_CUH: &str = include_str!("../kernels/common.cuh");
 pub const LBM_CU: &str = include_str!("../kernels/lbm.cu");
 pub const REDUCE_CU: &str = include_str!("../kernels/reduce.cu");
 pub const SAMPLE_CU: &str = include_str!("../kernels/sample.cu");
+pub const SURFACE_CU: &str = include_str!("../kernels/surface.cu");
 
 /// NVRTC options of the layout tests (the solver picks `--fmad` per `CudaLbmOptions`).
 pub const OPTIONS: &[&str] = &["--fmad=false"];
@@ -32,6 +33,7 @@ pub fn program() -> String {
     source(&[
         ("lbm.cu", LBM_CU),
         ("reduce.cu", REDUCE_CU),
+        ("surface.cu", SURFACE_CU),
         ("sample.cu", SAMPLE_CU),
     ])
 }

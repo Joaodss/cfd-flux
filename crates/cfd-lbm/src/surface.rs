@@ -79,6 +79,16 @@ pub mod state {
     }
 }
 
+/// Planes of the free-surface buffer `surf` of the wgpu backend, in order, `n` words each (the
+/// planes of [`crate::shared::SurfacePlanes`]; CUDA keeps them as separate buffers).
+pub mod plane {
+    pub const STATE_A: u32 = 0;
+    pub const STATE_B: u32 = 1;
+    pub const MASS: u32 = 2;
+    pub const MASSEX: u32 = 3;
+    pub const PHI: u32 = 4;
+    pub const COUNT: u32 = 5;
+}
 /// Neighbour `x − cᵢ` of cell `(x, y)` for each link `i = 1…8` (index 0 unused), `None` across a
 /// boundary link (a non-fluid cell, or outside a non-periodic edge).
 #[inline]
@@ -243,7 +253,10 @@ pub(crate) fn finish(p: &StepParams, flags_: &[u16], src: &[u32], rho: &[f32], b
                 } else {
                     0.0
                 };
-                let m = m.clamp(0.0, r);
+                // `clamp(0, ρ)` without its panic on a NaN ρ (a divergence is reported by `step`);
+                // the GPU kernels use the same comparisons.
+                let m = if m < 0.0 { 0.0 } else { m };
+                let m = if m > r { r } else { m };
                 (m, excess, m / r)
             }
             _ => (0.0, m, 0.0),

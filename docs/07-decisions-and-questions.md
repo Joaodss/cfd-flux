@@ -378,9 +378,45 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
     a square block's mass centroid trails by ≈ 2 %, because its side faces slide along the gas and interface cells
     carry mass at the weight ½(φ + φ_j) < 1. The validation case (#45, 1 %) decides whether the normal-based
     reconstruction (the Q2 fallback) is needed. κ stays 0: the still tank shows no flipping.
-  - The wgpu and CUDA engines refuse free-surface and turbulence-model domains with a clear error until #44, so
-    such scenes run with `--backend cpu` (an `auto` choice on a GPU machine fails).
+  - Until #44 the wgpu and CUDA engines refused free-surface and turbulence-model domains with a clear error
+    (lifted on 2026-11-02, below).
   - The Körner and Thürey papers were still not reachable; the arithmetic follows FluidX3D's source.
+- **Implementation notes (2026-11-02, GPU, #44):**
+  - **CUDA** (`kernels/surface.cu`): `stream_collide_fs(_skip)` and `surface_fill/init/finish`, four launches per
+    step inside the 50-step graph, the five planes as separate buffers. **Bit-identical to the CPU** on every
+    free-surface parity case and on the whole `dam-break` example (`cfd-cli compare --tolerance 0`, 15,845 steps).
+    The Smagorinsky rates take KernelParams' three padding words (`les_tau0`, `les_factor`, `les_magic`); the
+    single-phase kernels have them too (bit-identical on a Smagorinsky cavity).
+  - **wgpu** (`shaders/surface.wgsl`, `lbm_core.wgsl`): the same passes on one `surf` buffer (the `f32` planes by
+    their bits) bound where the thermal lattice binds `g_src`, so the pipelines keep at most 8 storage buffers; the
+    four passes share one layout and one bind group per parity.
+  - Both GPU backends read free-surface fields back synchronously (the state and φ planes are not in the field
+    snapshot yet) and sample them through the CPU conversion (`sample.wgsl`/`sample.cu` have no fill fraction or gas
+    mask yet); fine for the grids of 6a, to revisit with larger free-surface scenes.
+  - **wgpu and round-off:** the fields agree to ≤ 1.4e-6 for 100 steps, after which a pair of interface cells may
+    convert a step apart from the CPU (the periodic wave at step ≈ 105, the dam break at t ≈ 0.13 s, step ≈ 2,000)
+    and the runs follow slightly different interfaces. CUDA *with* FMA, running kernels that are exact without it,
+    behaves the same (the dam break parts at t ≈ 0.16 s with the same 0.11-cell centroid difference at t = 0.25 s),
+    so this is the flow amplifying round-off, not a kernel difference. The parity cases are therefore compared cell
+    by cell after 100 steps on every backend and by statistics at the end (liquid mass 1e-6, mean kinetic energy
+    1e-3, the liquid's centroid within a cell); `cfd-cli compare --statistics` judges
+    free-surface scenes by the mass and the centroid (see the decision below).
+  - **Decided with the author (2026-11-02): long free-surface comparisons are judged on the liquid mass and its
+    position, not on the kinetic energy.** On the dam break the statistics metric holds for the liquid mass
+    (≤ 6e-8) and, before the front reaches the far wall (t ≤ 0.24 s, the window §10.3 compares), for the centroid
+    (0.12 cells); the **window-mean kinetic energy** does not: 1.1e-2 on wgpu and 1.5e-3 on CUDA with FMA, against
+    1e-3. A limit that a backend with exact kernels misses does not measure kernel correctness, and a looser limit
+    would be fitted to these results (ADR-018). The energy, quadratic in u and carried by the front tip and the films
+    where a conversion a step apart shows first, stays a check on the parity cases (≤ 1.5e-4 there) and is reported
+    by `cfd-cli compare --statistics`, whose free-surface verdict is the liquid mass at every sample (1e-6) and the
+    liquid's centroid (within one cell); the dam-break case of #45 replaces the centroid with its front. Over the
+    whole second, after the impact, the splash is chaotic (centroid ≈ 10 cells apart at t = 1 s on wgpu, 1.5 on CUDA
+    with FMA), so wgpu's dam break is compared over t ≤ 0.24 s:
+    `cfd-cli compare scenes/dam-break.json --backends cpu,wgpu --end-time 0.24 --statistics --stats-from 0`.
+  - At dx = 1.6 mm (a 256² tank) the dam break diverges at t ≈ 0.5 s on all three engines: its splash jets reach
+    |u| ≈ 0.26 (Ma 0.45). The `dam-break` example (dx = 2.5 mm) peaks at Ma 0.23 and runs to 1 s; resolutions for
+    the validation (#45) should watch the max-Mach diagnostic. On a divergence the CPU now reports `NonFinite`
+    instead of panicking in `f32::clamp`.
 
 ## Open questions
 

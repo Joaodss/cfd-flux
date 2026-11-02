@@ -10,7 +10,7 @@ use crate::config::LbmConfig;
 use crate::kernel::{update_block, Block, Source, StepParams, SurfaceBlock, SurfaceSource};
 use crate::shared::{
     equilibrium_populations, initial_fields, les_params, outgoing_index, relaxation_rates,
-    surface_planes, wall_forces, wall_links, SurfacePlanes, WallLink,
+    surface_fields, surface_planes, wall_forces, wall_links, wet_links, SurfacePlanes, WallLink,
 };
 use crate::surface::{self, state, FinishBlock};
 
@@ -311,15 +311,7 @@ impl Solver for CpuLbm {
             phase: None,
         };
         if let Some(s) = &self.surf {
-            let phases: Vec<u8> = s.state.iter().map(|&st| state::phase(st)).collect();
-            // Gas cells keep whatever their last update stored: report the gas state instead.
-            for (k, &p) in phases.iter().enumerate() {
-                if !phase::wet(p) {
-                    (lf.density[k], lf.ux[k], lf.uy[k]) = (1.0, 0.0, 0.0);
-                }
-            }
-            lf.fill = Some(s.phi.clone());
-            lf.phase = Some(phases);
+            surface_fields(&mut lf, &s.state, s.phi.clone());
         }
         lf
     }
@@ -410,17 +402,17 @@ impl Solver for CpuLbm {
 
     fn forces(&mut self) -> Vec<ElementForce> {
         let n = self.params.n;
-        // Gas cells hold stale populations and exert no force.
-        let links: Vec<WallLink> = match &self.surf {
-            Some(s) => self
-                .links
-                .iter()
-                .copied()
-                .filter(|l| phase::wet(state::phase(s.state[l.cell as usize])))
-                .collect(),
-            None => self.links.clone(),
-        };
-        let outgoing: Vec<f32> = links.iter().map(|l| self.f[outgoing_index(l, n)]).collect();
-        wall_forces(&self.domain, &links, &outgoing)
+        let outgoing: Vec<f32> = self
+            .links
+            .iter()
+            .map(|l| self.f[outgoing_index(l, n)])
+            .collect();
+        match &self.surf {
+            Some(s) => {
+                let (links, outgoing) = wet_links(&self.links, &outgoing, &s.state);
+                wall_forces(&self.domain, &links, &outgoing)
+            }
+            None => wall_forces(&self.domain, &self.links, &outgoing),
+        }
     }
 }
