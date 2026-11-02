@@ -7,6 +7,8 @@
 // - `mac` holds four planes ρ, ux, uy, θ, then one status word (index 4n) set to 1.0 when a
 //   non-finite population is read (see the end of `stream_collide`).
 // - One invocation per cell; non-fluid cells return immediately.
+// - The helpers shared with the free-surface module (link rules, collision, LES) are in
+//   `lbm_core.wgsl`, appended to this module.
 
 // Invocations per workgroup and whether the D2Q5 thermal lattice is solved: pipeline-overridable
 // constants, fixed when the pipeline is created (like a C++ template argument), so the unused
@@ -29,63 +31,6 @@ override WRITE_MACRO: bool = true;
 @group(1) @binding(2) var<storage, read> g_src: array<f32>;
 @group(1) @binding(3) var<storage, read_write> g_dst: array<f32>;
 @group(1) @binding(4) var<storage, read_write> mac: array<f32>;
-
-fn flags_of(c: u32) -> u32 {
-    return unpack_flags(cell_flags[c >> 1u], c);
-}
-
-// What sits across a boundary link: (flags, slot) of the source cell, or the implicit wall
-// (slot 0) when the link leaves the domain through a non-periodic edge.
-fn link_target(x: u32, y: u32, i: u32, src: u32) -> vec2<u32> {
-    let cx = LINK_X[i];
-    let cy = LINK_Y[i];
-    let outside_x = (P.periodic & 1u) == 0u && ((x == 0u && cx == 1) || (x + 1u == P.w && cx == -1));
-    let outside_y = (P.periodic & 2u) == 0u && ((y == 0u && cy == 1) || (y + 1u == P.h && cy == -1));
-    if (outside_x || outside_y) {
-        return vec2<u32>(BOUNCE_BACK, 0u);
-    }
-    return vec2<u32>(flags_of(src), bc_slot[src]);
-}
-
-// Interior cell next to the outlet cell (sx, sy) along its inward axis, or `own` when the outlet
-// has no inward direction.
-fn inward_cell(sx: u32, sy: u32, nf: u32, own: u32) -> u32 {
-    let d = (nf & INWARD_MASK) >> INWARD_SHIFT;
-    if (d == 0u) {
-        return own;
-    }
-    let x = u32((i32(sx) + LINK_X[d] + i32(P.w)) % i32(P.w));
-    let y = u32((i32(sy) + LINK_Y[d] + i32(P.h)) % i32(P.h));
-    return y * P.w + x;
-}
-
-// TRT collision with Guo forcing of the pair (i, ī); writes both populations and returns their sum.
-fn collide_pair(
-    i: u32, k: u32, fi: f32, fo: f32, drho: f32, rho: f32, u: vec2<f32>, usq: f32,
-    force: vec2<f32>, uf: f32,
-) -> f32 {
-    let o = OPPOSITE[i];
-    let wi = W9[i];
-    let wp = P.omega.x;
-    let wm = P.omega.y;
-    let sp = 1.0 - 0.5 * wp;
-    let sm = 1.0 - 0.5 * wm;
-    let cu = dot_c(i, u);
-    let cf = dot_c(i, force);
-    let eq_p = wi * (drho + rho * (4.5 * cu * cu - 1.5 * usq));
-    let eq_m = wi * 3.0 * rho * cu;
-    let src_p = wi * (9.0 * cu * cf - 3.0 * uf);
-    let src_m = wi * 3.0 * cf;
-    let f_p = 0.5 * (fi + fo);
-    let f_m = 0.5 * (fi - fo);
-    let relax_p = -wp * (f_p - eq_p) + sp * src_p;
-    let relax_m = -wm * (f_m - eq_m) + sm * src_m;
-    let new_i = fi + relax_p + relax_m;
-    let new_o = fo + relax_p - relax_m;
-    f_dst[i * P.n + k] = new_i;
-    f_dst[o * P.n + k] = new_o;
-    return new_i + new_o;
-}
 
 // The same for the D2Q5 pair (i, ī) with TRT rates P.omega_g.
 fn collide_thermal_pair(i: u32, k: u32, gi: f32, go: f32, theta: f32, u: vec2<f32>) -> f32 {
@@ -212,13 +157,14 @@ fn stream_collide(
     let u = vec2<f32>((jx + 0.5 * force.x) / rho, (jy + 0.5 * force.y) / rho);
     let usq = u.x * u.x + u.y * u.y;
     let uf = u.x * force.x + u.y * force.y;
+    let om = relaxation(f, drho, rho, u);
 
     // ---- TRT collision with Guo forcing ----
     var moving = 0.0;
-    moving += collide_pair(1u, k, f[1], f[3], drho, rho, u, usq, force, uf);
-    moving += collide_pair(2u, k, f[2], f[4], drho, rho, u, usq, force, uf);
-    moving += collide_pair(5u, k, f[5], f[7], drho, rho, u, usq, force, uf);
-    moving += collide_pair(6u, k, f[6], f[8], drho, rho, u, usq, force, uf);
+    moving += collide_pair(1u, k, f[1], f[3], drho, rho, u, usq, force, uf, om.x, om.y);
+    moving += collide_pair(2u, k, f[2], f[4], drho, rho, u, usq, force, uf, om.x, om.y);
+    moving += collide_pair(5u, k, f[5], f[7], drho, rho, u, usq, force, uf, om.x, om.y);
+    moving += collide_pair(6u, k, f[6], f[8], drho, rho, u, usq, force, uf, om.x, om.y);
     // Rest population by difference: Σ f̃* = Δρ exactly (the Guo source sums to zero).
     f_dst[k] = drho - moving;
     if (WRITE_MACRO) {

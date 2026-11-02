@@ -21,7 +21,7 @@ use cfd_core::scene::OutputField;
 use crate::config::LbmConfig;
 use crate::lattice::{W5, W9};
 use crate::shared::{les_params, relaxation_rates};
-use crate::surface::{state, KAPPA};
+use crate::surface::{plane, state, KAPPA};
 
 /// The constants of a run, as the kernels read them.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -438,7 +438,7 @@ const FLAG_CONSTANTS: [(&str, u16); 14] = [
 ];
 
 /// Free-surface state bits and phases (`cfd_lbm::surface::state`, `cfd_core::domain::phase`).
-const SURFACE_CONSTANTS: [(&str, u32); 13] = [
+const SURFACE_CONSTANTS: [(&str, u32); 19] = [
     ("PHASE_GAS", phase::GAS as u32),
     ("PHASE_INTERFACE", phase::INTERFACE as u32),
     ("PHASE_LIQUID", phase::LIQUID as u32),
@@ -452,6 +452,12 @@ const SURFACE_CONSTANTS: [(&str, u32); 13] = [
     ("TO_INTERFACE", state::TO_INTERFACE),
     ("COUNT_SHIFT", state::COUNT_SHIFT),
     ("COUNT_MASK", state::COUNT_MASK),
+    ("SURF_STATE_A", plane::STATE_A),
+    ("SURF_STATE_B", plane::STATE_B),
+    ("SURF_MASS", plane::MASS),
+    ("SURF_MASSEX", plane::MASSEX),
+    ("SURF_PHI", plane::PHI),
+    ("SURF_PLANES", plane::COUNT),
 ];
 
 /// `f32` as a source literal (without suffix). Rust prints the shortest decimal that
