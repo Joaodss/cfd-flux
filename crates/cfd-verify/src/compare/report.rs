@@ -512,7 +512,9 @@ fn notes(md: &mut String, info: &ReportInfo) {
          series instead, over the statistics window: the oscillation frequency (relative), the \
          mean, minimum and maximum of each force component (relative to the largest force) and \
          the mean kinetic energy (relative). The mass of a closed domain must still agree to \
-         1e-7. The field tables are shown for information."
+         1e-7. The field tables are shown for information. With a free surface the verdict is \
+         the liquid mass (1e-6) and the liquid's centroid (within one cell) at every sample; \
+         the force statistics and the mean kinetic energy are shown for information (ADR-032)."
     );
     let _ = writeln!(
         md,

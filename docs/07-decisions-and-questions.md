@@ -399,15 +399,20 @@ Short format: context → decision → consequences. Status: **Proposed** (to be
     behaves the same (the dam break parts at t ≈ 0.16 s with the same 0.11-cell centroid difference at t = 0.25 s),
     so this is the flow amplifying round-off, not a kernel difference. The parity cases are therefore compared cell
     by cell after 100 steps on every backend and by statistics at the end (liquid mass 1e-6, mean kinetic energy
-    1e-3, the liquid's centroid within a cell); `cfd-cli compare --statistics` applies the same metric to
-    free-surface scenes (the wall-force statistics become information: they are impact spikes, not a periodic signal).
-  - **Open (for the author):** on the dam break the statistics metric holds for the liquid mass (≤ 6e-8) and, before
-    the front reaches the far wall (t ≤ 0.24 s, the window §10.3 compares), for the centroid (0.12 cells). The
-    **window-mean kinetic energy** does not: 1.1e-2 on wgpu and 1.5e-3 on CUDA with FMA over t ≤ 0.24 s, against
-    1e-3. Over the whole second, after the impact, the splash is chaotic (centroid ≈ 10 cells apart at t = 1 s on
-    wgpu, 1.5 on CUDA with FMA). The tolerance was fixed before these results and is left as it is: the choice is
-    between judging wgpu's dam break on the front and the mass only (as the validation case does) and a looser
-    energy limit.
+    1e-3, the liquid's centroid within a cell); `cfd-cli compare --statistics` judges
+    free-surface scenes by the mass and the centroid (see the decision below).
+  - **Decided with the author (2026-11-02): long free-surface comparisons are judged on the liquid mass and its
+    position, not on the kinetic energy.** On the dam break the statistics metric holds for the liquid mass
+    (≤ 6e-8) and, before the front reaches the far wall (t ≤ 0.24 s, the window §10.3 compares), for the centroid
+    (0.12 cells); the **window-mean kinetic energy** does not: 1.1e-2 on wgpu and 1.5e-3 on CUDA with FMA, against
+    1e-3. A limit that a backend with exact kernels misses does not measure kernel correctness, and a looser limit
+    would be fitted to these results (ADR-018). The energy, quadratic in u and carried by the front tip and the films
+    where a conversion a step apart shows first, stays a check on the parity cases (≤ 1.5e-4 there) and is reported
+    by `cfd-cli compare --statistics`, whose free-surface verdict is the liquid mass at every sample (1e-6) and the
+    liquid's centroid (within one cell); the dam-break case of #45 replaces the centroid with its front. Over the
+    whole second, after the impact, the splash is chaotic (centroid ≈ 10 cells apart at t = 1 s on wgpu, 1.5 on CUDA
+    with FMA), so wgpu's dam break is compared over t ≤ 0.24 s:
+    `cfd-cli compare scenes/dam-break.json --backends cpu,wgpu --end-time 0.24 --statistics --stats-from 0`.
   - At dx = 1.6 mm (a 256² tank) the dam break diverges at t ≈ 0.5 s on all three engines: its splash jets reach
     |u| ≈ 0.26 (Ma 0.45). The `dam-break` example (dx = 2.5 mm) peaks at Ma 0.23 and runs to 1 s; resolutions for
     the validation (#45) should watch the max-Mach diagnostic. On a divergence the CPU now reports `NonFinite`

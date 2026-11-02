@@ -881,9 +881,11 @@ fn compare_runs(
 
 /// Mean, extremes and frequency of every element's force: frequencies relative to the
 /// reference frequency, forces relative to the largest reference force in the window. With a
-/// free surface the verdict is ADR-032's metric instead (the mean kinetic energy, the liquid mass
-/// and centroid; [`free_surface_checks`]): the wall forces of a sloshing liquid are spikes at
-/// impacts and conversions, not a periodic signal, so they are shown for information.
+/// free surface the verdict is the liquid mass and its position ([`free_surface_checks`];
+/// decided with the author on 2026-11-02, ADR-032): the wall forces of a sloshing liquid are
+/// spikes at impacts and conversions, not a periodic signal, and the mean kinetic energy, quadratic
+/// in u and carried by the front tip and the films, misses 1e-3 even on a backend whose kernels are
+/// exact (CUDA with FMA), so both are shown for information.
 fn statistics_checks(
     c: &mut Comparison,
     case: &CaseComparison,
@@ -896,13 +898,17 @@ fn statistics_checks(
         c.failure = Some("the statistics window has fewer than two samples".into());
         return;
     };
-    c.checks.push(Metric::check(
+    let energy = Metric::check(
         "mean kinetic energy over the window (relative)",
         ka,
         crate::fmt_num(kb),
         rel(ka, kb),
         limit,
-    ));
+    );
+    c.checks.push(Metric {
+        limit: energy.limit.filter(|_| !free_surface),
+        ..energy
+    });
     free_surface_checks(c, reference, test);
     let forces = c.checks.len();
     let scale = reference
