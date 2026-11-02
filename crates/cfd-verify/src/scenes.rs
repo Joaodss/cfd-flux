@@ -234,6 +234,19 @@ pub fn heated_cavity(n: u32, ra: f64, pr: f64) -> Scene {
     s
 }
 
+/// A square tank of `n²` cells (side 0.4 m) half full of water whose surface starts tilted by
+/// `n/8` cells across the tank, released at rest: a sloshing wave with conversions all along the
+/// surface but no breaking, so it runs for as long as a benchmark needs (a dam break at this
+/// resolution splashes until its jets exceed the lattice's Mach limit). Smagorinsky model.
+pub fn sloshing_tank(n: u32) -> Scene {
+    let tilt = n as f64 / 8.0;
+    let mut s = liquid_box(n, n, 0.4 / n as f64, false, 1.004e-6, true, |x, y| {
+        (y as f64) < n as f64 / 2.0 + tilt * (0.5 - (x as f64 + 0.5) / n as f64)
+    });
+    s.name = format!("Sloshing tank ({n}²)");
+    s
+}
+
 /// Dam break in a square tank of `n²` cells (side 0.4 m; the domain edges are the walls): a
 /// water column of a × 2a, a = 0.1 m, at the left wall, gas elsewhere, gravity, the Smagorinsky
 /// model with C_s = 0.1 (water's τ is close to ½). Martin & Moyce's n² = 2 column, as in the

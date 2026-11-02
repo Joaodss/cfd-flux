@@ -403,7 +403,7 @@ fn surface_finish(
         } else if (m0 < 0.0) {
             excess = m0;
         }
-        // Rust's `clamp(0, ρ)`.
+        // `cfd_lbm::surface::finish`: clamped to [0, ρ] by comparisons.
         m = m0;
         if (m < 0.0) {
             m = 0.0;

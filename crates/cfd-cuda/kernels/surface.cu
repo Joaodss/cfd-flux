@@ -418,7 +418,7 @@ extern "C" __global__ void surface_finish(
         fill = 1.0f;
     } else if (settled == PHASE_INTERFACE) {
         excess = m0 > r ? m0 - r : (m0 < 0.0f ? m0 : 0.0f);
-        // Rust's `clamp(0, ρ)`.
+        // `cfd_lbm::surface::finish`: clamped to [0, ρ] by comparisons.
         m = m0 < 0.0f ? 0.0f : m0;
         m = m > r ? r : m;
         fill = m / r;

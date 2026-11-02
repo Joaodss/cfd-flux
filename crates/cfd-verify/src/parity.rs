@@ -765,7 +765,7 @@ pub const ENERGY_TOLERANCE: f64 = 1e-3;
 pub const CENTROID_TOLERANCE: f64 = 1.0;
 
 /// Fill-weighted centroid `(x, y)` in cells.
-fn fill_centroid(lf: &LatticeFields, w: usize) -> [f64; 2] {
+pub fn fill_centroid(lf: &LatticeFields, w: usize) -> [f64; 2] {
     let fill = lf.fill.as_ref().expect("fill fraction");
     let (mut sx, mut sy, mut s) = (0.0, 0.0, 0.0);
     for (k, &f) in fill.iter().enumerate() {

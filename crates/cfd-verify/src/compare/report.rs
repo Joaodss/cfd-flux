@@ -61,7 +61,13 @@ pub fn verdict(c: &Comparison, mode: Mode) -> String {
         (true, _) => format!("{mark} bit-identical"),
         (false, Mode::Fields) => format!("{mark} max diff {}", sci(c.max_metric())),
         (false, Mode::Statistics) => {
-            let worst = c.checks.iter().filter_map(|m| m.error).fold(0.0, f64::max);
+            // Over the judged checks (informational ones have no limit).
+            let worst = c
+                .checks
+                .iter()
+                .filter(|m| m.limit.is_some())
+                .filter_map(|m| m.error)
+                .fold(0.0, f64::max);
             format!("{mark} statistics within {} (fields differ)", sci(worst))
         }
     }

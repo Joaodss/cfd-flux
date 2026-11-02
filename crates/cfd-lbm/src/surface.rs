@@ -253,7 +253,10 @@ pub(crate) fn finish(p: &StepParams, flags_: &[u16], src: &[u32], rho: &[f32], b
                 } else {
                     0.0
                 };
-                let m = m.clamp(0.0, r);
+                // `clamp(0, ρ)` without its panic on a NaN ρ (a divergence is reported by `step`);
+                // the GPU kernels use the same comparisons.
+                let m = if m < 0.0 { 0.0 } else { m };
+                let m = if m > r { r } else { m };
                 (m, excess, m / r)
             }
             _ => (0.0, m, 0.0),

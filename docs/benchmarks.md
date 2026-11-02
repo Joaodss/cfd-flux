@@ -26,10 +26,43 @@ cargo run --release -p cfd-cli -- bench --backends cuda,wgpu     # interleaved, 
   (`skip_macro`, ADR-029); `--no-skip-macro` measures the previous behaviour.
 - Add a new section per machine/backend; keep old ones for comparison.
 
+## Free surface on the GPU — NVIDIA GeForce RTX 4060 (8 GB), 2026-11-02
+
+The CUDA and wgpu ports of Phase 6a (#44, ADR-032): four kernels per step (CUDA: in the 50-step graph;
+wgpu: four dispatches per step in one compute pass). Since this run `--model free-surface` is a **sloshing tank**:
+an N² tank half full of water whose surface starts tilted by N/8 cells, with the Smagorinsky model. The dam break
+of the CPU section below splashes at these resolutions until its jets exceed the lattice's Mach limit (at 256² it
+diverges at t ≈ 0.5 s on all three engines, the CPU included), which a benchmark that runs tens of thousands of steps
+reaches. MLUPS count all N² cells.
+
+```bash
+cargo run --release -p cfd-cli -- bench --backends cuda,wgpu --model iso,free-surface --sizes 256,1024,2048,4000
+```
+
+| Model | Grid | cuda MLUPS (min–max) | wgpu MLUPS (min–max) | wgpu / cuda |
+|-------|------|---:|---:|---:|
+| isothermal (D2Q9) | 256² | 10694 (10677–10799) | 10538 (10531–10549) | 0.985 |
+| isothermal (D2Q9) | 1024² | 3171 (3170–3172) | 3200 (3191–3202) | 1.009 |
+| isothermal (D2Q9) | 2048² | 3184 (3179–3184) | 3197 (3196–3202) | 1.004 |
+| isothermal (D2Q9) | 4000² | 3195 (3192–3197) | 3216 (3211–3220) | 1.007 |
+| free surface + LES (D2Q9) | 256² | 3525 (3510–3534) | 3266 (3262–3269) | 0.926 |
+| free surface + LES (D2Q9) | 1024² | 2633 (2630–2638) | 2526 (2525–2527) | 0.959 |
+| free surface + LES (D2Q9) | 2048² | 2267 (2229–2282) | 2281 (2278–2287) | 1.006 |
+| free surface + LES (D2Q9) | 4000² | 2259 (2237–2272) | 2279 (2277–2288) | 1.009 |
+
+- On large grids a free-surface step costs **1.41×** a single-phase one (2,270 against 3,200 MLUPS), less than the
+  design's estimate of ≈ 2× from the bytes moved (§3.2): half the tank is gas, whose cells pass 1 skips, and the
+  neighbours' state, φ and excess are mostly served from the cache. At 4000², two solvers (one per backend) held
+  2 × 1.8 GB on the 8 GB card (114 B per cell, NFR-04).
+- The `dam-break` example (202 × 101 cells, 15,845 steps): **0.7 s on CUDA (443 MLUPS) and 0.5 s on wgpu
+  (611 MLUPS)**, against 6.0 s on the CPU; at 20 k cells the run is bound by launches and dispatches, not bandwidth.
+- The CPU, same run of the sloshing tank (16 threads): 72.5 / 85.5 / 85.2 MLUPS at 256² / 1024² / 2048², against
+  161 / 167 / 175 isothermal: liquid cells run the collision and the mass exchange, and passes 2–4 visit every cell.
+
 ## Free surface on the CPU — AMD Ryzen 7 3700X (8 cores / 16 threads), 2026-11-01
 
 Phase 6a's CPU reference (#43, ADR-032): the four free-surface passes and the Smagorinsky model, against the
-isothermal cavity in the same run. `--model free-surface` is a dam break in an N² tank (a water column of N/4 × N/2,
+isothermal cavity in the same run. `--model free-surface` was then a dam break (since 2026-11-02 a sloshing tank, see above) in an N² tank (a water column of N/4 × N/2,
 the rest gas), so 1/8 of the cells are liquid at the start; MLUPS count all N² cells, gas included, which pass 1
 skips but passes 2–4 visit. A run times only the first few hundred to few thousand steps, while the column is still
 collapsing.
